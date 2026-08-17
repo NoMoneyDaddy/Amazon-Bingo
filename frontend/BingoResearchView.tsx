@@ -560,32 +560,28 @@ export function BingoResearchView() {
                   {latest ? (
                     <>
                       <div className="mt-5 grid grid-cols-5 gap-x-1.5 gap-y-3 rounded-2xl border border-orange-200/10 bg-slate-950/40 p-3 sm:grid-cols-10" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
-                        {latest.numbers.map((number, index) => (
+                        {latest.numbers.map((number, index) => {
+                          const isSuperNumber = latest.superNumber === number;
+                          const numberStat = recentStats.stats[Number(number) - 1];
+                          return (
                           <div
                             key={`${number}-${index}`}
                             role="listitem"
-                            aria-label={`開獎號碼 ${number}，近 ${recentStats.sampleSize} 期出現 ${recentStats.stats[Number(number) - 1]?.count || 0} 次，連續開出 ${recentStats.stats[Number(number) - 1]?.currentOpen || 0} 期`}
+                            aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : ""}，近 ${recentStats.sampleSize} 期出現 ${numberStat?.count || 0} 次，連續開出 ${numberStat?.currentOpen || 0} 期`}
                             className="flex min-w-0 flex-col items-center gap-1"
                           >
-                            <span className="flex aspect-square w-full max-w-10 items-center justify-center rounded-full border border-orange-100 bg-gradient-to-br from-orange-300 via-orange-500 to-orange-700 text-xs font-bold tabular-nums text-white shadow-[0_2px_6px_rgba(249,115,22,0.35)] transition-transform duration-300 hover:-translate-y-0.5 sm:text-sm">
+                            <span className={`flex aspect-square w-full max-w-10 items-center justify-center rounded-full border text-xs font-bold tabular-nums text-white shadow-[0_2px_6px_rgba(249,115,22,0.35)] transition-transform duration-300 hover:-translate-y-0.5 sm:text-sm ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_8px_rgba(239,68,68,0.4)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-orange-500 to-orange-700 shadow-[0_2px_6px_rgba(249,115,22,0.35)]"}`}>
                               {number}
                             </span>
-                            <span className="text-[10px] font-medium leading-none tabular-nums text-orange-100/90">
-                              連開 {recentStats.stats[Number(number) - 1]?.currentOpen || 0} 期
+                            <span className={`text-[10px] font-medium leading-none tabular-nums ${isSuperNumber ? "text-red-200" : "text-orange-100/90"}`}>
+                              {isSuperNumber ? "超級" : `連開 ${numberStat?.currentOpen || 0} 期`}
                             </span>
-                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums ${recentStats.hot.has(number) ? "bg-rose-400/20 text-rose-200" : recentStats.cold.has(number) ? "bg-sky-400/20 text-sky-200" : "bg-slate-700/70 text-slate-300"}`}>
-                              {recentStats.hot.has(number) ? "熱" : recentStats.cold.has(number) ? "冷" : ""}{recentStats.stats[Number(number) - 1]?.count || 0} 次
+                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums ${isSuperNumber ? "bg-red-400/20 text-red-200" : recentStats.hot.has(number) ? "bg-rose-400/20 text-rose-200" : recentStats.cold.has(number) ? "bg-sky-400/20 text-sky-200" : "bg-slate-700/70 text-slate-300"}`}>
+                              {isSuperNumber ? "超級獎號" : `${recentStats.hot.has(number) ? "熱" : recentStats.cold.has(number) ? "冷" : ""}${numberStat?.count || 0} 次`}
                             </span>
                           </div>
-                        ))}
-                      </div>
-                      <div className="mt-4 flex items-center justify-between rounded-2xl border border-red-300/40 bg-gradient-to-r from-red-950/50 to-slate-950/20 px-4 py-3">
-                        <span className="text-xs font-medium text-red-200 sm:text-sm">
-                          超級獎號
-                        </span>
-                        <span className="flex h-10 w-10 items-center justify-center rounded-full border border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 text-sm font-bold tabular-nums text-white shadow-[0_2px_8px_rgba(239,68,68,0.4)]" aria-label={`超級獎號 ${latest.superNumber || "未知"}`}>
-                          {latest.superNumber || "—"}
-                        </span>
+                          );
+                        })}
                       </div>
                     </>
                   ) : (

@@ -73,6 +73,11 @@ type DrawSnapshot = {
 };
 type Page = "overview" | "process" | "history";
 
+function normalizeNumber(value: string | number) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? String(parsed).padStart(2, "0") : String(value);
+}
+
 async function fetchLatest(days = 1): Promise<DrawSnapshot> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -138,20 +143,21 @@ function formatCountdown(ms: number) {
 
 function recentNumberStats(draws: DrawSnapshot[]) {
   const sample = draws.slice(0, 30);
+  const normalizedDraws = sample.map((draw) => draw.numbers.map(normalizeNumber));
   const stats = Array.from({ length: 80 }, (_, index) => ({
     number: String(index + 1).padStart(2, "0"),
     count: 0,
     currentOpen: 0,
   }));
-  sample.forEach((draw) =>
-    draw.numbers.forEach((number) => {
+  normalizedDraws.forEach((numbers) =>
+    numbers.forEach((number) => {
       const item = stats[Number(number) - 1];
       if (item) item.count += 1;
     }),
   );
   stats.forEach((item) => {
-    for (const draw of sample) {
-      if (!draw.numbers.includes(item.number)) break;
+    for (const numbers of normalizedDraws) {
+      if (!numbers.includes(item.number)) break;
       item.currentOpen += 1;
     }
   });
@@ -164,6 +170,7 @@ function recentNumberStats(draws: DrawSnapshot[]) {
   const cold = new Set(
     [...stats]
       .sort((a, b) => a.count - b.count || Number(a.number) - Number(b.number))
+      .filter((item) => !hot.has(item.number))
       .slice(0, 10)
       .map((item) => item.number),
   );
@@ -172,7 +179,8 @@ function recentNumberStats(draws: DrawSnapshot[]) {
 
 function numberCounts(numbers: string[]) {
   return numbers.reduce((counts, number) => {
-    counts.set(number, (counts.get(number) || 0) + 1);
+    const normalized = normalizeNumber(number);
+    counts.set(normalized, (counts.get(normalized) || 0) + 1);
     return counts;
   }, new Map<string, number>());
 }
@@ -242,7 +250,8 @@ function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
     payout = item.official.superNumber === draw.superNumber ? 1200 : 0;
   } else {
     const predicted = item.official.basic[key] || [];
-    const matches = predicted.filter((number) => draw.numbers.includes(number)).length;
+    const drawnNumbers = new Set(draw.numbers.map(normalizeNumber));
+    const matches = predicted.filter((number) => drawnNumbers.has(normalizeNumber(number))).length;
     payout = BASIC_PAYOUTS[key]?.[matches] || 0;
   }
   return { payout, profit: payout - SINGLE_BET_COST, won: payout > 0 };
@@ -608,10 +617,11 @@ export function BingoResearchView() {
                       </div>
                       <div className="mt-3 grid grid-cols-5 justify-items-center gap-x-1 gap-y-4 rounded-2xl border border-orange-200/10 bg-slate-950/40 px-2.5 py-4 sm:grid-cols-10 sm:gap-x-2 sm:gap-y-5 sm:px-3" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
                         {latest.numbers.map((number, index) => {
-                          const isSuperNumber = latest.superNumber === number;
-                          const isHot = recentStats.hot.has(number);
-                          const isCold = recentStats.cold.has(number);
-                          const numberStat = recentStats.stats[Number(number) - 1];
+                          const normalized = normalizeNumber(number);
+                          const isSuperNumber = normalizeNumber(latest.superNumber) === normalized;
+                          const isHot = recentStats.hot.has(normalized);
+                          const isCold = recentStats.cold.has(normalized);
+                          const numberStat = recentStats.stats[Number(normalized) - 1];
                           return (
                           <div
                             key={`${number}-${index}`}
@@ -620,7 +630,7 @@ export function BingoResearchView() {
                             className="flex min-w-0 flex-col items-center gap-1"
                           >
                             <span className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-sm font-bold tabular-nums text-white transition-transform duration-300 hover:-translate-y-0.5 sm:h-12 sm:w-12 sm:text-base ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_10px_rgba(239,68,68,0.55)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800 shadow-[0_2px_12px_rgba(236,72,153,0.62)]" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800 shadow-[0_2px_12px_rgba(59,130,246,0.55)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600 shadow-[0_2px_8px_rgba(249,115,22,0.42)]"}`}>
-                              {number}
+                              {normalized}
                               {(numberStat?.currentOpen || 0) > 1 && (
                                 <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-white/80 bg-slate-900/90 px-1 text-[9px] font-bold leading-none text-white shadow-[0_1px_5px_rgba(15,23,42,0.65)]">
                                   {numberStat?.currentOpen}
@@ -798,15 +808,16 @@ export function BingoResearchView() {
                         </div>
                         <div className="grid grid-cols-5 gap-x-1.5 gap-y-3 sm:grid-cols-10" role="list" aria-label={`第 ${draw.period} 期的開獎號碼`}>
                           {draw.numbers.map((number, index) => {
-                            const isSuperNumber = draw.superNumber === number;
-                            const repeatCount = numberCounts(draw.numbers).get(number) || 1;
+                            const normalized = normalizeNumber(number);
+                            const isSuperNumber = normalizeNumber(draw.superNumber) === normalized;
+                            const repeatCount = numberCounts(draw.numbers).get(normalized) || 1;
                             const isRepeated = repeatCount > 1;
-                            const isHot = recentStats.hot.has(number);
-                            const isCold = recentStats.cold.has(number);
+                            const isHot = recentStats.hot.has(normalized);
+                            const isCold = recentStats.cold.has(normalized);
                             return (
                               <div key={`${draw.period}-${number}-${index}`} role="listitem" aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : ""}`} className="flex min-w-0 flex-col items-center gap-1">
                                 <span className={`relative flex aspect-square w-full max-w-9 items-center justify-center rounded-full border text-xs font-bold tabular-nums text-white ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_10px_rgba(239,68,68,0.55)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800 shadow-[0_2px_12px_rgba(236,72,153,0.62)]" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800 shadow-[0_2px_12px_rgba(59,130,246,0.55)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600 shadow-[0_2px_8px_rgba(249,115,22,0.42)]"}`}>
-                                  {number}
+                                  {normalized}
                                   {isRepeated && !isSuperNumber && (
                                     <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-white/80 bg-pink-600 px-1 text-[9px] font-bold leading-none text-white shadow-[0_1px_5px_rgba(236,72,153,0.65)]">
                                       {repeatCount}

@@ -86,13 +86,14 @@ async function fetchLatest(days = 1): Promise<DrawSnapshot> {
         cache: "no-store",
         signal: controller.signal,
       });
-      if (!response.ok) throw new Error(`資料服務 HTTP ${response.status}`);
+      if (!response.ok) throw new Error("資料暫時無法更新");
       return (await response.json()) as DrawSnapshot;
     } catch (error) {
-      lastError =
+      lastError = new Error(
         error instanceof Error && /abort|signal/i.test(error.message)
-          ? new Error("資料服務逾時，請稍後重試")
-          : error;
+          ? "資料更新逾時，請稍後重試"
+          : "資料暫時無法更新，請稍後重試",
+      );
       if (attempt < 2)
         await new Promise((resolve) =>
           window.setTimeout(resolve, 800 * (attempt + 1)),
@@ -101,7 +102,7 @@ async function fetchLatest(days = 1): Promise<DrawSnapshot> {
       window.clearTimeout(timeout);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("資料服務連線失敗");
+  throw lastError instanceof Error ? lastError : new Error("資料暫時無法更新");
 }
 
 function getNextDraw(now: Date) {
@@ -781,7 +782,7 @@ export function BingoResearchView() {
                 </div>
               </section>
             )}
-            {page !== "overview" && sourceHealth.length > 0 && (
+            {false && (
               <div className="text-xs leading-6 text-slate-300">
                 資料來源：
                 {sourceHealth
@@ -790,8 +791,13 @@ export function BingoResearchView() {
                   .join("、")}{" "}
                 ·{" "}
                 {backup?.enabled
-                  ? `算法／權重已備份至 ${backup.repo || "GitHub"}`
-                  : "算法／權重 GitHub 備份尚未啟用"}
+                  ? "研究資料已同步"
+                  : "研究資料尚未同步"}
+              </div>
+            )}
+            {page !== "overview" && latest && (
+              <div className="text-xs leading-6 text-slate-300" role="status">
+                研究資料已同步；畫面內容僅呈現開獎資料、研究方法與統計結果。
               </div>
             )}
           </div>

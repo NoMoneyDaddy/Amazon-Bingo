@@ -584,29 +584,23 @@ export function BingoResearchView() {
                       <div className="mt-5 grid grid-cols-5 justify-items-center gap-x-1 gap-y-4 rounded-2xl border border-orange-200/10 bg-slate-950/40 px-2.5 py-4 sm:grid-cols-10 sm:gap-x-2 sm:gap-y-5 sm:px-3" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
                         {latest.numbers.map((number, index) => {
                           const isSuperNumber = latest.superNumber === number;
-                          const repeatCount = numberCounts(latest.numbers).get(number) || 1;
-                          const isRepeated = repeatCount > 1;
+                          const isHot = recentStats.hot.has(number);
+                          const isCold = recentStats.cold.has(number);
                           const numberStat = recentStats.stats[Number(number) - 1];
                           return (
                           <div
                             key={`${number}-${index}`}
                             role="listitem"
-                            aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : ""}，近 ${recentStats.sampleSize} 期出現 ${numberStat?.count || 0} 次，連續開出 ${numberStat?.currentOpen || 0} 期`}
+                            aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : isHot ? "，熱門號碼" : isCold ? "，冷門號碼" : ""}，近 ${recentStats.sampleSize} 期出現 ${numberStat?.count || 0} 次，連續開出 ${numberStat?.currentOpen || 0} 期`}
                             className="flex min-w-0 flex-col items-center gap-1"
                           >
-                            <span className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-sm font-bold tabular-nums text-white transition-transform duration-300 hover:-translate-y-0.5 sm:h-12 sm:w-12 sm:text-base ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_10px_rgba(239,68,68,0.55)]" : isRepeated ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800 shadow-[0_2px_12px_rgba(236,72,153,0.62)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600 shadow-[0_2px_8px_rgba(249,115,22,0.42)]"}`}>
+                            <span className={`relative flex h-11 w-11 shrink-0 items-center justify-center rounded-full border text-sm font-bold tabular-nums text-white transition-transform duration-300 hover:-translate-y-0.5 sm:h-12 sm:w-12 sm:text-base ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_10px_rgba(239,68,68,0.55)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800 shadow-[0_2px_12px_rgba(236,72,153,0.62)]" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800 shadow-[0_2px_12px_rgba(59,130,246,0.55)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600 shadow-[0_2px_8px_rgba(249,115,22,0.42)]"}`}>
                               {number}
-                              {isRepeated && !isSuperNumber && (
-                                <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-white/80 bg-pink-600 px-1 text-[9px] font-bold leading-none text-white shadow-[0_1px_5px_rgba(236,72,153,0.65)]">
-                                  {repeatCount}
+                              {(numberStat?.currentOpen || 0) > 1 && (
+                                <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-white/80 bg-slate-900/90 px-1 text-[9px] font-bold leading-none text-white shadow-[0_1px_5px_rgba(15,23,42,0.65)]">
+                                  {numberStat?.currentOpen}
                                 </span>
                               )}
-                            </span>
-                            <span className={`whitespace-nowrap text-[11px] font-medium leading-none tabular-nums ${isSuperNumber ? "text-red-200" : "text-orange-100/90"}`}>
-                              {isSuperNumber ? "超級獎號" : `連開 ${numberStat?.currentOpen || 0} 期`}
-                            </span>
-                            <span className={`whitespace-nowrap rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums ${isSuperNumber ? "bg-red-400/20 text-red-200" : recentStats.hot.has(number) ? "bg-rose-400/20 text-rose-200" : recentStats.cold.has(number) ? "bg-sky-400/20 text-sky-200" : "bg-slate-700/70 text-slate-300"}`}>
-                              {isSuperNumber ? "超級" : `${recentStats.hot.has(number) ? "熱 " : recentStats.cold.has(number) ? "冷 " : ""}${numberStat?.count || 0}次`}
                             </span>
                           </div>
                           );
@@ -780,18 +774,17 @@ export function BingoResearchView() {
                             const isSuperNumber = draw.superNumber === number;
                             const repeatCount = numberCounts(draw.numbers).get(number) || 1;
                             const isRepeated = repeatCount > 1;
+                            const isHot = recentStats.hot.has(number);
+                            const isCold = recentStats.cold.has(number);
                             return (
                               <div key={`${draw.period}-${number}-${index}`} role="listitem" aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : ""}`} className="flex min-w-0 flex-col items-center gap-1">
-                                <span className={`relative flex aspect-square w-full max-w-9 items-center justify-center rounded-full border text-xs font-bold tabular-nums text-white ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_10px_rgba(239,68,68,0.55)]" : isRepeated ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800 shadow-[0_2px_12px_rgba(236,72,153,0.62)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600 shadow-[0_2px_8px_rgba(249,115,22,0.42)]"}`}>
+                                <span className={`relative flex aspect-square w-full max-w-9 items-center justify-center rounded-full border text-xs font-bold tabular-nums text-white ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_10px_rgba(239,68,68,0.55)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800 shadow-[0_2px_12px_rgba(236,72,153,0.62)]" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800 shadow-[0_2px_12px_rgba(59,130,246,0.55)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600 shadow-[0_2px_8px_rgba(249,115,22,0.42)]"}`}>
                                   {number}
                                   {isRepeated && !isSuperNumber && (
                                     <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-white/80 bg-pink-600 px-1 text-[9px] font-bold leading-none text-white shadow-[0_1px_5px_rgba(236,72,153,0.65)]">
                                       {repeatCount}
                                     </span>
                                   )}
-                                </span>
-                                <span className={`text-[10px] font-medium leading-none ${isSuperNumber ? "text-red-200" : "text-orange-100/80"}`}>
-                                  {isSuperNumber ? "超級" : "開獎"}
                                 </span>
                               </div>
                             );

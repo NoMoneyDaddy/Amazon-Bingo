@@ -506,10 +506,10 @@ export function BingoResearchView() {
     </Button>
   );
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-slate-950 text-slate-100">
+    <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-background text-foreground">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -left-24 -top-24 h-64 w-64 rounded-full bg-cyan-500/10 blur-3xl motion-safe:animate-pulse" />
-        <div className="absolute -bottom-32 -right-20 h-72 w-72 rounded-full bg-amber-500/10 blur-3xl" />
+        <div className="absolute -bottom-32 -right-20 h-72 w-72 rounded-full bg-orange-500/10 blur-3xl" />
       </div>
       <PluginTopbar
         title="賓果玄學研究台"
@@ -524,24 +524,25 @@ export function BingoResearchView() {
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-x-hidden" aria-busy={syncing}>
         <CustomScrollbar orientation="vertical">
           <div className="mx-auto min-w-0 max-w-5xl space-y-4 overflow-x-hidden p-3 pb-24 sm:space-y-5 sm:p-5 sm:pb-6">
-            <header className="overflow-hidden rounded-3xl border border-cyan-300/30 bg-gradient-to-br from-slate-900 via-slate-900 to-cyan-950/60 p-4 shadow-xl shadow-cyan-950/30 sm:p-6">
+            <header className="overflow-hidden rounded-3xl border border-border bg-card p-4 shadow-xl shadow-black/20 sm:p-6">
               <div className="flex items-start justify-between gap-4">
                 <div>
                   <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-xs font-medium text-cyan-100">
                     <span aria-hidden="true" className="h-2 w-2 rounded-full bg-cyan-300 motion-safe:animate-pulse" />
-                    即時研究看板
+                    即時研究看板 · 僅供研究
                   </div>
-                  <div className="text-sm text-slate-200">距離下期開獎</div>
+                  <div className="text-sm font-medium text-muted-foreground">距離下期開獎</div>
                   <div className="mt-1 tabular-nums text-3xl font-bold tracking-tight text-cyan-100 sm:text-4xl" aria-label={`距離下期開獎 ${formatCountdown(nextDraw.getTime() - now.getTime())}`}>
                     {formatCountdown(nextDraw.getTime() - now.getTime())}
                   </div>
                 </div>
-                <div className="rounded-2xl border border-slate-700/80 bg-slate-950/40 px-3 py-2 text-right">
-                  <div className="text-xs text-slate-300">台北時間</div>
-                  <time className="text-sm text-slate-100" dateTime={now.toISOString()}>{taipeiTime}</time>
+                <div className="rounded-2xl border border-border bg-background/70 px-3 py-2 text-right">
+                  <div className="text-xs text-muted-foreground">台北時間</div>
+                  <time className="text-sm font-medium text-foreground" dateTime={now.toISOString()}>{taipeiTime}</time>
+                  <div className="mt-1 text-[10px] text-cyan-200">{latest ? "資料已更新" : "等待資料"}</div>
                 </div>
               </div>
-              <p className="mt-4 max-w-2xl text-sm leading-6 text-slate-300">官方開獎資料、傳統起卦結構與歷史回測分層呈現；所有結果僅供研究，不代表中獎保證。</p>
+              <p className="mt-4 max-w-2xl text-sm leading-6 text-muted-foreground">官方結果、研究預測、計算方法與歷史回測分層呈現；所有結果僅供研究，不代表中獎保證。</p>
               <nav aria-label="研究台頁面" className="mt-5 hidden flex-wrap gap-2 border-t border-slate-700/80 pt-4 sm:flex">
                 {pageButton("overview", "首頁")}
                 {pageButton("process", "計算過程")}
@@ -558,10 +559,10 @@ export function BingoResearchView() {
             </div>
             {page === "overview" && (
               <>
-                <section aria-labelledby="latest-draw-heading" className="rounded-3xl border border-orange-300/30 bg-slate-900/90 p-4 shadow-lg shadow-orange-950/20 backdrop-blur transition-colors duration-300 sm:p-5">
+                <section aria-labelledby="latest-draw-heading" className="rounded-3xl border border-orange-300/30 bg-card p-4 shadow-lg shadow-orange-950/20 backdrop-blur transition-colors duration-300 sm:p-5">
                   <div className="flex items-center justify-between gap-2">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-orange-200/80">Official result</p>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200/80">01 · 官方結果</p>
                       <h2 id="latest-draw-heading" className="mt-1 text-lg font-bold text-orange-100">最新開獎號碼</h2>
                     </div>
                     <span className="shrink-0 text-lg font-semibold tabular-nums text-orange-100" aria-label={latest ? `第 ${latest.period} 期` : "等待同步"}>
@@ -580,6 +581,14 @@ export function BingoResearchView() {
                         <span className="rounded-full border border-red-300/40 bg-red-400/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-red-100">
                           超級獎號：{latest.superNumber || "—"}
                         </span>
+                      </div>
+                      <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] text-muted-foreground" aria-label="號碼球顏色說明">
+                        <span className="font-medium text-muted-foreground">球色：</span>
+                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-orange-400" />一般</span>
+                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-pink-500" />熱號</span>
+                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-blue-500" />冷號</span>
+                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-red-500" />超級</span>
+                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="flex h-3 min-w-3 items-center justify-center rounded-full bg-slate-800 px-0.5 text-[8px] text-white">2</i>連開</span>
                       </div>
                       <div className="mt-3 grid grid-cols-5 justify-items-center gap-x-1 gap-y-4 rounded-2xl border border-orange-200/10 bg-slate-950/40 px-2.5 py-4 sm:grid-cols-10 sm:gap-x-2 sm:gap-y-5 sm:px-3" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
                         {latest.numbers.map((number, index) => {
@@ -613,10 +622,10 @@ export function BingoResearchView() {
                     </p>
                   )}
                 </section>
-                <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full rounded-3xl border border-amber-300/30 bg-slate-900/90 p-4 shadow-lg shadow-amber-950/20 backdrop-blur sm:p-5">
+                <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full rounded-3xl border border-amber-300/30 bg-card p-4 shadow-lg shadow-amber-950/20 backdrop-blur sm:p-5">
                   <div className="flex items-end justify-between gap-2">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-amber-200/80">Research picks</p>
+                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
                       <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">本期預測與中獎率</h2>
                     </div>
                     <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">歷史回測</span>
@@ -649,8 +658,8 @@ export function BingoResearchView() {
               </>
             )}
             {page === "process" && (
-              <section aria-labelledby="process-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-slate-900/90 p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
-                <p className="text-xs font-medium uppercase tracking-[0.18em] text-amber-200/80">How it works</p>
+              <section aria-labelledby="process-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 透明方法</p>
                 <h2 id="process-heading" className="mt-1 text-lg font-bold text-amber-100">計算過程與模型透明度</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-300">
                   白話說：先讀取歷史資料，再計算特徵，接著用過去開獎做回測，最後才產生預測。這是統計研究，不是保證中獎。
@@ -736,8 +745,8 @@ export function BingoResearchView() {
               </section>
             )}
             {page === "history" && (
-              <section aria-labelledby="history-heading" className="rounded-3xl border border-cyan-300/30 bg-slate-900/90 p-4 shadow-xl shadow-cyan-950/20 backdrop-blur sm:p-5">
-                <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-200/80">Archive</p>
+              <section aria-labelledby="history-heading" className="rounded-3xl border border-cyan-300/30 bg-card p-4 shadow-xl shadow-cyan-950/20 backdrop-blur sm:p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200/80">04 · 歷史紀錄</p>
                 <h2 id="history-heading" className="mt-1 text-lg font-bold text-cyan-100">歷史開獎與研究紀錄</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-300">
                   每一期保留當時產生的預測；展開模型即可查看各玩法的中獎結果、派彩與單注淨盈虧。

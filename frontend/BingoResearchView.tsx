@@ -9,9 +9,20 @@ type DrawSnapshot = { period: string; drawAt: string; numbers: string[]; superNu
 type Page = 'overview' | 'process' | 'history';
 
 async function fetchLatest(days = 1): Promise<DrawSnapshot> {
-  const response = await fetch(`${API_URL}?days=${days}`);
-  if (!response.ok) throw new Error(`資料服務 HTTP ${response.status}`);
-  return await response.json() as DrawSnapshot;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 20_000);
+    try {
+      const response = await fetch(`${API_URL}?days=${days}`, { cache: 'no-store', signal: controller.signal });
+      if (!response.ok) throw new Error(`資料服務 HTTP ${response.status}`);
+      return await response.json() as DrawSnapshot;
+    } catch (error) {
+      lastError = error;
+      if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 800 * (attempt + 1)));
+    } finally { window.clearTimeout(timeout); }
+  }
+  throw lastError instanceof Error ? lastError : new Error('資料服務連線失敗');
 }
 
 function getNextDraw(now: Date) {
@@ -76,7 +87,7 @@ export function BingoResearchView() {
     if (syncing) return;
     setSyncing(true); setError('');
     try {
-      const snapshot = await fetchLatest(30);
+      const snapshot = await fetchLatest(1);
       const records = snapshot.history?.length ? snapshot.history : [snapshot];
       setDraws(records); setHistoryDays(snapshot.historyDays ?? 30); setBackup(snapshot.backup); setLastSync(Date.now());
     } catch (err) { setError(err instanceof Error ? err.message : '讀取失敗'); }

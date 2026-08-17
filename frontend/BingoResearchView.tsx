@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CustomScrollbar, PluginTopbar, Button, useItemsByType, useItemStore, useSelectedItemsStore, generateObjectID, toast } from '@cubelv/sdk';
 import { BingoDraw } from './schemas/bingoResearchSchema';
 
@@ -66,7 +66,9 @@ function Rate({ value }: { value: number | null }) { return <span className="tab
 
 export function BingoResearchView() {
   const draws = useItemsByType<BingoDraw>('BINGO_DRAW');
-  const sorted = useMemo(() => [...draws].sort((a, b) => b.fetchedAt - a.fetchedAt), [draws]);
+  const sorted = useMemo(() => [...draws].sort((a, b) => Number(b.period) - Number(a.period) || b.fetchedAt - a.fetchedAt), [draws]);
+  const drawsRef = useRef(draws);
+  const syncingRef = useRef(false);
   const folderId = useSelectedItemsStore((s) => s.lastFolderId);
   const [syncing, setSyncing] = useState(false); const [error, setError] = useState(''); const [lastSync, setLastSync] = useState<number | null>(null); const [now, setNow] = useState(() => new Date()); const [page, setPage] = useState<Page>('overview');
   const latest = sorted[0];
@@ -75,20 +77,22 @@ export function BingoResearchView() {
   const bestPlays = useMemo(() => bestPlayStats(sorted, latestModels), [sorted, latestModels]);
   const sourceHealth = latest?.sourceHealth ? (() => { try { return JSON.parse(latest.sourceHealth) as DrawSnapshot['sourceHealth']; } catch { return []; } })() : [];
 
+  useEffect(() => { drawsRef.current = draws; }, [draws]);
+
   const sync = useCallback(async (showNotice = false) => {
-    if (syncing) return;
-    setSyncing(true); setError('');
+    if (syncingRef.current) return;
+    syncingRef.current = true; setSyncing(true); setError('');
     try {
       const snapshot = await fetchLatest(); const records = snapshot.history?.length ? snapshot.history : [snapshot]; const savedAt = Date.now(); let newCount = 0;
       for (const record of records) {
-        const existing = sorted.find((draw) => draw.period === record.period); if (!existing) newCount += 1;
+        const existing = drawsRef.current.find((draw) => draw.period === record.period); if (!existing) newCount += 1;
         await useItemStore.getState().upsertItem({ id: existing?.id ?? generateObjectID(), itemType: 'BINGO_DRAW', name: `第${record.period}期`, parents: existing?.parents ?? (folderId ? { [folderId]: savedAt } : {}), ...record, history: undefined, numbers: record.numbers.join(','), modelPredictions: JSON.stringify(record.models), sourceHealth: JSON.stringify(record.sourceHealth), fetchedAt: savedAt, syncStatus: record.sourceLabel === '台灣彩券官方 API' ? 'official-ok' : 'fallback-ok' } as unknown as BingoDraw, { needSync: true });
       }
       setLastSync(savedAt);
       if (showNotice && newCount > 0) toast(`已保存 ${newCount} 期新開獎與預測歷史`);
     } catch (err) { setError(err instanceof Error ? err.message : '同步失敗'); }
-    finally { setSyncing(false); }
-  }, [folderId, sorted, syncing]);
+    finally { syncingRef.current = false; setSyncing(false); }
+  }, [folderId]);
 
   useEffect(() => { void sync(false); const timer = setInterval(() => void sync(false), 60000); return () => clearInterval(timer); }, [sync]);
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(timer); }, []);

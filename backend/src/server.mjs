@@ -66,7 +66,7 @@ function historicalFrequencies(history) {
   return counts.map((count) => count / total);
 }
 
-function scoreNumbers(seed, count, tradition, history) {
+function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32) {
   const frequencies = historicalFrequencies(history);
   const random = seededRandom(seed);
   const values = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
@@ -78,8 +78,8 @@ function scoreNumbers(seed, count, tradition, history) {
       : tradition.kind === 'sixyao'
         ? ((tradition.bits[(number + tradition.moving) % 6] === '1' ? 1 : -1) * parity * 0.12) + (number % 8 === tradition.lower ? 0.18 : 0)
         : ((number % 8 === tradition.upper ? 0.32 : 0) + (number % 6 === tradition.moving ? 0.16 : 0));
-    const empirical = clamp(frequencies[number] / 0.25, 0, 1) * 0.32;
-    return { number, score: traditional + empirical + random() * 0.06 };
+    const empirical = clamp(frequencies[number] / 0.25, 0, 1) * empiricalWeight;
+    return { number, score: traditional * (1 - empiricalWeight) + empirical + random() * 0.06 };
   });
   return values.sort((a, b) => b.score - a.score || a.number - b.number).slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
 }
@@ -118,7 +118,33 @@ function parseOfficialPage(html) {
   return { period, drawAt, numbers: numbers[1].trim().split(/\\s+/).map((n) => n.padStart(2, '0')), superNumber: numbers[2].padStart(2, '0'), size, oddEven };
 }
 
-function buildModels(snapshot, history = []) {
+function evolveProfiles(history = []) {
+  const candidates = [0.12, 0.24, 0.32, 0.44, 0.56];
+  const methods = ['梅花易數', '六爻八卦', '河圖洛書'];
+  return Object.fromEntries(methods.map((method) => {
+    if (history.length < 4) return [method, { empiricalWeight: 0.32, validationSamples: 0, score: null, status: '樣本不足，使用預設權重' }];
+    const results = candidates.map((empiricalWeight) => {
+      let hits = 0; let trials = 0;
+      history.slice(0, 8).forEach((target, index) => {
+        const training = history.slice(index + 1);
+        const predicted = buildModels(target, training, { evolve: false, profiles: { [method]: { empiricalWeight } } }).find((item) => item.name === method);
+        if (!predicted) return;
+        if (predicted.official.size === target.size) hits += 1;
+        if (predicted.official.oddEven === target.oddEven) hits += 1;
+        const actual = new Set(target.numbers);
+        const topThree = predicted.official.basic['3星'] || [];
+        hits += topThree.filter((number) => actual.has(number)).length / 3;
+        trials += 3;
+      });
+      return { empiricalWeight, score: trials ? hits / trials : 0, validationSamples: Math.min(8, history.length) };
+    });
+    const best = results.sort((a, b) => b.score - a.score || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0];
+    return [method, { ...best, status: 'walk-forward 自動選參數' }];
+  }));
+}
+
+function buildModels(snapshot, history = [], options = {}) {
+  const profiles = options.profiles || (options.evolve === false ? {} : evolveProfiles(history));
   const meihua = meihuaCasting(snapshot);
   const sixyao = sixyaoCasting(snapshot);
   const luoshu = luoshuCasting(snapshot);
@@ -128,7 +154,8 @@ function buildModels(snapshot, history = []) {
     { name: '河圖洛書', kind: 'luoshu', tradition: { kind: 'luoshu', center: luoshu.center }, seed: Number(snapshot.period) + 61, calculation: luoshu },
   ];
   return methods.map((method) => {
-    const picks = scoreNumbers(method.seed, 10, method.tradition, history);
+    const profile = profiles[method.name] || { empiricalWeight: 0.32 };
+    const picks = scoreNumbers(method.seed, 10, method.tradition, history, profile.empiricalWeight);
     const modelSeed = method.seed;
     const sumBand = ['低區', '中區', '高區'][modelSeed % 3];
     const oddEvenCount = ['單數偏多', '雙數偏多', '均衡'][modelSeed % 3];
@@ -136,7 +163,7 @@ function buildModels(snapshot, history = []) {
     return {
       name: method.name,
       rule: '傳統起卦特徵＋歷史頻率先驗＋固定種子排序；非因果預測，需以未來期數回測',
-      calculation: { method: method.kind, ...method.calculation, historySamples: history.length, empiricalWeight: history.length ? 0.32 : 0 },
+      calculation: { method: method.kind, ...method.calculation, historySamples: history.length, empiricalWeight: history.length ? profile.empiricalWeight : 0, evolution: profiles[method.name] || null },
       official: {
         size: modelSeed % 2 === 0 ? '大' : '小',
         oddEven: modelSeed % 3 === 0 ? '雙' : '單',

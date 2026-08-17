@@ -18,9 +18,20 @@ const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 4, idl
 const githubToken = process.env.GITHUB_TOKEN || '';
 const githubRepo = process.env.GITHUB_BACKUP_REPO || 'NoMoneyDaddy/Amazon-Bingo';
 const githubBackupPath = process.env.GITHUB_BACKUP_PATH || 'backups/bingo-model-profile.json';
+const upstreamTimeoutMs = 15_000;
 let databaseReady = false;
 let lastPersistedPeriod = '';
 let scheduledTimer;
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = upstreamTimeoutMs) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function ensureDatabase() {
   if (!pool || databaseReady) return;
@@ -77,11 +88,11 @@ async function backupModelProfileToGitHub(profile) {
   const apiUrl = `https://api.github.com/repos/${githubRepo}/contents/${githubBackupPath}`;
   const headers = { accept: 'application/vnd.github+json', authorization: `Bearer ${githubToken}`, 'user-agent': 'bingo-api', 'x-github-api-version': '2022-11-28' };
   let sha;
-  const existing = await fetch(apiUrl, { headers });
+  const existing = await fetchWithTimeout(apiUrl, { headers });
   if (existing.ok) sha = (await existing.json()).sha;
   else if (existing.status !== 404) throw new Error(`GitHub 讀取備份失敗 HTTP ${existing.status}`);
   const content = Buffer.from(`${JSON.stringify(profile, null, 2)}\n`).toString('base64');
-  const response = await fetch(apiUrl, { method: 'PUT', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ message: `備份賓果算法與權重 ${profile.sourcePeriod || 'latest'}`, content, ...(sha ? { sha } : {}) }) });
+  const response = await fetchWithTimeout(apiUrl, { method: 'PUT', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ message: `備份賓果算法與權重 ${profile.sourcePeriod || 'latest'}`, content, ...(sha ? { sha } : {}) }) });
   if (!response.ok) throw new Error(`GitHub 寫入備份失敗 HTTP ${response.status}`);
   return { enabled: true, repo: githubRepo, path: githubBackupPath };
 }
@@ -551,7 +562,7 @@ async function fetchOfficial(daysOverride = null) {
   const openDates = Array.from({ length: historyDays }, (_, index) => taipeiDateKey(index));
   const dailyResults = await Promise.all(openDates.map(async (openDate) => {
     try {
-      const response = await fetch(`${apiBaseUrl}?openDate=${openDate}&pageNum=1&pageSize=500`, { headers: { accept: 'application/json', origin: 'https://www.taiwanlottery.com' } });
+      const response = await fetchWithTimeout(`${apiBaseUrl}?openDate=${openDate}&pageNum=1&pageSize=500`, { headers: { accept: 'application/json', origin: 'https://www.taiwanlottery.com' } });
       if (!response.ok) return [];
       const payload = await response.json();
       return (payload?.content?.bingoQueryResult || []).filter((record) => record?.drawTerm && Array.isArray(record.openShowOrder) && record.openShowOrder.length === 20).map((record) => ({ record, openDate }));
@@ -582,11 +593,20 @@ function parseMirrorPage(html, sourceName) {
   const values = [...tail.matchAll(/(?:^|[^0-9])(\d{1,2})(?=[^0-9]|$)/g)].map((match) => Number(match[1])).filter((number) => number >= 1 && number <= 80);
   const numbers = [];
   for (const number of values) { if (!numbers.includes(number)) numbers.push(number); if (numbers.length === 20) break; }
-  return deriveSnapshot(periodMatch[1], numbers, sourceName);
+  const snapshot = deriveSnapshot(periodMatch[1], numbers, sourceName);
+  const superNumber = tail.match(/超級獎號\s*[:：]?\s*(\d{1,2})/)?.[1];
+  const size = tail.match(/(?:猜)?大小\s*[:：]?\s*([大小和])/)?.[1];
+  const oddEvenRaw = tail.match(/(?:猜)?單雙\s*[:：]?\s*([單雙和－-])/)?.[1];
+  return {
+    ...snapshot,
+    superNumber: superNumber ? superNumber.padStart(2, '0') : snapshot.superNumber,
+    size: size || snapshot.size,
+    oddEven: oddEvenRaw === '－' || oddEvenRaw === '-' ? '和' : oddEvenRaw || snapshot.oddEven,
+  };
 }
 
 async function fetchMirror(source) {
-  const response = await fetch(source.url, { headers: { accept: 'text/html', 'user-agent': 'bingo-research-api/1.0' } });
+  const response = await fetchWithTimeout(source.url, { headers: { accept: 'text/html', 'user-agent': 'bingo-research-api/1.0' } });
   if (!response.ok) throw new Error(`${source.name} HTTP ${response.status}`);
   return parseMirrorPage(await response.text(), source.name);
 }
@@ -596,7 +616,7 @@ function nextPredictionPeriod(period) {
   return Number.isFinite(numeric) ? String(numeric + 1) : `${period}-next`;
 }
 
-async function latest(daysOverride = null) {
+async function latest(daysOverride = null, existingHistory = []) {
   const health = [];
   const attempts = [{ name: '台灣彩券官方 API', run: () => fetchOfficial(daysOverride) }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
   for (const attempt of attempts) {
@@ -605,7 +625,15 @@ async function latest(daysOverride = null) {
       const snapshot = result.snapshot || result;
       health.push({ name: attempt.name, ok: true });
       const syncedAt = Date.now();
-      const rawHistory = result.history || [snapshot];
+      const fetchedHistory = result.history || [snapshot];
+      const historyByPeriod = new Map(existingHistory.map((item) => [String(item.period), item]));
+      fetchedHistory.forEach((item) => {
+        const previous = historyByPeriod.get(String(item.period));
+        historyByPeriod.set(String(item.period), previous
+          ? { ...previous, ...item, superNumber: item.superNumber || previous.superNumber, size: item.size || previous.size, oddEven: item.oddEven || previous.oddEven }
+          : item);
+      });
+      const rawHistory = [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period));
       const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);
       const history = rawHistory.map((item, index) => {
         const drawAt = formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000));
@@ -622,7 +650,7 @@ async function latest(daysOverride = null) {
       });
       await persistSnapshots(history);
       const backup = await backupModelProfile(history[0]);
-      return { ...history[0], history, historyDays: result.historyDays || 1, sourceHealth: health, backup };
+      return { ...history[0], history, historyDays: Math.max(result.historyDays || 1, existingHistory.length ? 30 : 1), sourceHealth: health, backup };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }
@@ -642,10 +670,10 @@ function nextDrawAt(now = new Date()) {
 
 async function scheduledSync(forceRepair = false) {
   try {
-    const persisted = await readPersisted(1);
+    const persisted = await readPersisted(maxModelHistory);
     const requestedDays = forceRepair || !persisted.length ? 30 : 1;
-    const result = await latest(requestedDays);
-    if (!forceRepair && persisted[0]?.period && result.period !== persisted[0].period) await latest(30);
+    const refreshDays = requestedDays === 1 && persisted.length < maxModelHistory ? 30 : requestedDays;
+    const result = await latest(refreshDays, persisted);
     console.log(JSON.stringify({ event: 'sync-ok', period: result.period, historyDays: result.historyDays, persisted: Boolean(pool) }));
   } catch (error) {
     console.error(JSON.stringify({ event: 'sync-failed', message: error instanceof Error ? error.message : '同步失敗' }));
@@ -668,12 +696,14 @@ const server = http.createServer(async (req, res) => {
       const requestUrl = new URL(req.url, 'http://localhost');
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
-      const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : 600);
+      const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : maxModelHistory);
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
-      if (persisted.length && !daysOverride && hasNextPrediction) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      const hasUsableHistory = persisted.length >= maxModelHistory;
+      if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       const hasTargetAwareModels = persisted.length && persisted[0].models?.length && persisted[0].models.every((model) => Object.keys(model.calculation?.targetCastings || {}).length === predictionTargets.length);
-      if (persisted.length && daysOverride === 1 && hasTargetAwareModels && hasNextPrediction) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 1, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
-      return send(res, 200, await latest(daysOverride));
+      if (persisted.length && daysOverride === 1 && hasTargetAwareModels && hasNextPrediction && hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
+      return send(res, 200, await latest(refreshDays, persisted));
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }
   }
   send(res, 404, { error: 'Not found' });

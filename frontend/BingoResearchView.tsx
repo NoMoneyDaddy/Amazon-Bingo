@@ -205,28 +205,6 @@ function parseModels(draw: DrawSnapshot): Model[] {
   return draw.models || [];
 }
 
-function modelStats(draws: DrawSnapshot[]) {
-  return MODEL_NAMES.map((model) => {
-    const rows = draws.flatMap((draw) =>
-      parseModels(draw)
-        .filter((item) => item.name === model)
-        .map((item) => ({ item, draw })),
-    );
-    const size = rows.filter(
-      ({ item, draw }) => item.official.size === draw.size,
-    ).length;
-    const oddEven = rows.filter(
-      ({ item, draw }) => item.official.oddEven === draw.oddEven,
-    ).length;
-    return {
-      model,
-      samples: rows.length,
-      sizeRate: rows.length ? size / rows.length : null,
-      oddEvenRate: rows.length ? oddEven / rows.length : null,
-    };
-  });
-}
-
 function wilsonLowerBound(rate: number, samples: number) {
   if (!samples) return -1;
   const z = 1.96;
@@ -488,8 +466,6 @@ export function BingoResearchView() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState<number | null>(null);
-  const [historyDays, setHistoryDays] = useState(30);
-  const [backup, setBackup] = useState<DrawSnapshot["backup"]>();
   const [now, setNow] = useState(() => new Date());
   const [page, setPage] = useState<Page>("overview");
   const latest = sorted[0];
@@ -497,13 +473,11 @@ export function BingoResearchView() {
     () => (latest ? parseModels(latest) : []),
     [latest],
   );
-  const stats = useMemo(() => modelStats(sorted), [sorted]);
   const bestPlays = useMemo(
     () => bestPlayStats(sorted, latestModels),
     [sorted, latestModels],
   );
   const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
-  const sourceHealth = latest?.sourceHealth || [];
 
   const sync = useCallback(async () => {
     if (syncing) return;
@@ -513,8 +487,6 @@ export function BingoResearchView() {
       const snapshot = await fetchLatest(1);
       const records = snapshot.history?.length ? snapshot.history : [snapshot];
       setDraws(records);
-      setHistoryDays(snapshot.historyDays ?? 30);
-      setBackup(snapshot.backup);
       setLastSync(Date.now());
     } catch (err) {
       setError(err instanceof Error ? err.message : "讀取失敗");
@@ -687,7 +659,7 @@ export function BingoResearchView() {
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
                       <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">下一期預測與預估勝率</h2>
                     </div>
-                    <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">歷史回測</span>
+                    <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">資料證據</span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
                     {latest?.predictionTargetPeriod ? `預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 預估勝率採中性先驗平滑，樣本越多越穩定，不代表實際中獎機率。
@@ -904,19 +876,6 @@ export function BingoResearchView() {
                   )}
                 </div>
               </section>
-            )}
-            {false && (
-              <div className="text-xs leading-6 text-slate-300">
-                資料來源：
-                {sourceHealth
-                  .filter((source) => source.ok)
-                  .map((source) => source.name)
-                  .join("、")}{" "}
-                ·{" "}
-                {backup?.enabled
-                  ? "研究資料已同步"
-                  : "研究資料尚未同步"}
-              </div>
             )}
             {page !== "overview" && latest && (
               <div className="text-xs leading-6 text-slate-300" role="status">

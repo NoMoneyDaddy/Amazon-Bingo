@@ -241,28 +241,49 @@ function parseOfficialPage(html) {
   return { period, drawAt, numbers: numbers[1].trim().split(/\\s+/).map((n) => n.padStart(2, '0')), superNumber: numbers[2].padStart(2, '0'), size, oddEven };
 }
 
+const predictionTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
+
+function targetProfile(profiles, methodName, target) {
+  const profile = profiles?.[methodName] || {};
+  return profile.targets?.[target] || profile[target] || profile;
+}
+
+function categoryPrediction(seed, traditional, history, field, empiricalWeight) {
+  if (!history.length || empiricalWeight < 0.4) return traditional;
+  const counts = new Map();
+  history.forEach((item, index) => counts.set(item[field], (counts.get(item[field]) || 0) + 1 / (index + 1)));
+  const empirical = [...counts.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0];
+  return empirical || traditional;
+}
+
 function evolveProfiles(history = []) {
   const candidates = [0.12, 0.24, 0.32, 0.44, 0.56];
   const methods = ['梅花易數', '六爻八卦', '河圖洛書'];
   return Object.fromEntries(methods.map((method) => {
-    if (history.length < 4) return [method, { empiricalWeight: 0.32, validationSamples: 0, score: null, status: '樣本不足，使用預設權重' }];
-    const results = candidates.map((empiricalWeight) => {
-      let hits = 0; let trials = 0;
-      history.slice(0, 8).forEach((target, index) => {
-        const training = history.slice(index + 1);
-        const predicted = buildModels(target, training, { evolve: false, profiles: { [method]: { empiricalWeight } } }).find((item) => item.name === method);
-        if (!predicted) return;
-        if (predicted.official.size === target.size) hits += 1;
-        if (predicted.official.oddEven === target.oddEven) hits += 1;
-        const actual = new Set(target.numbers);
-        const topThree = predicted.official.basic['3星'] || [];
-        hits += topThree.filter((number) => actual.has(number)).length / 3;
-        trials += 3;
+    const targets = Object.fromEntries(predictionTargets.map((target) => {
+      if (history.length < 4) return [target, { empiricalWeight: 0.32, validationSamples: 0, score: null, status: '樣本不足，使用預設權重' }];
+      const results = candidates.map((empiricalWeight) => {
+        let hits = 0; let trials = 0;
+        history.slice(0, 8).forEach((actual, index) => {
+          const training = history.slice(index + 1);
+          const predicted = buildModels(actual, training, { evolve: false, profiles: { [method]: { targets: { [target]: { empiricalWeight } } } } }).find((item) => item.name === method);
+          if (!predicted) return;
+          if (target === 'size') hits += predicted.official.size === actual.size ? 1 : 0;
+          else if (target === 'oddEven') hits += predicted.official.oddEven === actual.oddEven ? 1 : 0;
+          else if (target === 'superNumber') hits += predicted.official.superNumber === actual.superNumber ? 1 : 0;
+          else {
+            const picks = predicted.official.basic[target] || [];
+            const actualNumbers = new Set(actual.numbers);
+            hits += picks.length ? picks.filter((number) => actualNumbers.has(number)).length / picks.length : 0;
+          }
+          trials += 1;
+        });
+        return { empiricalWeight, score: trials ? hits / trials : 0, validationSamples: Math.min(8, history.length) };
       });
-      return { empiricalWeight, score: trials ? hits / trials : 0, validationSamples: Math.min(8, history.length) };
-    });
-    const best = results.sort((a, b) => b.score - a.score || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0];
-    return [method, { ...best, status: 'walk-forward 自動選參數' }];
+      const best = results.sort((a, b) => b.score - a.score || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0];
+      return [target, { ...best, status: 'walk-forward 分玩法／星級自動選參數' }];
+    }));
+    return [method, { targets }];
   }));
 }
 
@@ -277,21 +298,31 @@ function buildModels(snapshot, history = [], options = {}) {
     { name: '河圖洛書', kind: 'luoshu', tradition: { kind: 'luoshu', center: luoshu.center }, seed: Number(snapshot.period) + 61, calculation: luoshu },
   ];
   return methods.map((method) => {
-    const profile = profiles[method.name] || { empiricalWeight: 0.32 };
-    const picks = scoreNumbers(method.seed, 10, method.tradition, history, profile.empiricalWeight);
+    const profilesForMethod = profiles[method.name] || {};
+    const weights = Object.fromEntries(predictionTargets.map((target) => [target, targetProfile(profiles, method.name, target).empiricalWeight ?? 0.32]));
+    const picksByTarget = Object.fromEntries(predictionTargets.filter((target) => target !== 'size' && target !== 'oddEven').map((target, index) => [
+      target, scoreNumbers(method.seed + index * 101, 10, method.tradition, history, weights[target]),
+    ]));
+    const picks = picksByTarget['10星'] || scoreNumbers(method.seed, 10, method.tradition, history, weights.superNumber);
     const modelSeed = method.seed;
     const sumBand = ['低區', '中區', '高區'][modelSeed % 3];
     const oddEvenCount = ['單數偏多', '雙數偏多', '均衡'][modelSeed % 3];
     const highLowCount = ['小號偏多', '大號偏多', '均衡'][Math.floor(modelSeed / 3) % 3];
+    const traditionalSize = modelSeed % 2 === 0 ? '大' : '小';
+    const traditionalOddEven = modelSeed % 3 === 0 ? '雙' : '單';
     return {
       name: method.name,
       rule: '傳統起卦特徵＋歷史頻率先驗＋固定種子排序；非因果預測，需以未來期數回測',
-      calculation: { method: method.kind, ...method.calculation, historySamples: history.length, empiricalWeight: history.length ? profile.empiricalWeight : 0, evolution: profiles[method.name] || null },
+      calculation: { method: method.kind, ...method.calculation, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null },
       official: {
-        size: modelSeed % 2 === 0 ? '大' : '小',
-        oddEven: modelSeed % 3 === 0 ? '雙' : '單',
-        superNumber: picks[modelSeed % picks.length],
-        basic: Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`${index + 1}星`, picks.slice(0, index + 1)])),
+        size: categoryPrediction(modelSeed, traditionalSize, history, 'size', weights.size),
+        oddEven: categoryPrediction(modelSeed, traditionalOddEven, history, 'oddEven', weights.oddEven),
+        superNumber: (picksByTarget.superNumber || picks)[modelSeed % (picksByTarget.superNumber || picks).length],
+        basic: Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
+          const target = `${index + 1}星`;
+          const targetPicks = picksByTarget[target] || picks;
+          return [target, targetPicks.slice(0, index + 1)];
+        })),
       },
       research: {
         numberPicks: picks,

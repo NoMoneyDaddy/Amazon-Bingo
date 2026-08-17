@@ -218,6 +218,23 @@ function Rate({ value }: { value: number | null }) {
     </span>
   );
 }
+
+function PredictionValue({ value }: { value: string }) {
+  const parts = value.split("、").filter(Boolean);
+  const isNumbers = parts.length > 0 && parts.every((part) => /^\d{1,2}$/.test(part));
+  if (!isNumbers) {
+    return <span className="break-words text-sm font-semibold text-cyan-300 sm:text-base">{value}</span>;
+  }
+  return (
+    <div className="flex min-w-0 flex-wrap gap-1">
+      {parts.map((part) => (
+        <span key={part} className="flex h-7 min-w-7 items-center justify-center rounded-full border border-cyan-300/70 bg-cyan-400/15 px-1.5 text-xs font-bold tabular-nums text-cyan-200">
+          {part}
+        </span>
+      ))}
+    </div>
+  );
+}
 const TARGET_LABELS: Record<string, string> = {
   size: "猜大小",
   oddEven: "猜單雙",
@@ -439,10 +456,8 @@ export function BingoResearchView() {
                         <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
                           <Rate value={play.best.rate} />
                         </span>
-                        <div className="block min-w-0 max-w-full overflow-x-auto">
-                          <span className="block w-max min-w-full whitespace-nowrap text-right text-sm font-semibold tabular-nums text-cyan-300 sm:text-base">
-                            {play.best.prediction}
-                          </span>
+                        <div className="min-w-0 max-w-full">
+                          <PredictionValue value={play.best.prediction} />
                         </div>
                       </div>
                     ))}

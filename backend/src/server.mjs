@@ -102,12 +102,15 @@ async function fetchOfficial() {
   const parsedNumbers = item.openShowOrder.map((n) => Number(n));
   const bigCount = parsedNumbers.filter((n) => n >= 41).length;
   const oddCount = parsedNumbers.filter((n) => n % 2 === 1).length;
-  const snapshot = deriveSnapshot(item.drawTerm, item.openShowOrder, apiBaseUrl, openDate);
-  snapshot.sourceLabel = '台灣彩券官方 API';
-  snapshot.superNumber = String(item.bullEyeTop || '').padStart(2, '0');
-  snapshot.size = item.highLowTop && item.highLowTop !== '－' ? item.highLowTop : snapshot.size;
-  snapshot.oddEven = item.oddEvenTop && item.oddEvenTop !== '－' ? item.oddEvenTop : snapshot.oddEven;
-  return snapshot;
+  const parseItem = (record) => {
+    const snapshot = deriveSnapshot(record.drawTerm, record.openShowOrder, apiBaseUrl, openDate);
+    snapshot.sourceLabel = '台灣彩券官方 API';
+    snapshot.superNumber = String(record.bullEyeTop || '').padStart(2, '0');
+    snapshot.size = record.highLowTop && record.highLowTop !== '－' ? record.highLowTop : snapshot.size;
+    snapshot.oddEven = record.oddEvenTop && record.oddEvenTop !== '－' ? record.oddEvenTop : snapshot.oddEven;
+    return snapshot;
+  };
+  return { snapshot: parseItem(item), history: payload.content.bingoQueryResult.filter((record) => record?.drawTerm && Array.isArray(record.openShowOrder) && record.openShowOrder.length === 20).map(parseItem) };
 }
 
 function parseMirrorPage(html, sourceName) {
@@ -133,9 +136,11 @@ async function latest() {
   const attempts = [{ name: '台灣彩券官方 API', run: fetchOfficial }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
   for (const attempt of attempts) {
     try {
-      const snapshot = await attempt.run();
+      const result = await attempt.run();
+      const snapshot = result.snapshot || result;
       health.push({ name: attempt.name, ok: true });
-      return { ...snapshot, models: buildModels(snapshot), fetchedAt: Date.now(), sourceHealth: health };
+      const history = (result.history || [snapshot]).map((item) => ({ ...item, models: buildModels(item), fetchedAt: Date.now(), sourceHealth: health }));
+      return { ...history[0], history, sourceHealth: health };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }

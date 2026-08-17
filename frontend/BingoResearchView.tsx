@@ -12,6 +12,7 @@ type DrawSnapshot = {
   period: string; drawAt: string; numbers: string[]; superNumber: string; size: string; oddEven: string;
   source: string; sourceLabel: string; sourceHealth: Array<{ name: string; ok: boolean; error?: string }>;
   models: Array<{ name: string; rule: string; official: { size: string; oddEven: string; superNumber: string; basic: Record<string, string[]> }; research: { numberPicks: string[]; sumBand: string; oddEvenCount: string; highLowCount: string; zones: string[] } }>;
+  history?: DrawSnapshot[];
 };
 
 function cleanHtml(html: string) {
@@ -92,15 +93,19 @@ export function BingoResearchView() {
     setSyncing(true); setError('');
     try {
       const snapshot = await fetchLatest();
-      const existing = sorted.find((d) => d.period === snapshot.period);
-      await useItemStore.getState().upsertItem({
-        id: existing?.id ?? generateObjectID(), itemType: 'BINGO_DRAW', name: `第${snapshot.period}期`,
-        parents: existing?.parents ?? (folderId ? { [folderId]: Date.now() } : {}),
-        ...snapshot, numbers: snapshot.numbers.join(','), modelPredictions: JSON.stringify(snapshot.models),
-        sourceHealth: JSON.stringify(snapshot.sourceHealth), fetchedAt: Date.now(),
-        syncStatus: snapshot.sourceLabel === '台灣彩券官方 API' ? 'official-ok' : 'fallback-ok',
-      } as unknown as BingoDraw, { needSync: true });
-      setLastSync(Date.now()); toast(`已同步第 ${snapshot.period} 期`);
+      const records = snapshot.history?.length ? snapshot.history : [snapshot];
+      const savedAt = Date.now();
+      for (const record of records) {
+        const existing = sorted.find((d) => d.period === record.period);
+        await useItemStore.getState().upsertItem({
+          id: existing?.id ?? generateObjectID(), itemType: 'BINGO_DRAW', name: `第${record.period}期`,
+          parents: existing?.parents ?? (folderId ? { [folderId]: savedAt } : {}),
+          ...record, history: undefined, numbers: record.numbers.join(','), modelPredictions: JSON.stringify(record.models),
+          sourceHealth: JSON.stringify(record.sourceHealth), fetchedAt: savedAt,
+          syncStatus: record.sourceLabel === '台灣彩券官方 API' ? 'official-ok' : 'fallback-ok',
+        } as unknown as BingoDraw, { needSync: true });
+      }
+      setLastSync(savedAt); toast(`已保存 ${records.length} 期開獎與預測歷史`);
     } catch (err) { setError(err instanceof Error ? err.message : '同步失敗'); }
     finally { setSyncing(false); }
   }, [folderId, sorted, syncing]);
@@ -127,7 +132,7 @@ export function BingoResearchView() {
           <section className="rounded-lg border border-border bg-card p-3"><div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div><div className="text-xs text-muted-foreground">目前台北時間</div><div className="mt-1 text-xl font-semibold tabular-nums">{taipeiTime}</div></div><div><div className="text-xs text-muted-foreground">下期開獎倒數</div><div className="mt-1 text-xl font-semibold tabular-nums">{formatCountdown(nextDraw.getTime() - now.getTime())}</div><div className="text-xs text-muted-foreground">預計 {new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit' }).format(nextDraw)} 開獎</div></div></div></section>
           {error && <div className="rounded-lg border border-destructive bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
           <section className="rounded-lg border border-border bg-card p-3">
-            <div className="flex items-center justify-between"><h2 className="font-semibold">最新開獎</h2><span className="text-xs text-muted-foreground">{latest?.drawAt || '尚未同步'}</span></div>
+            <div className="flex items-center justify-between"><h2 className="font-semibold">最新開獎</h2><span className="text-xs text-muted-foreground">{latest?.drawAt || '尚未同步'} · 已保存 {sorted.length} 期</span></div>
             {latest ? <><div className="mt-2 text-sm">第 <span className="font-semibold tabular-nums">{latest.period}</span> 期 · {latest.sourceLabel || '來源未知'}</div><div className="flex flex-wrap gap-1.5 mt-2">{latest.numbers.split(',').map((n) => <span key={n} className="rounded-full bg-muted px-2 py-1 text-xs tabular-nums">{n}</span>)}</div><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><div>超級獎號 <b>{latest.superNumber || '—'}</b></div><div>大小／單雙 <b>{latest.size || '—'}／{latest.oddEven || '—'}</b></div></div></> : <p className="text-sm text-muted-foreground mt-2">尚無開獎紀錄，請按同步。</p>}
           </section>
           <section className="rounded-lg border border-border bg-card p-3"><h2 className="font-semibold">資料來源健康度</h2><div className="mt-2 space-y-1 text-sm">{sourceHealth.length ? sourceHealth.map((source) => <div key={source.name} className="flex items-center justify-between gap-2"><span>{source.name}</span><span className={source.ok ? 'text-foreground' : 'text-destructive'}>{source.ok ? '可用' : `失敗：${source.error || '未知原因'}`}</span></div>) : <p className="text-muted-foreground">等待同步。</p>}</div></section>

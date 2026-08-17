@@ -699,10 +699,10 @@ const server = http.createServer(async (req, res) => {
       const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : maxModelHistory);
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
       const hasUsableHistory = persisted.length >= maxModelHistory;
+      if (persisted.length && daysOverride === 1 && !hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: persisted.length, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       const hasTargetAwareModels = persisted.length && persisted[0].models?.length && persisted[0].models.every((model) => Object.keys(model.calculation?.targetCastings || {}).length === predictionTargets.length);
       if (persisted.length && daysOverride === 1 && hasTargetAwareModels && hasNextPrediction && hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
-      if (persisted.length && hasNextPrediction && !hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: persisted.length, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
       return send(res, 200, await latest(refreshDays, persisted));
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }

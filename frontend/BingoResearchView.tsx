@@ -160,7 +160,17 @@ function modelStats(draws: DrawSnapshot[]) {
   });
 }
 
+function wilsonLowerBound(rate: number, samples: number) {
+  if (!samples) return -1;
+  const z = 1.96;
+  const denominator = 1 + (z * z) / samples;
+  const centre = rate + (z * z) / (2 * samples);
+  const margin = z * Math.sqrt((rate * (1 - rate)) / samples + (z * z) / (4 * samples * samples));
+  return (centre - margin) / denominator;
+}
+
 function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
+  const minimumSamples = 4;
   const plays = [
     { key: "size", label: "猜大小" },
     { key: "oddEven", label: "猜單雙" },
@@ -177,19 +187,31 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
           .filter((item) => item.name === model)
           .map((item) => ({ item, draw })),
       );
-      const hits = rows.filter(({ item, draw }) => {
-        if (play.key === "size") return item.official.size === draw.size;
-        if (play.key === "oddEven")
-          return item.official.oddEven === draw.oddEven;
-        if (play.key === "superNumber")
-          return item.official.superNumber === draw.superNumber;
+      let hits = 0;
+      let trials = 0;
+      rows.forEach(({ item, draw }) => {
+        if (play.key === "size") {
+          hits += item.official.size === draw.size ? 1 : 0;
+          trials += 1;
+          return;
+        }
+        if (play.key === "oddEven") {
+          hits += item.official.oddEven === draw.oddEven ? 1 : 0;
+          trials += 1;
+          return;
+        }
+        if (play.key === "superNumber") {
+          hits += item.official.superNumber === draw.superNumber ? 1 : 0;
+          trials += 1;
+          return;
+        }
         const predicted = item.official.basic[play.key] || [];
         const actual = new Set(draw.numbers);
-        return (
-          predicted.length > 0 &&
-          predicted.every((number) => actual.has(number))
-        );
-      }).length;
+        if (predicted.length) {
+          hits += predicted.filter((number) => actual.has(number)).length / predicted.length;
+          trials += 1;
+        }
+      });
       const latest = latestModels.find((item) => item.name === model);
       const prediction =
         play.key === "size"
@@ -199,21 +221,23 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
             : play.key === "superNumber"
               ? latest?.official.superNumber
               : latest?.official.basic[play.key]?.join("、");
+      const rate = trials ? hits / trials : null;
       return {
         model,
-        samples: rows.length,
+        samples: trials,
         hits,
-        rate: rows.length ? hits / rows.length : null,
+        rate,
+        confidence: rate == null || trials < minimumSamples ? -1 : wilsonLowerBound(rate, trials),
         prediction: prediction || "—",
       };
-    }).sort((a, b) => (b.rate ?? -1) - (a.rate ?? -1));
-    return { ...play, best: candidates[0] };
+    }).sort((a, b) => b.confidence - a.confidence || (b.rate ?? -1) - (a.rate ?? -1));
+    return { ...play, best: candidates[0], metricLabel: play.key.endsWith("星") ? "平均命中率" : "歷史勝率" };
   });
 }
 
-function Rate({ value }: { value: number | null }) {
+function Rate({ value, label = "勝率" }: { value: number | null; label?: string }) {
   return (
-    <span className="tabular-nums font-semibold" aria-label={value == null ? "勝率未知" : `勝率 ${(value * 100).toFixed(1)}%`}>
+    <span className="tabular-nums font-semibold" aria-label={value == null ? `${label}未知` : `${label} ${(value * 100).toFixed(1)}%`}>
       {value == null ? "—" : `${(value * 100).toFixed(1)}%`}
     </span>
   );
@@ -473,7 +497,7 @@ export function BingoResearchView() {
                           {play.label}
                         </span>
                         <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
-                          <Rate value={play.best.rate} />
+                          <Rate value={play.best.rate} label={play.metricLabel} />
                         </span>
                         <div className="min-w-0 max-w-full">
                           <PredictionValue value={play.best.prediction} />
@@ -516,7 +540,7 @@ export function BingoResearchView() {
                         <div className="truncate font-semibold text-white">{model.name}</div>
                         <span className="shrink-0 rounded-full bg-amber-300/15 px-2 py-1 text-xs text-amber-100">{model.calculation?.historySamples ?? 0} 期樣本</span>
                       </div>
-                      <div className="mt-1 text-xs text-amber-100">{model.status || "版本狀態未保存"}</div>
+                      <div className="mt-1 text-xs text-amber-100">{model.status || "狀態未提供"}</div>
                       <p className="mt-2 text-sm leading-6 text-slate-300">{modelPlainLanguage(model.name)}</p>
                       <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900 p-2 text-xs leading-6 text-slate-200">
                         <span className="text-cyan-200">起卦依據：</span>每個玩法／星級均以預測當下時間獨立起卦；目標期號與玩法只標記問題，不直接硬編碼成卦象。

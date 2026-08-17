@@ -5,7 +5,7 @@ import { BingoDraw } from './schemas/bingoResearchSchema';
 const API_URL = 'https://bingo-api.zeabur.app/api/latest';
 const MODEL_NAMES = ['梅花易數', '六爻八卦', '河圖洛書'];
 type Model = { name: string; rule: string; calculation?: { formula?: string; historySamples?: number; empiricalWeight?: number; evolution?: { empiricalWeight?: number; validationSamples?: number; score?: number | null; status?: string } }; official: { size: string; oddEven: string; superNumber: string; basic: Record<string, string[]> }; research: { numberPicks: string[]; sumBand: string; oddEvenCount: string; highLowCount: string; zones: string[] } };
-type DrawSnapshot = { period: string; drawAt: string; numbers: string[]; superNumber: string; size: string; oddEven: string; source: string; sourceLabel: string; sourceHealth: Array<{ name: string; ok: boolean; error?: string }>; models: Model[]; history?: DrawSnapshot[] };
+type DrawSnapshot = { period: string; drawAt: string; numbers: string[]; superNumber: string; size: string; oddEven: string; source: string; sourceLabel: string; sourceHealth: Array<{ name: string; ok: boolean; error?: string }>; models: Model[]; history?: DrawSnapshot[]; historyDays?: number };
 type Page = 'overview' | 'process' | 'history';
 
 async function fetchLatest(): Promise<DrawSnapshot> {
@@ -70,7 +70,7 @@ export function BingoResearchView() {
   const drawsRef = useRef(draws);
   const syncingRef = useRef(false);
   const folderId = useSelectedItemsStore((s) => s.lastFolderId);
-  const [syncing, setSyncing] = useState(false); const [error, setError] = useState(''); const [lastSync, setLastSync] = useState<number | null>(null); const [now, setNow] = useState(() => new Date()); const [page, setPage] = useState<Page>('overview');
+  const [syncing, setSyncing] = useState(false); const [error, setError] = useState(''); const [lastSync, setLastSync] = useState<number | null>(null); const [historyDays, setHistoryDays] = useState(30); const [now, setNow] = useState(() => new Date()); const [page, setPage] = useState<Page>('overview');
   const latest = sorted[0];
   const latestModels = useMemo(() => latest ? parseModels(latest) : [], [latest]);
   const stats = useMemo(() => modelStats(sorted), [sorted]);
@@ -83,9 +83,11 @@ export function BingoResearchView() {
     if (syncingRef.current) return;
     syncingRef.current = true; setSyncing(true); setError('');
     try {
-      const snapshot = await fetchLatest(); const records = snapshot.history?.length ? snapshot.history : [snapshot]; const savedAt = Date.now(); let newCount = 0;
+      const snapshot = await fetchLatest(); setHistoryDays(snapshot.historyDays ?? 30); const records = snapshot.history?.length ? snapshot.history : [snapshot]; const savedAt = Date.now(); let newCount = 0;
+      const existingPeriods = new Set(drawsRef.current.map((draw) => draw.period));
       for (const record of records) {
-        const existing = drawsRef.current.find((draw) => draw.period === record.period); if (!existing) newCount += 1;
+        if (existingPeriods.has(record.period)) continue;
+        const existing = drawsRef.current.find((draw) => draw.period === record.period); newCount += 1;
         await useItemStore.getState().upsertItem({ id: existing?.id ?? generateObjectID(), itemType: 'BINGO_DRAW', name: `第${record.period}期`, parents: existing?.parents ?? (folderId ? { [folderId]: savedAt } : {}), ...record, history: undefined, numbers: record.numbers.join(','), modelPredictions: JSON.stringify(record.models), sourceHealth: JSON.stringify(record.sourceHealth), fetchedAt: savedAt, syncStatus: record.sourceLabel === '台灣彩券官方 API' ? 'official-ok' : 'fallback-ok' } as unknown as BingoDraw, { needSync: true });
       }
       setLastSync(savedAt);
@@ -94,7 +96,7 @@ export function BingoResearchView() {
     finally { syncingRef.current = false; setSyncing(false); }
   }, [folderId]);
 
-  useEffect(() => { void sync(false); const timer = setInterval(() => void sync(false), 60000); return () => clearInterval(timer); }, [sync]);
+  useEffect(() => { void sync(false); const timer = setInterval(() => void sync(false), 300000); return () => clearInterval(timer); }, [sync]);
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(timer); }, []);
   const nextDraw = getNextDraw(now); const taipeiTime = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', dateStyle: 'medium', timeStyle: 'medium' }).format(now);
 
@@ -103,7 +105,7 @@ export function BingoResearchView() {
   return <div className="h-full flex flex-col min-h-0 bg-slate-950 text-slate-100">
     <PluginTopbar title="賓果玄學研究台" rightButtons={[{ icon: syncing ? 'loader-2' : 'refresh', onClick: syncing ? undefined : () => void sync(true), title: syncing ? '同步中' : '立即同步' }]} />
     <div className="flex-1 min-h-0"><CustomScrollbar orientation="vertical"><div className="mx-auto max-w-4xl space-y-3 p-3 pb-20 sm:p-4 sm:pb-4">
-      <div className="rounded-2xl border border-cyan-400/30 bg-slate-900 p-3 shadow-lg shadow-cyan-950/30 sm:p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="text-[11px] text-cyan-300">科學計算 · 玄學驗證 · 提升中獎機率</div><div className="mt-1 text-base font-semibold leading-snug text-white sm:text-lg">賓果玄學研究台</div><div className="mt-1 hidden text-xs text-slate-400 sm:block">總覽已整合最新開獎與全部玩法推薦</div></div><div className="shrink-0 text-right"><div className="text-[11px] text-slate-400">下期開獎</div><div className="tabular-nums text-base font-semibold text-cyan-300 sm:text-lg">{formatCountdown(nextDraw.getTime() - now.getTime())}</div><div className="mt-0.5 text-[11px] text-slate-400">{taipeiTime}</div></div></div><div className="mt-3 hidden flex-wrap gap-1 border-t border-slate-700 pt-2 sm:flex">{pageButton('overview', '總覽')}{pageButton('process', '計算過程')}{pageButton('history', '歷史紀錄')}</div></div>
+      <div className="rounded-2xl border border-cyan-400/30 bg-slate-900 p-3 shadow-lg shadow-cyan-950/30 sm:p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><div className="text-[11px] text-cyan-300">科學計算 · 玄學驗證 · 提升中獎機率</div><div className="mt-1 text-base font-semibold leading-snug text-white sm:text-lg">賓果玄學研究台</div><div className="mt-1 hidden text-xs text-slate-400 sm:block">總覽已整合最新開獎與全部玩法推薦 · 已載入近 {historyDays} 天</div></div><div className="shrink-0 text-right"><div className="text-[11px] text-slate-400">下期開獎</div><div className="tabular-nums text-base font-semibold text-cyan-300 sm:text-lg">{formatCountdown(nextDraw.getTime() - now.getTime())}</div><div className="mt-0.5 text-[11px] text-slate-400">{taipeiTime}</div></div></div><div className="mt-3 hidden flex-wrap gap-1 border-t border-slate-700 pt-2 sm:flex">{pageButton('overview', '總覽')}{pageButton('process', '計算過程')}{pageButton('history', '歷史紀錄')}</div></div>
       {error && <div className="rounded-lg border border-red-400/50 bg-red-950/40 p-3 text-sm text-red-200">{error}</div>}
       {page === 'overview' && <>
         <section className="rounded-2xl border border-cyan-400/30 bg-slate-900 p-3 shadow-lg shadow-cyan-950/20 sm:p-4"><div className="flex items-center justify-between gap-2"><h2 className="font-semibold text-cyan-300">最新開獎</h2><span className="text-[11px] text-slate-400">已保存 {sorted.length} 期{lastSync ? ` · ${new Date(lastSync).toLocaleTimeString('zh-TW')}` : ''}</span></div>{latest ? <><div className="mt-2 text-sm">第 <b className="tabular-nums text-cyan-200">{latest.period}</b> 期 · 開獎 {latest.drawAt || '時間未知'}</div><div className="truncate text-[11px] text-slate-400">資料來源：{latest.sourceLabel || '來源未知'}</div><div className="mt-3 grid grid-cols-5 gap-1.5">{latest.numbers.split(',').map((number) => <span key={number} className="rounded-lg border border-slate-700 bg-slate-800 px-1 py-1.5 text-center text-xs tabular-nums">{number}</span>)}</div><div className="mt-3 grid grid-cols-3 gap-2 text-xs text-slate-300 sm:text-sm"><div>超級獎號 <b className="text-amber-300">{latest.superNumber || '—'}</b></div><div>大小 <b className="text-cyan-300">{latest.size || '—'}</b></div><div>單雙 <b className="text-cyan-300">{latest.oddEven || '—'}</b></div></div></> : <p className="mt-2 text-sm text-slate-400">等待首次同步。</p>}</section>

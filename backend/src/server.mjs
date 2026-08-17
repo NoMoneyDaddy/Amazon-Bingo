@@ -3,6 +3,8 @@ import http from 'node:http';
 const port = Number(process.env.PORT || 8080);
 const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
+const defaultHistoryDays = 30;
+const maxModelHistory = 60;
 const fallbackSources = [
   { name: 'Pilio 賓果開獎查詢', url: 'https://www.pilio.idv.tw/bingo/list.asp' },
   { name: 'Auzo 奧索樂透網', url: 'https://lotto.auzo.tw/bingobingo.php' },
@@ -87,6 +89,12 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32) {
 function datePartsTaipei() {
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
   return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+}
+
+function taipeiDateKey(daysAgo = 0) {
+  const today = datePartsTaipei();
+  const date = new Date(Date.UTC(Number(today.year), Number(today.month) - 1, Number(today.day) - daysAgo));
+  return date.toISOString().slice(0, 10);
 }
 
 function formatTaipeiDateTime(date) {
@@ -182,19 +190,22 @@ function buildModels(snapshot, history = [], options = {}) {
 }
 
 async function fetchOfficial() {
-  const dateValue = datePartsTaipei();
-  const openDate = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
-  const response = await fetch(`${apiBaseUrl}?openDate=${openDate}&pageNum=1&pageSize=10`, { headers: { accept: 'application/json', origin: 'https://www.taiwanlottery.com' } });
-  if (!response.ok) throw new Error(`官方資料 HTTP ${response.status}`);
-  const payload = await response.json();
-  const item = payload?.content?.bingoQueryResult?.[0];
-  if (!item?.drawTerm || !Array.isArray(item.openShowOrder) || item.openShowOrder.length !== 20) {
-    throw new Error('官方 API 未回傳完整的最新 20 號資料');
-  }
-  const parsedNumbers = item.openShowOrder.map((n) => Number(n));
-  const bigCount = parsedNumbers.filter((n) => n >= 41).length;
-  const oddCount = parsedNumbers.filter((n) => n % 2 === 1).length;
-  const parseItem = (record) => {
+  const requestedDays = Number(process.env.HISTORY_DAYS || defaultHistoryDays);
+  const historyDays = Math.min(30, Math.max(10, Number.isFinite(requestedDays) ? requestedDays : defaultHistoryDays));
+  const openDates = Array.from({ length: historyDays }, (_, index) => taipeiDateKey(index));
+  const dailyResults = await Promise.all(openDates.map(async (openDate) => {
+    try {
+      const response = await fetch(`${apiBaseUrl}?openDate=${openDate}&pageNum=1&pageSize=500`, { headers: { accept: 'application/json', origin: 'https://www.taiwanlottery.com' } });
+      if (!response.ok) return [];
+      const payload = await response.json();
+      return (payload?.content?.bingoQueryResult || []).filter((record) => record?.drawTerm && Array.isArray(record.openShowOrder) && record.openShowOrder.length === 20).map((record) => ({ record, openDate }));
+    } catch {
+      return [];
+    }
+  }));
+  const records = dailyResults.flat().sort((a, b) => Number(b.record.drawTerm) - Number(a.record.drawTerm));
+  if (!records.length) throw new Error('官方 API 未回傳指定期間的完整開獎資料');
+  const parseItem = ({ record, openDate }) => {
     const snapshot = deriveSnapshot(record.drawTerm, record.openShowOrder, apiBaseUrl, openDate);
     snapshot.sourceLabel = '台灣彩券官方 API';
     snapshot.superNumber = String(record.bullEyeTop || '').padStart(2, '0');
@@ -202,7 +213,8 @@ async function fetchOfficial() {
     snapshot.oddEven = record.oddEvenTop && record.oddEvenTop !== '－' ? record.oddEvenTop : snapshot.oddEven;
     return snapshot;
   };
-  return { snapshot: parseItem(item), history: payload.content.bingoQueryResult.filter((record) => record?.drawTerm && Array.isArray(record.openShowOrder) && record.openShowOrder.length === 20).map(parseItem) };
+  const history = records.map(parseItem);
+  return { snapshot: history[0], history, historyDays };
 }
 
 function parseMirrorPage(html, sourceName) {
@@ -233,8 +245,8 @@ async function latest() {
       health.push({ name: attempt.name, ok: true });
       const syncedAt = Date.now();
       const rawHistory = result.history || [snapshot];
-      const history = rawHistory.map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: buildModels(item, rawHistory.slice(index + 1)), fetchedAt: syncedAt, sourceHealth: health }));
-      return { ...history[0], history, sourceHealth: health };
+      const history = rawHistory.map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: index < maxModelHistory ? buildModels(item, rawHistory.slice(index + 1, index + maxModelHistory + 1)) : [], fetchedAt: syncedAt, sourceHealth: health }));
+      return { ...history[0], history, historyDays: result.historyDays || 1, sourceHealth: health };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }

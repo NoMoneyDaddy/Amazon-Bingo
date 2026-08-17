@@ -47,6 +47,13 @@ type Model = {
     oddEvenCount: string;
     highLowCount: string;
     zones: string[];
+    targetResearch?: Record<string, {
+      numberPicks: string[];
+      sumBand: string;
+      oddEvenCount: string;
+      highLowCount: string;
+      zones: string[];
+    }>;
   };
 };
 type DrawSnapshot = {
@@ -754,6 +761,31 @@ export function BingoResearchView() {
                       <div className="mt-3 border-t border-slate-800 pt-2 text-xs leading-5 text-slate-300">
                         本模型候選：{model.research.numberPicks.join("、")} · 區間：{model.research.zones.join("、")} · 總和：{model.research.sumBand}
                       </div>
+                      {model.research.targetResearch && (
+                        <div className="mt-3 border-t border-border pt-3">
+                          <div className="mb-2 text-xs font-semibold text-amber-200">各玩法／星級專屬輸出</div>
+                          <div className="grid gap-2 sm:grid-cols-2">
+                            {Object.entries(model.research.targetResearch).map(([target, result]) => {
+                              const prediction = target === "size"
+                                ? model.official.size
+                                : target === "oddEven"
+                                  ? model.official.oddEven
+                                  : target === "superNumber"
+                                    ? model.official.superNumber
+                                    : result.numberPicks.join("、");
+                              return (
+                                <div key={target} className="rounded-lg border border-border bg-card/70 px-2.5 py-2 text-[11px]">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <span className="font-semibold text-foreground">{targetLabel(target)}</span>
+                                    <span className="font-bold tabular-nums text-cyan-200">{prediction || "—"}</span>
+                                  </div>
+                                  <div className="mt-1 text-muted-foreground">{result.sumBand} · {result.oddEvenCount} · {result.highLowCount}</div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      )}
                       {model.sources && model.sources.length > 0 && (
                         <div className="mt-2 border-t border-slate-800 pt-2 text-xs leading-6 text-slate-300">
                           <span className="text-slate-200">參考來源：</span>

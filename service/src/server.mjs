@@ -262,9 +262,10 @@ function historicalFrequencies(history) {
   return counts.map((count) => count / total);
 }
 
-function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32) {
+function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, target = '') {
   const frequencies = historicalFrequencies(history);
   const random = seededRandom(seed);
+  const targetNo = playIndex(target);
   const values = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
     const row = Math.floor((number - 1) / 10);
     const col = (number - 1) % 10;
@@ -281,7 +282,10 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32) {
               ? (number % 9 === tradition.palace - 1 ? 0.34 : 0) + (number % 9 === tradition.cycle ? 0.18 : 0)
               : ((number % 8 === tradition.upper ? 0.32 : 0) + (number % 6 === tradition.moving ? 0.16 : 0));
     const empirical = clamp(frequencies[number] / 0.25, 0, 1) * empiricalWeight;
-    return { number, score: traditional * (1 - empiricalWeight) + empirical + random() * 0.06 };
+    // 玩法適配訊號：同一模型在不同星級／目標使用不同的數字排列特徵，避免所有玩法只共用一份排序。
+    const targetPulse = ((number * (targetNo + 3) + row * 5 + col * 7) % 19) / 19;
+    const targetWeight = target === 'superNumber' ? 0.2 : targetNo > 3 ? 0.14 : 0.1;
+    return { number, score: traditional * (1 - empiricalWeight) + empirical + targetPulse * targetWeight + random() * 0.04 };
   });
   return values.sort((a, b) => b.score - a.score || a.number - b.number).slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
 }
@@ -475,13 +479,25 @@ function buildModels(snapshot, history = [], options = {}) {
     const picksByTarget = Object.fromEntries(predictionTargets.filter((target) => target !== 'size' && target !== 'oddEven').map((target) => {
       const casting = targetCastings[target];
       const seed = `${castingAt}|${snapshot.period}|${method.kind}|${target}|${method.seedOffset}`;
-      return [target, scoreNumbers(seed, 10, traditionFor(method.kind, casting), history, weights[target])];
+      const targetCount = target === 'superNumber' ? 1 : Number(String(target).replace('星', '')) || 10;
+      return [target, scoreNumbers(seed, targetCount, traditionFor(method.kind, casting), history, weights[target], target)];
     }));
-    const picks = picksByTarget['10星'] || scoreNumbers(`${castingAt}|${snapshot.period}|${method.kind}|10星`, 10, traditionFor(method.kind, targetCastings['10星']), history, weights.superNumber);
+    const picks = picksByTarget['10星'] || scoreNumbers(`${castingAt}|${snapshot.period}|${method.kind}|10星`, 10, traditionFor(method.kind, targetCastings['10星']), history, weights['10星'], '10星');
     const modelSeed = playIndex('10星') + method.seedOffset;
     const sumBand = ['低區', '中區', '高區'][modelSeed % 3];
     const oddEvenCount = ['單數偏多', '雙數偏多', '均衡'][modelSeed % 3];
     const highLowCount = ['小號偏多', '大號偏多', '均衡'][Math.floor(modelSeed / 3) % 3];
+    const targetResearch = Object.fromEntries(predictionTargets.map((target) => {
+      const targetSeed = playIndex(target) + method.seedOffset;
+      const targetPicks = picksByTarget[target] || [];
+      return [target, {
+        numberPicks: targetPicks,
+        sumBand: ['低區', '中區', '高區'][targetSeed % 3],
+        oddEvenCount: ['單數偏多', '雙數偏多', '均衡'][targetSeed % 3],
+        highLowCount: ['小號偏多', '大號偏多', '均衡'][Math.floor(targetSeed / 3) % 3],
+        zones: [`${(targetSeed % 4) * 20 + 1}-${(targetSeed % 4 + 1) * 20}`],
+      }];
+    }));
     return {
       name: method.name,
       status: method.status,
@@ -512,6 +528,7 @@ function buildModels(snapshot, history = [], options = {}) {
         oddEvenCount,
         highLowCount,
         zones: [`${(modelSeed % 4) * 20 + 1}-${(modelSeed % 4 + 1) * 20}`],
+        targetResearch,
       },
     };
   });

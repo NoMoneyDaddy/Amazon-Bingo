@@ -32,6 +32,12 @@ function datePartsTaipei() {
   return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
 }
 
+function formatTaipeiDateTime(date) {
+  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date);
+  const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`;
+}
+
 function deriveSnapshot(period, numbers, source, drawAt = '') {
   const parsed = numbers.map(Number);
   if (!period || parsed.length !== 20 || parsed.some((number) => number < 1 || number > 80)) throw new Error('來源未回傳完整 20 個 1–80 號碼');
@@ -139,7 +145,8 @@ async function latest() {
       const result = await attempt.run();
       const snapshot = result.snapshot || result;
       health.push({ name: attempt.name, ok: true });
-      const history = (result.history || [snapshot]).map((item) => ({ ...item, models: buildModels(item), fetchedAt: Date.now(), sourceHealth: health }));
+      const syncedAt = Date.now();
+      const history = (result.history || [snapshot]).map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: buildModels(item), fetchedAt: syncedAt, sourceHealth: health }));
       return { ...history[0], history, sourceHealth: health };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });

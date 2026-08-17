@@ -12,13 +12,15 @@ async function fetchLatest(days = 1): Promise<DrawSnapshot> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const controller = new AbortController();
-    const timeout = window.setTimeout(() => controller.abort(), 20_000);
+    const timeout = window.setTimeout(() => controller.abort('資料服務逾時'), 45_000);
     try {
       const response = await fetch(`${API_URL}?days=${days}`, { cache: 'no-store', signal: controller.signal });
       if (!response.ok) throw new Error(`資料服務 HTTP ${response.status}`);
       return await response.json() as DrawSnapshot;
     } catch (error) {
-      lastError = error;
+      lastError = error instanceof Error && /abort|signal/i.test(error.message)
+        ? new Error('資料服務逾時，請稍後重試')
+        : error;
       if (attempt < 2) await new Promise((resolve) => window.setTimeout(resolve, 800 * (attempt + 1)));
     } finally { window.clearTimeout(timeout); }
   }

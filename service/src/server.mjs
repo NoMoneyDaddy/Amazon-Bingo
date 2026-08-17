@@ -393,7 +393,7 @@ async function latest(daysOverride = null) {
       health.push({ name: attempt.name, ok: true });
       const syncedAt = Date.now();
       const rawHistory = result.history || [snapshot];
-      const history = rawHistory.map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: index < maxModelHistory ? buildModels(item, rawHistory.slice(index + 1, index + maxModelHistory + 1)) : [], fetchedAt: syncedAt, sourceHealth: health }));
+      const history = rawHistory.map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: index < maxModelHistory ? buildModels(item, rawHistory.slice(index + 1, index + maxModelHistory + 1), { evolve: index === 0 }) : [], fetchedAt: syncedAt, sourceHealth: health }));
       await persistSnapshots(history);
       const backup = await backupModelProfile(history[0]);
       return { ...history[0], history, historyDays: result.historyDays || 1, sourceHealth: health, backup };

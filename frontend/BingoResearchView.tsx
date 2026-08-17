@@ -136,41 +136,38 @@ function formatCountdown(ms: number) {
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function streakStats(draws: DrawSnapshot[]) {
+function recentNumberStats(draws: DrawSnapshot[]) {
   const sample = draws.slice(0, 30);
-  const stats = Array.from({ length: 80 }, (_, index) => ({ number: String(index + 1).padStart(2, "0"), currentOpen: 0, currentMiss: 0, maxOpen: 0, maxMiss: 0 }));
+  const stats = Array.from({ length: 80 }, (_, index) => ({
+    number: String(index + 1).padStart(2, "0"),
+    count: 0,
+    currentOpen: 0,
+  }));
+  sample.forEach((draw) =>
+    draw.numbers.forEach((number) => {
+      const item = stats[Number(number) - 1];
+      if (item) item.count += 1;
+    }),
+  );
   stats.forEach((item) => {
-    let openRun = 0;
-    let missRun = 0;
-    sample.forEach((draw) => {
-      const opened = draw.numbers.includes(item.number);
-      openRun = opened ? openRun + 1 : 0;
-      missRun = opened ? 0 : missRun + 1;
-      item.maxOpen = Math.max(item.maxOpen, openRun);
-      item.maxMiss = Math.max(item.maxMiss, missRun);
-    });
-    item.currentOpen = sample.length && sample[0]?.numbers.includes(item.number) ? (() => {
-      let count = 0;
-      for (const draw of sample) {
-        if (!draw.numbers.includes(item.number)) break;
-        count += 1;
-      }
-      return count;
-    })() : 0;
-    item.currentMiss = sample.length && !sample[0]?.numbers.includes(item.number) ? (() => {
-      let count = 0;
-      for (const draw of sample) {
-        if (draw.numbers.includes(item.number)) break;
-        count += 1;
-      }
-      return count;
-    })() : 0;
+    for (const draw of sample) {
+      if (!draw.numbers.includes(item.number)) break;
+      item.currentOpen += 1;
+    }
   });
-  return {
-    sampleSize: sample.length,
-    open: stats.filter((item) => item.currentOpen > 0).sort((a, b) => b.currentOpen - a.currentOpen || b.maxOpen - a.maxOpen || Number(a.number) - Number(b.number)).slice(0, 10),
-    miss: stats.filter((item) => item.currentMiss > 0).sort((a, b) => b.currentMiss - a.currentMiss || b.maxMiss - a.maxMiss || Number(a.number) - Number(b.number)).slice(0, 10),
-  };
+  const hot = new Set(
+    [...stats]
+      .sort((a, b) => b.count - a.count || Number(a.number) - Number(b.number))
+      .slice(0, 10)
+      .map((item) => item.number),
+  );
+  const cold = new Set(
+    [...stats]
+      .sort((a, b) => a.count - b.count || Number(a.number) - Number(b.number))
+      .slice(0, 10)
+      .map((item) => item.number),
+  );
+  return { sampleSize: sample.length, stats, hot, cold };
 }
 
 function parseModels(draw: DrawSnapshot): Model[] {
@@ -436,7 +433,7 @@ export function BingoResearchView() {
     () => bestPlayStats(sorted, latestModels),
     [sorted, latestModels],
   );
-  const streaks = useMemo(() => streakStats(sorted), [sorted]);
+  const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
   const sourceHealth = latest?.sourceHealth || [];
 
   const sync = useCallback(async () => {
@@ -562,16 +559,24 @@ export function BingoResearchView() {
                   </div>
                   {latest ? (
                     <>
-                      <div className="mt-5 grid grid-cols-10 gap-1.5 rounded-2xl border border-orange-200/10 bg-slate-950/40 p-3" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼`}>
+                      <div className="mt-5 grid grid-cols-5 gap-x-1.5 gap-y-3 rounded-2xl border border-orange-200/10 bg-slate-950/40 p-3 sm:grid-cols-10" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
                         {latest.numbers.map((number, index) => (
-                          <span
+                          <div
                             key={`${number}-${index}`}
                             role="listitem"
-                            aria-label={`開獎號碼 ${number}`}
-                            className="flex aspect-square min-h-6 min-w-6 items-center justify-center rounded-full border border-orange-100 bg-gradient-to-br from-orange-300 via-orange-500 to-orange-700 text-xs font-bold tabular-nums text-white shadow-[0_2px_6px_rgba(249,115,22,0.35)] transition-transform duration-300 hover:-translate-y-0.5 sm:text-sm"
+                            aria-label={`開獎號碼 ${number}，近 ${recentStats.sampleSize} 期出現 ${recentStats.stats[Number(number) - 1]?.count || 0} 次，連續開出 ${recentStats.stats[Number(number) - 1]?.currentOpen || 0} 期`}
+                            className="flex min-w-0 flex-col items-center gap-1"
                           >
-                            {number}
-                          </span>
+                            <span className="flex aspect-square w-full max-w-10 items-center justify-center rounded-full border border-orange-100 bg-gradient-to-br from-orange-300 via-orange-500 to-orange-700 text-xs font-bold tabular-nums text-white shadow-[0_2px_6px_rgba(249,115,22,0.35)] transition-transform duration-300 hover:-translate-y-0.5 sm:text-sm">
+                              {number}
+                            </span>
+                            <span className="text-[10px] font-medium leading-none tabular-nums text-orange-100/90">
+                              連開 {recentStats.stats[Number(number) - 1]?.currentOpen || 0} 期
+                            </span>
+                            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold leading-none tabular-nums ${recentStats.hot.has(number) ? "bg-rose-400/20 text-rose-200" : recentStats.cold.has(number) ? "bg-sky-400/20 text-sky-200" : "bg-slate-700/70 text-slate-300"}`}>
+                              {recentStats.hot.has(number) ? "熱" : recentStats.cold.has(number) ? "冷" : ""}{recentStats.stats[Number(number) - 1]?.count || 0} 次
+                            </span>
+                          </div>
                         ))}
                       </div>
                       <div className="mt-4 flex items-center justify-between rounded-2xl border border-red-300/40 bg-gradient-to-r from-red-950/50 to-slate-950/20 px-4 py-3">
@@ -588,37 +593,6 @@ export function BingoResearchView() {
                       等待首次同步。
                     </p>
                   )}
-                </section>
-                <section aria-labelledby="streak-heading" className="rounded-3xl border border-violet-300/30 bg-slate-900/90 p-4 shadow-lg shadow-violet-950/20 backdrop-blur sm:p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-200/80">Streak board</p>
-                      <h2 id="streak-heading" className="mt-1 text-lg font-bold text-violet-100">連續開出次數</h2>
-                    </div>
-                    <span className="shrink-0 rounded-full border border-violet-300/30 bg-violet-300/10 px-2.5 py-1 text-xs text-violet-100">近 {streaks.sampleSize} 期</span>
-                  </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">以最新一期往前計算目前連開與連續未開；括號內為近 30 期最高紀錄。</p>
-                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                    {[
-                      ["目前連開", streaks.open, "text-orange-200", "border-orange-300/30", "bg-orange-300/15", "open"],
-                      ["目前連續未開", streaks.miss, "text-sky-200", "border-sky-300/30", "bg-sky-300/15", "miss"],
-                    ].map(([label, values, tone, border, fill, kind]) => (
-                      <div key={label as string} className={`rounded-2xl border ${border as string} bg-slate-950/50 p-3`}>
-                        <h3 className={`text-sm font-semibold ${tone as string}`}>{label as string}</h3>
-                        <div className="mt-2 flex flex-wrap gap-1.5" role="list" aria-label={`近 30 期${label as string}號碼`}>
-                          {(values as Array<{ number: string; currentOpen: number; currentMiss: number; maxOpen: number; maxMiss: number }>).map((item) => {
-                            const current = kind === "open" ? item.currentOpen : item.currentMiss;
-                            const record = kind === "open" ? item.maxOpen : item.maxMiss;
-                            return (
-                            <span key={item.number} role="listitem" className={`rounded-full border px-2.5 py-1.5 text-xs font-bold tabular-nums ${border as string} ${fill as string} ${tone as string}`}>
-                              {item.number} <span className="font-normal">{current}期</span><span className="ml-1 font-normal opacity-70">({record})</span>
-                            </span>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
                 </section>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full rounded-3xl border border-amber-300/30 bg-slate-900/90 p-4 shadow-lg shadow-amber-950/20 backdrop-blur sm:p-5">
                   <div className="flex items-end justify-between gap-2">

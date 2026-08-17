@@ -169,6 +169,38 @@ function wilsonLowerBound(rate: number, samples: number) {
   return (centre - margin) / denominator;
 }
 
+const SINGLE_BET_COST = 25;
+const BASIC_PAYOUTS: Record<string, Record<number, number>> = {
+  "1星": { 1: 50 },
+  "2星": { 2: 75, 1: 25 },
+  "3星": { 3: 500, 2: 50 },
+  "4星": { 4: 1000, 3: 100, 2: 25 },
+  "5星": { 5: 7500, 4: 500, 3: 50 },
+  "6星": { 6: 25000, 5: 1000, 4: 200, 3: 25 },
+  "7星": { 7: 80000, 6: 3000, 5: 300, 4: 50, 3: 25 },
+  "8星": { 8: 500000, 7: 20000, 6: 1000, 5: 200, 4: 25, 0: 25 },
+  "9星": { 9: 1000000, 8: 100000, 7: 3000, 6: 500, 5: 100, 4: 25, 0: 25 },
+  "10星": { 10: 5000000, 9: 250000, 8: 25000, 7: 2500, 6: 250, 5: 25, 0: 25 },
+};
+
+function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
+  let payout = 0;
+  if (key === "size") {
+    payout = item.official.size === draw.size ? 150 : 0;
+  } else if (key === "oddEven") {
+    const oddCount = draw.numbers.filter((number) => Number(number) % 2 === 1).length;
+    const predictedCount = item.official.oddEven === "單" ? oddCount : 20 - oddCount;
+    payout = predictedCount >= 13 ? 150 : predictedCount >= 11 ? 45 : 0;
+  } else if (key === "superNumber") {
+    payout = item.official.superNumber === draw.superNumber ? 1200 : 0;
+  } else {
+    const predicted = item.official.basic[key] || [];
+    const matches = predicted.filter((number) => draw.numbers.includes(number)).length;
+    payout = BASIC_PAYOUTS[key]?.[matches] || 0;
+  }
+  return { payout, profit: payout - SINGLE_BET_COST, won: payout > 0 };
+}
+
 function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
   const minimumSamples = 4;
   const plays = [
@@ -187,30 +219,14 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
           .filter((item) => item.name === model)
           .map((item) => ({ item, draw })),
       );
-      let hits = 0;
+      let wins = 0;
       let trials = 0;
+      let profit = 0;
       rows.forEach(({ item, draw }) => {
-        if (play.key === "size") {
-          hits += item.official.size === draw.size ? 1 : 0;
-          trials += 1;
-          return;
-        }
-        if (play.key === "oddEven") {
-          hits += item.official.oddEven === draw.oddEven ? 1 : 0;
-          trials += 1;
-          return;
-        }
-        if (play.key === "superNumber") {
-          hits += item.official.superNumber === draw.superNumber ? 1 : 0;
-          trials += 1;
-          return;
-        }
-        const predicted = item.official.basic[play.key] || [];
-        const actual = new Set(draw.numbers);
-        if (predicted.length) {
-          hits += predicted.filter((number) => actual.has(number)).length / predicted.length;
-          trials += 1;
-        }
+        const result = settleSingleBet(play.key, item, draw);
+        wins += result.won ? 1 : 0;
+        profit += result.profit;
+        trials += 1;
       });
       const latest = latestModels.find((item) => item.name === model);
       const prediction =
@@ -221,17 +237,19 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
             : play.key === "superNumber"
               ? latest?.official.superNumber
               : latest?.official.basic[play.key]?.join("、");
-      const rate = trials ? hits / trials : null;
+      const rate = trials ? wins / trials : null;
       return {
         model,
         samples: trials,
-        hits,
+        wins,
+        profit,
+        averageProfit: trials ? profit / trials : null,
         rate,
         confidence: rate == null || trials < minimumSamples ? -1 : wilsonLowerBound(rate, trials),
         prediction: prediction || "—",
       };
     }).sort((a, b) => b.confidence - a.confidence || (b.rate ?? -1) - (a.rate ?? -1));
-    return { ...play, best: candidates[0], metricLabel: play.key.endsWith("星") ? "平均命中率" : "歷史勝率" };
+    return { ...play, best: candidates[0], metricLabel: "中獎率" };
   });
 }
 
@@ -241,6 +259,11 @@ function Rate({ value, label = "勝率" }: { value: number | null; label?: strin
       {value == null ? "—" : `${(value * 100).toFixed(1)}%`}
     </span>
   );
+}
+
+function formatNetProfit(value: number | null) {
+  if (value == null) return "—";
+  return `${value > 0 ? "+" : ""}${Math.round(value).toLocaleString("zh-TW")} 元`;
 }
 
 function PredictionValue({ value }: { value: string }) {
@@ -477,27 +500,31 @@ export function BingoResearchView() {
                   <div className="flex items-end justify-between gap-2">
                     <div>
                       <p className="text-xs font-medium uppercase tracking-[0.18em] text-amber-200/80">Research picks</p>
-                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">本期預測與統計勝率</h2>
+                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">本期預測、中獎率與單注盈虧</h2>
                     </div>
                     <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">歷史回測</span>
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">依目前最佳歷史回測模型整理；「—」代表資料不足，不代表零勝率。</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">按官方中獎門檻統計；每期模擬 1 注 25 元，淨盈虧為派彩減投注成本，不含加碼與倍投注。</p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-xs text-slate-300 sm:grid-cols-[6rem_4rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[4.5rem_3.5rem_4.5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-xs text-slate-300 sm:grid-cols-[6rem_4rem_5rem_minmax(0,1fr)]">
                       <span>玩法</span>
-                      <span>勝率</span>
+                      <span>中獎率</span>
+                      <span>單注淨盈虧</span>
                       <span className="text-right">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (
                       <div
                         key={play.key}
-                        className="grid min-w-0 max-w-full grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-2 sm:grid-cols-[6rem_4rem_minmax(0,1fr)]"
+                        className="grid min-w-0 max-w-full grid-cols-[4.5rem_3.5rem_4.5rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-2 sm:grid-cols-[6rem_4rem_5rem_minmax(0,1fr)]"
                       >
                         <span className="shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
                           {play.label}
                         </span>
                         <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
                           <Rate value={play.best.rate} label={play.metricLabel} />
+                        </span>
+                        <span className={`text-xs font-semibold tabular-nums ${play.best.profit >= 0 ? "text-emerald-300" : "text-rose-300"}`} aria-label={`單注累計淨盈虧 ${formatNetProfit(play.best.profit)}`}>
+                          {formatNetProfit(play.best.profit)}
                         </span>
                         <div className="min-w-0 max-w-full">
                           <PredictionValue value={play.best.prediction} />

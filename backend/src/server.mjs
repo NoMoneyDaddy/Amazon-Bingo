@@ -17,14 +17,71 @@ function digitSum(value) {
   return value.split('').reduce((sum, digit) => sum + Number(digit), 0);
 }
 
-function pickNumbers(seed, count) {
-  const values = Array.from({ length: 80 }, (_, index) => index + 1);
-  values.sort((a, b) => {
-    const scoreA = (a * 73 + seed * 31 + (a % 7) * 17) % 997;
-    const scoreB = (b * 73 + seed * 31 + (b % 7) * 17) % 997;
-    return scoreA - scoreB || a - b;
+function seededRandom(seed) {
+  let state = Math.abs(Math.trunc(seed)) % 2147483647 || 1;
+  return () => { state = state * 16807 % 2147483647; return (state - 1) / 2147483646; };
+}
+
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+
+function parseTaipeiParts(value) {
+  const date = value ? new Date(value.replace(/\//g, '-')) : new Date();
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false }).formatToParts(date);
+  return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
+}
+
+function meihuaCasting(snapshot) {
+  const t = parseTaipeiParts(snapshot.drawAt);
+  const total = t.year + t.month + t.day;
+  const upper = total % 8 || 8;
+  const lower = (total + t.hour) % 8 || 8;
+  const moving = (total + t.hour) % 6 || 6;
+  return { upper, lower, moving, formula: `上卦=(年+月+日) mod 8=${upper}；下卦=(年+月+日+時) mod 8=${lower}；動爻 mod 6=${moving}` };
+}
+
+function sixyaoCasting(snapshot) {
+  const seed = Number(snapshot.period) + digitSum(snapshot.period) * 97;
+  const random = seededRandom(seed);
+  const lines = Array.from({ length: 6 }, () => {
+    const roll = 3 + Math.floor(random() * 15);
+    return { roll, value: roll % 4 === 0 ? 9 : roll % 4 === 1 ? 6 : roll % 2 === 0 ? 8 : 7, moving: roll === 6 || roll === 9 };
   });
-  return values.slice(0, count).sort((a, b) => a - b).map((n) => String(n).padStart(2, '0'));
+  const binary = lines.map((line) => line.value === 6 || line.value === 8 ? 0 : 1).reverse().join('');
+  return { lines, binary, formula: '以期號作固定種子模擬六次三枚硬幣；由下往上記錄陰陽與動爻' };
+}
+
+function luoshuCasting(snapshot) {
+  const t = parseTaipeiParts(snapshot.drawAt);
+  const luoshu = [[4, 9, 2], [3, 5, 7], [8, 1, 6]];
+  const palace = (t.year + t.month + t.day + t.hour) % 9;
+  const row = luoshu[Math.floor(palace / 3)];
+  const center = luoshu[Math.floor(palace / 3)][palace % 3];
+  return { luoshu, palace: palace + 1, center, formula: `以年月日時總和 mod 9 定洛書宮位=${palace + 1}；宮位數=${center}` };
+}
+
+function historicalFrequencies(history) {
+  const counts = Array(81).fill(0);
+  history.forEach((draw, index) => draw.numbers.forEach((number) => { counts[Number(number)] += 1 / (index + 1); }));
+  const total = history.length || 1;
+  return counts.map((count) => count / total);
+}
+
+function scoreNumbers(seed, count, tradition, history) {
+  const frequencies = historicalFrequencies(history);
+  const random = seededRandom(seed);
+  const values = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
+    const row = Math.floor((number - 1) / 10);
+    const col = (number - 1) % 10;
+    const parity = number % 2 ? 1 : -1;
+    const traditional = tradition.kind === 'luoshu'
+      ? (1 - Math.abs((tradition.center + row + col) % 9 - 4) / 4) * 0.55 + (number % tradition.center === 0 ? 0.2 : 0)
+      : tradition.kind === 'sixyao'
+        ? ((tradition.bits[(number + tradition.moving) % 6] === '1' ? 1 : -1) * parity * 0.12) + (number % 8 === tradition.lower ? 0.18 : 0)
+        : ((number % 8 === tradition.upper ? 0.32 : 0) + (number % 6 === tradition.moving ? 0.16 : 0));
+    const empirical = clamp(frequencies[number] / 0.25, 0, 1) * 0.32;
+    return { number, score: traditional + empirical + random() * 0.06 };
+  });
+  return values.sort((a, b) => b.score - a.score || a.number - b.number).slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
 }
 
 function datePartsTaipei() {
@@ -61,23 +118,25 @@ function parseOfficialPage(html) {
   return { period, drawAt, numbers: numbers[1].trim().split(/\\s+/).map((n) => n.padStart(2, '0')), superNumber: numbers[2].padStart(2, '0'), size, oddEven };
 }
 
-function buildModels(snapshot) {
-  const minute = snapshot.drawAt.match(/(\d{1,2}):(\d{2})/)?.[2] || '00';
-  const seed = Number(snapshot.period) + digitSum(snapshot.period) + Number(minute);
-  const methodSeeds = [
-    { name: '梅花易數', offset: 11 },
-    { name: '六爻八卦', offset: 37 },
-    { name: '河圖洛書', offset: 61 },
+function buildModels(snapshot, history = []) {
+  const meihua = meihuaCasting(snapshot);
+  const sixyao = sixyaoCasting(snapshot);
+  const luoshu = luoshuCasting(snapshot);
+  const methods = [
+    { name: '梅花易數', kind: 'meihua', tradition: { kind: 'meihua', ...meihua }, seed: Number(snapshot.period) + 11, calculation: meihua },
+    { name: '六爻八卦', kind: 'sixyao', tradition: { kind: 'sixyao', bits: sixyao.binary, moving: sixyao.lines.filter((line) => line.moving).length, lower: 1 }, seed: Number(snapshot.period) + 37, calculation: sixyao },
+    { name: '河圖洛書', kind: 'luoshu', tradition: { kind: 'luoshu', center: luoshu.center }, seed: Number(snapshot.period) + 61, calculation: luoshu },
   ];
-  return methodSeeds.map((method) => {
-    const modelSeed = seed + method.offset;
-    const picks = pickNumbers(modelSeed, 10);
+  return methods.map((method) => {
+    const picks = scoreNumbers(method.seed, 10, method.tradition, history);
+    const modelSeed = method.seed;
     const sumBand = ['低區', '中區', '高區'][modelSeed % 3];
     const oddEvenCount = ['單數偏多', '雙數偏多', '均衡'][modelSeed % 3];
     const highLowCount = ['小號偏多', '大號偏多', '均衡'][Math.floor(modelSeed / 3) % 3];
     return {
       name: method.name,
-      rule: '固定規則轉換，非因果預測；需以未來期數回測',
+      rule: '傳統起卦特徵＋歷史頻率先驗＋固定種子排序；非因果預測，需以未來期數回測',
+      calculation: { method: method.kind, ...method.calculation, historySamples: history.length, empiricalWeight: history.length ? 0.32 : 0 },
       official: {
         size: modelSeed % 2 === 0 ? '大' : '小',
         oddEven: modelSeed % 3 === 0 ? '雙' : '單',
@@ -146,7 +205,8 @@ async function latest() {
       const snapshot = result.snapshot || result;
       health.push({ name: attempt.name, ok: true });
       const syncedAt = Date.now();
-      const history = (result.history || [snapshot]).map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: buildModels(item), fetchedAt: syncedAt, sourceHealth: health }));
+      const rawHistory = result.history || [snapshot];
+      const history = rawHistory.map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: buildModels(item, rawHistory.slice(index + 1)), fetchedAt: syncedAt, sourceHealth: health }));
       return { ...history[0], history, sourceHealth: health };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });

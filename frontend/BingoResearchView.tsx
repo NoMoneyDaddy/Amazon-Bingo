@@ -85,6 +85,10 @@ function normalizeNumber(value: string | number) {
   return Number.isFinite(parsed) && parsed > 0 ? String(parsed).padStart(2, "0") : String(value);
 }
 
+function normalizeCategory(value: string) {
+  return value === "－" || value === "-" ? "和" : value;
+}
+
 async function fetchLatest(days = 1): Promise<DrawSnapshot> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -247,21 +251,25 @@ const BASIC_PAYOUTS: Record<string, Record<number, number>> = {
 
 function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
   let payout = 0;
+  let matches = 0;
+  let targetCount: number | null = null;
   if (key === "size") {
-    payout = item.official.size === draw.size ? 150 : 0;
+    matches = item.official.size && normalizeCategory(item.official.size) === normalizeCategory(draw.size) ? 1 : 0;
+    payout = matches ? 150 : 0;
   } else if (key === "oddEven") {
-    const oddCount = draw.numbers.filter((number) => Number(number) % 2 === 1).length;
-    const predictedCount = item.official.oddEven === "單" ? oddCount : 20 - oddCount;
-    payout = predictedCount >= 13 ? 150 : predictedCount >= 11 ? 45 : 0;
+    matches = item.official.oddEven && normalizeCategory(item.official.oddEven) === normalizeCategory(draw.oddEven) ? 1 : 0;
+    payout = matches ? 150 : 0;
   } else if (key === "superNumber") {
-    payout = item.official.superNumber === draw.superNumber ? 1200 : 0;
+    matches = normalizeNumber(item.official.superNumber) === normalizeNumber(draw.superNumber) ? 1 : 0;
+    payout = matches ? 1200 : 0;
   } else {
     const predicted = item.official.basic[key] || [];
     const drawnNumbers = new Set(draw.numbers.map(normalizeNumber));
-    const matches = predicted.filter((number) => drawnNumbers.has(normalizeNumber(number))).length;
+    matches = predicted.filter((number) => drawnNumbers.has(normalizeNumber(number))).length;
+    targetCount = predicted.length;
     payout = BASIC_PAYOUTS[key]?.[matches] || 0;
   }
-  return { payout, profit: payout - SINGLE_BET_COST, won: payout > 0 };
+  return { payout, profit: payout - SINGLE_BET_COST, won: payout > 0, matches, targetCount };
 }
 
 function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
@@ -285,10 +293,14 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
       let wins = 0;
       let trials = 0;
       let profit = 0;
+      let matches = 0;
+      let targetCount = 0;
       rows.forEach(({ item, draw }) => {
         const result = settleSingleBet(play.key, item, draw);
         wins += result.won ? 1 : 0;
         profit += result.profit;
+        matches += result.matches;
+        targetCount += result.targetCount || 1;
         trials += 1;
       });
       const latest = latestModels.find((item) => item.name === model);
@@ -305,7 +317,11 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
         model,
         samples: trials,
         wins,
+        matches,
+        targetCount,
         profit,
+        averageMatches: trials ? matches / trials : null,
+        averageTargetCount: trials ? targetCount / trials : null,
         averageProfit: trials ? profit / trials : null,
         rate,
         confidence: rate == null || trials < minimumSamples ? -1 : wilsonLowerBound(rate, trials),
@@ -327,15 +343,20 @@ function Rate({ value, label = "勝率" }: { value: number | null; label?: strin
 function BacktestEvidence({
   wins,
   samples,
+  matches,
+  targetCount,
   profit,
 }: {
   wins: number;
   samples: number;
+  matches: number;
+  targetCount: number;
   profit: number;
 }) {
   return (
     <span className="block text-[10px] font-normal leading-4 text-muted-foreground">
-      {samples ? `${wins}/${samples} 命中` : "尚無有效樣本"} · {formatNetProfit(profit)}
+      {samples ? `${wins}/${samples} 達標 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}` : "尚無有效樣本"}
+      <span className="ml-1">· {formatNetProfit(profit)}</span>
     </span>
   );
 }
@@ -399,6 +420,9 @@ function HistoricalModelDetails({ model, draw }: { model: Model; draw: DrawSnaps
                 <div className="shrink-0 text-right text-xs leading-6">
                   <div className={result.won ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
                     {result.won ? "中獎" : "未中獎"}
+                  </div>
+                  <div className="text-muted-foreground">
+                    {result.targetCount ? `命中 ${result.matches}/${result.targetCount}` : `結果 ${result.matches ? "相符" : "不符"}`}
                   </div>
                   <div className="text-slate-300">派彩 {result.payout.toLocaleString("zh-TW")} 元</div>
                   <div className={result.profit >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
@@ -680,7 +704,7 @@ export function BingoResearchView() {
                         </span>
                         <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
                           <Rate value={play.best.rate} label={play.metricLabel} />
-                          <BacktestEvidence wins={play.best.wins} samples={play.best.samples} profit={play.best.profit} />
+                          <BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} />
                         </span>
                         <div className="min-w-0 max-w-full">
                           <PredictionValue value={play.best.prediction} />

@@ -325,7 +325,8 @@ function parseOfficialPage(html) {
   const numbers = text.match(/大小順序\s*開出順序\s*((?:\d{1,2}\s+){19}\d{1,2})\s+超級獎號\s*(\d{1,2})/);
   const drawAt = text.match(/開獎日期\s*([0-9]{2,3}\/\d{1,2}\/\d{1,2}\([^)]*\)\s+\d{1,2}:\d{2})/)?.[1] || '';
   const size = text.match(/猜大小\s*([大小])/)?.[1] || '';
-  const oddEven = text.match(/猜單雙\s*([單雙－-])/)?.[1] || '';
+  const oddEvenRaw = text.match(/猜單雙\s*([單雙－-])/)?.[1] || '';
+  const oddEven = oddEvenRaw === '－' || oddEvenRaw === '-' ? '和' : oddEvenRaw;
   if (!period || !numbers) throw new Error('官方頁面格式變更，無法解析完整開獎資料');
   return { period, drawAt, numbers: numbers[1].trim().split(/\\s+/).map((n) => n.padStart(2, '0')), superNumber: numbers[2].padStart(2, '0'), size, oddEven };
 }
@@ -354,31 +355,36 @@ function categoryPrediction(seed, traditional, history, field, empiricalWeight) 
 }
 
 function evolveProfiles(history = []) {
-  const candidates = [0.24, 0.32, 0.44];
+  const candidates = [0.16, 0.24, 0.32, 0.40, 0.48];
+  const validationWindow = Math.min(12, Math.max(0, history.length - 1));
   const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）'];
   return Object.fromEntries(methods.map((method) => {
     const targets = Object.fromEntries(predictionTargets.map((target) => {
-      if (history.length < 4) return [target, { empiricalWeight: 0.32, validationSamples: 0, score: null, status: '樣本不足，使用預設權重' }];
+      if (history.length < 8) return [target, { empiricalWeight: 0.32, validationSamples: validationWindow, score: null, status: '樣本不足，使用預設權重' }];
       const results = candidates.map((empiricalWeight) => {
-        let hits = 0; let trials = 0;
-        history.slice(0, 4).forEach((actual, index) => {
+        let weightedHits = 0; let totalWeight = 0; let trials = 0;
+        history.slice(0, validationWindow).forEach((actual, index) => {
           const training = history.slice(index + 1);
           const predicted = buildModels(actual, training, { evolve: false, profiles: { [method]: { targets: { [target]: { empiricalWeight } } } } }).find((item) => item.name === method);
           if (!predicted) return;
-          if (target === 'size') hits += predicted.official.size === actual.size ? 1 : 0;
-          else if (target === 'oddEven') hits += predicted.official.oddEven === actual.oddEven ? 1 : 0;
-          else if (target === 'superNumber') hits += predicted.official.superNumber === actual.superNumber ? 1 : 0;
+          const foldWeight = 1 / (index + 1);
+          let foldScore = 0;
+          if (target === 'size') foldScore = predicted.official.size === actual.size ? 1 : 0;
+          else if (target === 'oddEven') foldScore = predicted.official.oddEven === actual.oddEven ? 1 : 0;
+          else if (target === 'superNumber') foldScore = predicted.official.superNumber === actual.superNumber ? 1 : 0;
           else {
             const picks = predicted.official.basic[target] || [];
             const actualNumbers = new Set(actual.numbers);
-            hits += picks.length ? picks.filter((number) => actualNumbers.has(number)).length / picks.length : 0;
+            foldScore = picks.length ? picks.filter((number) => actualNumbers.has(number)).length / picks.length : 0;
           }
+          weightedHits += foldScore * foldWeight;
+          totalWeight += foldWeight;
           trials += 1;
         });
-        return { empiricalWeight, score: trials ? hits / trials : 0, validationSamples: Math.min(4, history.length) };
+        return { empiricalWeight, score: totalWeight ? weightedHits / totalWeight : 0, validationSamples: trials };
       });
       const best = results.sort((a, b) => b.score - a.score || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0];
-      return [target, { ...best, status: 'walk-forward 分玩法／星級自動選參數' }];
+      return [target, { ...best, status: `walk-forward ${validationWindow} 期／分玩法自動選參數` }];
     }));
     return [method, { targets }];
   }));

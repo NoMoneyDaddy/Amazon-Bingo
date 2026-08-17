@@ -274,7 +274,6 @@ function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
 }
 
 function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
-  const minimumSamples = 8;
   const backtestDraws = draws.slice(1);
   const plays = [
     { key: "size", label: "猜大小" },
@@ -326,11 +325,12 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
         averageTargetCount: trials ? targetCount / trials : null,
         averageProfit: trials ? profit / trials : null,
         rate,
-        confidence: rate == null || trials < minimumSamples ? -1 : wilsonLowerBound(rate, trials),
+        estimatedRate: trials ? (wins + 1) / (trials + 2) : null,
+        confidence: rate == null || trials < 8 ? -1 : wilsonLowerBound(rate, trials),
         prediction: prediction || "—",
       };
-    }).sort((a, b) => b.confidence - a.confidence || (b.rate ?? -1) - (a.rate ?? -1));
-    return { ...play, best: candidates[0], metricLabel: "達標率", minimumSamples };
+    }).sort((a, b) => b.confidence - a.confidence || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1));
+    return { ...play, best: candidates[0], metricLabel: "預估勝率" };
   });
 }
 
@@ -348,20 +348,16 @@ function BacktestEvidence({
   matches,
   targetCount,
   profit,
-  minimumSamples,
 }: {
   wins: number;
   samples: number;
   matches: number;
   targetCount: number;
   profit: number;
-  minimumSamples: number;
 }) {
   return (
     <span className="block text-[10px] font-normal leading-4 text-muted-foreground">
-      {samples < minimumSamples
-        ? `樣本不足（${samples}/${minimumSamples}）`
-        : `${wins}/${samples} 達標 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}`}
+      {samples ? `樣本 ${samples} 期 · ${wins}/${samples} 達標 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}` : "尚無有效樣本"}
       <span className="ml-1">· {formatNetProfit(profit)}</span>
     </span>
   );
@@ -689,17 +685,17 @@ export function BingoResearchView() {
                   <div className="flex items-end justify-between gap-2">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
-                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">下一期預測與歷史回測</h2>
+                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">下一期預測與預估勝率</h2>
                     </div>
                     <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">歷史回測</span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    {latest?.predictionTargetPeriod ? `預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 歷史回測至少需要 8 期樣本，樣本不足顯示「—」。
+                    {latest?.predictionTargetPeriod ? `預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 預估勝率採中性先驗平滑，樣本越多越穩定，不代表實際中獎機率。
                   </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
                     <div className="grid grid-cols-[4.5rem_5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
                       <span>玩法</span>
-                      <span>歷史回測</span>
+                      <span>預估勝率</span>
                       <span className="text-right">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (
@@ -711,8 +707,8 @@ export function BingoResearchView() {
                           {play.label}
                         </span>
                         <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
-                          <Rate value={play.best.samples >= play.minimumSamples ? play.best.rate : null} label={play.metricLabel} />
-                          <BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} minimumSamples={play.minimumSamples} />
+                          <Rate value={play.best.estimatedRate} label={play.metricLabel} />
+                          <BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} />
                         </span>
                         <div className="min-w-0 max-w-full">
                           <PredictionValue value={play.best.prediction} />

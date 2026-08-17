@@ -1,5 +1,5 @@
 import { Plugin, plugin, View, useItemsByType } from '@cubelv/sdk';
-import { BingoResearchFolder, BingoDraw } from './schemas/bingoResearchSchema';
+import { BingoResearchFolder } from './schemas/bingoResearchSchema';
 import { BingoResearchView } from './BingoResearchView';
 
 class BingoResearchLeafView extends View {
@@ -29,7 +29,7 @@ export class BingoResearchPlugin extends Plugin {
       folderIcon: 'test-tubes',
       views: [{ type: 'bingo-research-dashboard', creator: (leaf) => new BingoResearchLeafView(leaf) }],
       panes: { centerPane2: { leafId: 'leaf-bingo-research', viewType: 'bingo-research-dashboard', flex: 1 } },
-      children: [{ class: BingoDraw, icon: 'history', displayText: (item) => (item as BingoDraw).period }],
+      children: [],
     });
   }
 }

@@ -14,6 +14,9 @@ const fallbackSources = [
 ];
 const databaseUrl = process.env.DATABASE_URL || '';
 const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 4, idleTimeoutMillis: 30_000 }) : null;
+const githubToken = process.env.GITHUB_TOKEN || '';
+const githubRepo = process.env.GITHUB_BACKUP_REPO || 'NoMoneyDaddy/Amazon-Bingo';
+const githubBackupPath = process.env.GITHUB_BACKUP_PATH || 'backups/bingo-model-profile.json';
 let databaseReady = false;
 let lastPersistedPeriod = '';
 let scheduledTimer;
@@ -35,7 +38,56 @@ async function ensureDatabase() {
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );`);
   await pool.query('CREATE INDEX IF NOT EXISTS bingo_draws_updated_idx ON bingo_draws (updated_at DESC)');
+  await pool.query(`CREATE TABLE IF NOT EXISTS bingo_model_backups (
+    id BIGSERIAL PRIMARY KEY,
+    algorithm_version TEXT NOT NULL,
+    profile JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );`);
   databaseReady = true;
+}
+
+function algorithmVersion() { return 'bingo-models-v2'; }
+
+function modelProfileFromSnapshot(snapshot) {
+  return {
+    algorithmVersion: algorithmVersion(),
+    generatedAt: new Date().toISOString(),
+    sourcePeriod: snapshot?.period || '',
+    models: (snapshot?.models || []).map((model) => ({
+      name: model.name,
+      method: model.calculation?.method || '',
+      empiricalWeight: model.calculation?.empiricalWeight ?? null,
+      evolution: model.calculation?.evolution || null,
+    })),
+  };
+}
+
+async function persistModelProfile(profile) {
+  if (!pool || !profile.models.length) return;
+  await ensureDatabase();
+  await pool.query('INSERT INTO bingo_model_backups (algorithm_version, profile) VALUES ($1, $2::jsonb)', [profile.algorithmVersion, JSON.stringify(profile)]);
+}
+
+async function backupModelProfileToGitHub(profile) {
+  if (!githubToken || !profile.models.length) return { enabled: false, reason: '缺少 GITHUB_TOKEN' };
+  const apiUrl = `https://api.github.com/repos/${githubRepo}/contents/${githubBackupPath}`;
+  const headers = { accept: 'application/vnd.github+json', authorization: `Bearer ${githubToken}`, 'user-agent': 'bingo-api', 'x-github-api-version': '2022-11-28' };
+  let sha;
+  const existing = await fetch(apiUrl, { headers });
+  if (existing.ok) sha = (await existing.json()).sha;
+  else if (existing.status !== 404) throw new Error(`GitHub 讀取備份失敗 HTTP ${existing.status}`);
+  const content = Buffer.from(`${JSON.stringify(profile, null, 2)}\n`).toString('base64');
+  const response = await fetch(apiUrl, { method: 'PUT', headers: { ...headers, 'content-type': 'application/json' }, body: JSON.stringify({ message: `備份賓果算法與權重 ${profile.sourcePeriod || 'latest'}`, content, ...(sha ? { sha } : {}) }) });
+  if (!response.ok) throw new Error(`GitHub 寫入備份失敗 HTTP ${response.status}`);
+  return { enabled: true, repo: githubRepo, path: githubBackupPath };
+}
+
+async function backupModelProfile(snapshot) {
+  const profile = modelProfileFromSnapshot(snapshot);
+  await persistModelProfile(profile);
+  try { return await backupModelProfileToGitHub(profile); }
+  catch (error) { return { enabled: true, error: error instanceof Error ? error.message : 'GitHub 備份失敗' }; }
 }
 
 async function persistSnapshots(snapshots) {
@@ -312,7 +364,8 @@ async function latest(daysOverride = null) {
       const rawHistory = result.history || [snapshot];
       const history = rawHistory.map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: index < maxModelHistory ? buildModels(item, rawHistory.slice(index + 1, index + maxModelHistory + 1)) : [], fetchedAt: syncedAt, sourceHealth: health }));
       await persistSnapshots(history);
-      return { ...history[0], history, historyDays: result.historyDays || 1, sourceHealth: health };
+      const backup = await backupModelProfile(history[0]);
+      return { ...history[0], history, historyDays: result.historyDays || 1, sourceHealth: health, backup };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }
@@ -359,8 +412,8 @@ const server = http.createServer(async (req, res) => {
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
       const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : 600);
-      if (persisted.length && !daysOverride) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [] });
-      if (persisted.length && daysOverride === 1) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 1, sourceHealth: persisted[0].sourceHealth || [] });
+      if (persisted.length && !daysOverride) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      if (persisted.length && daysOverride === 1) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 1, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       return send(res, 200, await latest(daysOverride));
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }
   }

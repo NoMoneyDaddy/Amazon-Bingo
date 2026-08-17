@@ -135,17 +135,40 @@ function formatCountdown(ms: number) {
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function hotColdStats(draws: DrawSnapshot[]) {
-  const sample = draws.slice(0, 60);
-  const counts = Array.from({ length: 80 }, (_, index) => ({ number: String(index + 1).padStart(2, "0"), count: 0 }));
-  sample.forEach((draw) => draw.numbers.forEach((number) => {
-    const item = counts[Number(number) - 1];
-    if (item) item.count += 1;
-  }));
+function streakStats(draws: DrawSnapshot[]) {
+  const sample = draws.slice(0, 30);
+  const stats = Array.from({ length: 80 }, (_, index) => ({ number: String(index + 1).padStart(2, "0"), currentOpen: 0, currentMiss: 0, maxOpen: 0, maxMiss: 0 }));
+  stats.forEach((item) => {
+    let openRun = 0;
+    let missRun = 0;
+    sample.forEach((draw) => {
+      const opened = draw.numbers.includes(item.number);
+      openRun = opened ? openRun + 1 : 0;
+      missRun = opened ? 0 : missRun + 1;
+      item.maxOpen = Math.max(item.maxOpen, openRun);
+      item.maxMiss = Math.max(item.maxMiss, missRun);
+    });
+    item.currentOpen = sample.length && sample[0]?.numbers.includes(item.number) ? (() => {
+      let count = 0;
+      for (const draw of sample) {
+        if (!draw.numbers.includes(item.number)) break;
+        count += 1;
+      }
+      return count;
+    })() : 0;
+    item.currentMiss = sample.length && !sample[0]?.numbers.includes(item.number) ? (() => {
+      let count = 0;
+      for (const draw of sample) {
+        if (draw.numbers.includes(item.number)) break;
+        count += 1;
+      }
+      return count;
+    })() : 0;
+  });
   return {
     sampleSize: sample.length,
-    hot: [...counts].sort((a, b) => b.count - a.count || Number(a.number) - Number(b.number)).slice(0, 10),
-    cold: [...counts].sort((a, b) => a.count - b.count || Number(a.number) - Number(b.number)).slice(0, 10),
+    open: stats.filter((item) => item.currentOpen > 0).sort((a, b) => b.currentOpen - a.currentOpen || b.maxOpen - a.maxOpen || Number(a.number) - Number(b.number)).slice(0, 10),
+    miss: stats.filter((item) => item.currentMiss > 0).sort((a, b) => b.currentMiss - a.currentMiss || b.maxMiss - a.maxMiss || Number(a.number) - Number(b.number)).slice(0, 10),
   };
 }
 
@@ -412,7 +435,7 @@ export function BingoResearchView() {
     () => bestPlayStats(sorted, latestModels),
     [sorted, latestModels],
   );
-  const hotCold = useMemo(() => hotColdStats(sorted), [sorted]);
+  const streaks = useMemo(() => streakStats(sorted), [sorted]);
   const sourceHealth = latest?.sourceHealth || [];
 
   const sync = useCallback(async () => {
@@ -565,28 +588,32 @@ export function BingoResearchView() {
                     </p>
                   )}
                 </section>
-                <section aria-labelledby="hot-cold-heading" className="rounded-3xl border border-violet-300/30 bg-slate-900/90 p-4 shadow-lg shadow-violet-950/20 backdrop-blur sm:p-5">
+                <section aria-labelledby="streak-heading" className="rounded-3xl border border-violet-300/30 bg-slate-900/90 p-4 shadow-lg shadow-violet-950/20 backdrop-blur sm:p-5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-200/80">Frequency view</p>
-                      <h2 id="hot-cold-heading" className="mt-1 text-lg font-bold text-violet-100">近期冷熱號碼</h2>
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-200/80">Streak board</p>
+                      <h2 id="streak-heading" className="mt-1 text-lg font-bold text-violet-100">連續開出次數</h2>
                     </div>
-                    <span className="shrink-0 rounded-full border border-violet-300/30 bg-violet-300/10 px-2.5 py-1 text-xs text-violet-100">{hotCold.sampleSize} 期</span>
+                    <span className="shrink-0 rounded-full border border-violet-300/30 bg-violet-300/10 px-2.5 py-1 text-xs text-violet-100">近 {streaks.sampleSize} 期</span>
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">只統計最近資料中的出現次數；冷熱是描述，不代表下一期機率改變。</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">以最新一期往前計算目前連開與連續未開；括號內為近 30 期最高紀錄。</p>
                   <div className="mt-4 grid gap-3 sm:grid-cols-2">
                     {[
-                      ["熱門", hotCold.hot, "text-orange-200", "border-orange-300/30", "bg-orange-300/15"],
-                      ["冷門", hotCold.cold, "text-sky-200", "border-sky-300/30", "bg-sky-300/15"],
-                    ].map(([label, values, tone, border, fill]) => (
+                      ["目前連開", streaks.open, "text-orange-200", "border-orange-300/30", "bg-orange-300/15", "open"],
+                      ["目前連續未開", streaks.miss, "text-sky-200", "border-sky-300/30", "bg-sky-300/15", "miss"],
+                    ].map(([label, values, tone, border, fill, kind]) => (
                       <div key={label as string} className={`rounded-2xl border ${border as string} bg-slate-950/50 p-3`}>
-                        <h3 className={`text-sm font-semibold ${tone as string}`}>{label as string}號碼</h3>
-                        <div className="mt-2 flex flex-wrap gap-1.5" role="list" aria-label={`近期${label as string}號碼`}>
-                          {(values as Array<{ number: string; count: number }>).map((item) => (
-                            <span key={item.number} role="listitem" className={`rounded-full border px-2 py-1 text-xs font-bold tabular-nums ${border as string} ${fill as string} ${tone as string}`}>
-                              {item.number} <span className="font-normal">{item.count}次</span>
+                        <h3 className={`text-sm font-semibold ${tone as string}`}>{label as string}</h3>
+                        <div className="mt-2 flex flex-wrap gap-1.5" role="list" aria-label={`近 30 期${label as string}號碼`}>
+                          {(values as Array<{ number: string; currentOpen: number; currentMiss: number; maxOpen: number; maxMiss: number }>).map((item) => {
+                            const current = kind === "open" ? item.currentOpen : item.currentMiss;
+                            const record = kind === "open" ? item.maxOpen : item.maxMiss;
+                            return (
+                            <span key={item.number} role="listitem" className={`rounded-full border px-2.5 py-1.5 text-xs font-bold tabular-nums ${border as string} ${fill as string} ${tone as string}`}>
+                              {item.number} <span className="font-normal">{current}期</span><span className="ml-1 font-normal opacity-70">({record})</span>
                             </span>
-                          ))}
+                            );
+                          })}
                         </div>
                       </div>
                     ))}

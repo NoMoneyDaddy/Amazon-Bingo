@@ -570,18 +570,18 @@ export function BingoResearchView() {
                   </div>
                   {latest ? (
                     <>
-                      <div className="mt-3 flex flex-wrap gap-2" aria-label={`第 ${latest.period} 期和、大小、單雙結果`}>
-                        <span className="rounded-full border border-violet-300/40 bg-violet-300/10 px-3 py-1 text-xs font-semibold tabular-nums text-violet-100">
-                          和：{numberSum(latest.numbers)}
-                        </span>
-                        <span className="rounded-full border border-orange-300/40 bg-orange-300/10 px-3 py-1 text-xs font-semibold text-orange-100">
+                      <div className="mt-2 flex flex-wrap gap-1.5" aria-label={`第 ${latest.period} 期大小、單雙、超級獎號結果`}>
+                        <span className="rounded-full border border-orange-300/40 bg-orange-300/10 px-2.5 py-0.5 text-[11px] font-semibold text-orange-100">
                           大小：{latest.size || "—"}
                         </span>
-                        <span className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-100">
+                        <span className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-2.5 py-0.5 text-[11px] font-semibold text-cyan-100">
                           單雙：{latest.oddEven || "—"}
                         </span>
+                        <span className="rounded-full border border-red-300/40 bg-red-400/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-red-100">
+                          超級獎號：{latest.superNumber || "—"}
+                        </span>
                       </div>
-                      <div className="mt-5 grid grid-cols-5 justify-items-center gap-x-1 gap-y-4 rounded-2xl border border-orange-200/10 bg-slate-950/40 px-2.5 py-4 sm:grid-cols-10 sm:gap-x-2 sm:gap-y-5 sm:px-3" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
+                      <div className="mt-3 grid grid-cols-5 justify-items-center gap-x-1 gap-y-4 rounded-2xl border border-orange-200/10 bg-slate-950/40 px-2.5 py-4 sm:grid-cols-10 sm:gap-x-2 sm:gap-y-5 sm:px-3" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
                         {latest.numbers.map((number, index) => {
                           const isSuperNumber = latest.superNumber === number;
                           const isHot = recentStats.hot.has(number);

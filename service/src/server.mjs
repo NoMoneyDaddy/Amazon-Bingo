@@ -35,9 +35,11 @@ async function ensureDatabase() {
     source_label TEXT NOT NULL DEFAULT '',
     source_health JSONB NOT NULL DEFAULT '[]'::jsonb,
     models JSONB NOT NULL DEFAULT '[]'::jsonb,
+    prediction_target_period TEXT NOT NULL DEFAULT '',
     fetched_at BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );`);
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS prediction_target_period TEXT NOT NULL DEFAULT ''");
   await pool.query('CREATE INDEX IF NOT EXISTS bingo_draws_updated_idx ON bingo_draws (updated_at DESC)');
   await pool.query(`CREATE TABLE IF NOT EXISTS bingo_model_backups (
     id BIGSERIAL PRIMARY KEY,
@@ -99,14 +101,14 @@ async function persistSnapshots(snapshots) {
     await client.query('BEGIN');
     for (const item of snapshots) {
       await client.query(`INSERT INTO bingo_draws
-        (period, draw_at, numbers, super_number, size, odd_even, source, source_label, source_health, models, fetched_at)
-        VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11)
+        (period, draw_at, numbers, super_number, size, odd_even, source, source_label, source_health, models, prediction_target_period, fetched_at)
+        VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12)
         ON CONFLICT (period) DO UPDATE SET draw_at=EXCLUDED.draw_at, numbers=EXCLUDED.numbers,
         super_number=EXCLUDED.super_number, size=EXCLUDED.size, odd_even=EXCLUDED.odd_even,
         source=EXCLUDED.source, source_label=EXCLUDED.source_label, source_health=EXCLUDED.source_health,
-        models=EXCLUDED.models, fetched_at=EXCLUDED.fetched_at, updated_at=NOW()` , [
+        models=EXCLUDED.models, prediction_target_period=EXCLUDED.prediction_target_period, fetched_at=EXCLUDED.fetched_at, updated_at=NOW()` , [
         item.period, item.drawAt || '', JSON.stringify(item.numbers), item.superNumber || '', item.size || '', item.oddEven || '',
-        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []), item.fetchedAt || Date.now(),
+        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []), item.predictionTargetPeriod || '', item.fetchedAt || Date.now(),
       ]);
     }
     await client.query('COMMIT');
@@ -122,7 +124,7 @@ async function readPersisted(limit = 6000) {
   await ensureDatabase();
   const result = await pool.query(`SELECT period, draw_at AS "drawAt", numbers, super_number AS "superNumber",
     size, odd_even AS "oddEven", source, source_label AS "sourceLabel", source_health AS "sourceHealth",
-    models, fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
+    models, prediction_target_period AS "predictionTargetPeriod", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
   return result.rows.map((row) => ({ ...row, numbers: Array.isArray(row.numbers) ? row.numbers : [], sourceHealth: row.sourceHealth || [], models: row.models || [] }));
 }
 
@@ -589,6 +591,11 @@ async function fetchMirror(source) {
   return parseMirrorPage(await response.text(), source.name);
 }
 
+function nextPredictionPeriod(period) {
+  const numeric = Number(period);
+  return Number.isFinite(numeric) ? String(numeric + 1) : `${period}-next`;
+}
+
 async function latest(daysOverride = null) {
   const health = [];
   const attempts = [{ name: '台灣彩券官方 API', run: () => fetchOfficial(daysOverride) }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
@@ -599,7 +606,20 @@ async function latest(daysOverride = null) {
       health.push({ name: attempt.name, ok: true });
       const syncedAt = Date.now();
       const rawHistory = result.history || [snapshot];
-      const history = rawHistory.map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: index < maxModelHistory ? buildModels(item, rawHistory.slice(index + 1, index + maxModelHistory + 1), { evolve: index === 0, castingAt: new Date(syncedAt - index * 5 * 60 * 1000).toISOString() }) : [], fetchedAt: syncedAt, sourceHealth: health }));
+      const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);
+      const history = rawHistory.map((item, index) => {
+        const drawAt = formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000));
+        const isNextPrediction = index === 0;
+        const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt } : item;
+        return {
+          ...item,
+          drawAt,
+          predictionTargetPeriod: isNextPrediction ? nextPeriod : item.period,
+          models: index < maxModelHistory ? buildModels(modelSnapshot, rawHistory.slice(index + 1, index + maxModelHistory + 1), { evolve: isNextPrediction, castingAt: new Date(syncedAt - index * 5 * 60 * 1000).toISOString() }) : [],
+          fetchedAt: syncedAt,
+          sourceHealth: health,
+        };
+      });
       await persistSnapshots(history);
       const backup = await backupModelProfile(history[0]);
       return { ...history[0], history, historyDays: result.historyDays || 1, sourceHealth: health, backup };
@@ -649,9 +669,10 @@ const server = http.createServer(async (req, res) => {
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
       const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : 600);
-      if (persisted.length && !daysOverride) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
+      if (persisted.length && !daysOverride && hasNextPrediction) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       const hasTargetAwareModels = persisted.length && persisted[0].models?.length && persisted[0].models.every((model) => Object.keys(model.calculation?.targetCastings || {}).length === predictionTargets.length);
-      if (persisted.length && daysOverride === 1 && hasTargetAwareModels) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 1, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      if (persisted.length && daysOverride === 1 && hasTargetAwareModels && hasNextPrediction) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 1, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       return send(res, 200, await latest(daysOverride));
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }
   }

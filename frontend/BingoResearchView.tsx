@@ -70,6 +70,7 @@ type DrawSnapshot = {
   fetchedAt?: number;
   history?: DrawSnapshot[];
   historyDays?: number;
+  predictionTargetPeriod?: string;
   backup?: {
     enabled: boolean;
     repo?: string;
@@ -273,7 +274,8 @@ function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
 }
 
 function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
-  const minimumSamples = 4;
+  const minimumSamples = 8;
+  const backtestDraws = draws.slice(1);
   const plays = [
     { key: "size", label: "猜大小" },
     { key: "oddEven", label: "猜單雙" },
@@ -285,7 +287,7 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
   ];
   return plays.map((play) => {
     const candidates = MODEL_NAMES.map((model) => {
-      const rows = draws.flatMap((draw) =>
+      const rows = backtestDraws.flatMap((draw) =>
         parseModels(draw)
           .filter((item) => item.name === model)
           .map((item) => ({ item, draw })),
@@ -328,7 +330,7 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
         prediction: prediction || "—",
       };
     }).sort((a, b) => b.confidence - a.confidence || (b.rate ?? -1) - (a.rate ?? -1));
-    return { ...play, best: candidates[0], metricLabel: "中獎率" };
+    return { ...play, best: candidates[0], metricLabel: "達標率", minimumSamples };
   });
 }
 
@@ -346,16 +348,20 @@ function BacktestEvidence({
   matches,
   targetCount,
   profit,
+  minimumSamples,
 }: {
   wins: number;
   samples: number;
   matches: number;
   targetCount: number;
   profit: number;
+  minimumSamples: number;
 }) {
   return (
     <span className="block text-[10px] font-normal leading-4 text-muted-foreground">
-      {samples ? `${wins}/${samples} 達標 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}` : "尚無有效樣本"}
+      {samples < minimumSamples
+        ? `樣本不足（${samples}/${minimumSamples}）`
+        : `${wins}/${samples} 達標 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}`}
       <span className="ml-1">· {formatNetProfit(profit)}</span>
     </span>
   );
@@ -683,11 +689,13 @@ export function BingoResearchView() {
                   <div className="flex items-end justify-between gap-2">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
-                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">本期預測與中獎率</h2>
+                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">下一期預測與歷史回測</h2>
                     </div>
                     <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">歷史回測</span>
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">先看歷史回測證據，再看本期預測；樣本不足時顯示「—」，不把未知當成 0%。</p>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                    {latest?.predictionTargetPeriod ? `預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 歷史回測至少需要 8 期樣本，樣本不足顯示「—」。
+                  </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
                     <div className="grid grid-cols-[4.5rem_5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
                       <span>玩法</span>
@@ -703,8 +711,8 @@ export function BingoResearchView() {
                           {play.label}
                         </span>
                         <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
-                          <Rate value={play.best.rate} label={play.metricLabel} />
-                          <BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} />
+                          <Rate value={play.best.samples >= play.minimumSamples ? play.best.rate : null} label={play.metricLabel} />
+                          <BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} minimumSamples={play.minimumSamples} />
                         </span>
                         <div className="min-w-0 max-w-full">
                           <PredictionValue value={play.best.prediction} />
@@ -831,12 +839,12 @@ export function BingoResearchView() {
             {page === "history" && (
               <section aria-labelledby="history-heading" className="rounded-3xl border border-cyan-300/30 bg-card p-4 shadow-xl shadow-cyan-950/20 backdrop-blur sm:p-5">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200/80">04 · 歷史紀錄</p>
-                <h2 id="history-heading" className="mt-1 text-xl font-bold tracking-tight text-cyan-100">歷史開獎與研究紀錄</h2>
+                <h2 id="history-heading" className="mt-1 text-xl font-bold tracking-tight text-cyan-100">已開獎期回測紀錄</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   每一期先看官方結果，再展開模型查看預測、派彩與單注淨盈虧；數字只代表歷史紀錄，不代表未來結果。
                 </p>
                 <div className="relative mt-5 space-y-3 before:absolute before:bottom-3 before:left-3 before:top-3 before:w-px before:bg-cyan-300/25">
-                  {sorted.slice(0, 50).map((draw) => (
+                  {sorted.slice(1, 51).map((draw) => (
                     <article
                       key={draw.period}
                       className="relative ml-7 rounded-2xl border border-border bg-background/70 p-3 transition-colors duration-300 hover:border-cyan-300/50 sm:p-4"
@@ -895,8 +903,8 @@ export function BingoResearchView() {
                       ))}
                     </article>
                   ))}
-                  {sorted.length === 0 && (
-                    <p className="rounded-2xl border border-dashed border-slate-700 p-5 text-center text-sm text-slate-300">尚無歷史紀錄。</p>
+                  {sorted.length <= 1 && (
+                    <p className="rounded-2xl border border-dashed border-slate-700 p-5 text-center text-sm text-slate-300">至少需要兩期資料，才能進行歷史回測。</p>
                   )}
                 </div>
               </section>

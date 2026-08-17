@@ -1,0 +1,10 @@
+{
+  "name": "賓果玄學研究台後端",
+  "version": "1.0.0",
+  "endpoints": [
+    { "path": "/health", "method": "GET", "public": true },
+    { "path": "/api/latest", "method": "GET", "public": true }
+  ],
+  "schedule": [],
+  "webhook": []
+}

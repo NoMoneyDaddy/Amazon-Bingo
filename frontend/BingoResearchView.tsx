@@ -9,6 +9,7 @@ const MODEL_NAMES = [
   "數字卦（楚簡研究版）",
   "奇門遁甲（九宮研究版）",
   "太乙九宮（研究版）",
+  "多模型聚合",
 ];
 type Evolution = Record<
   string,
@@ -132,6 +133,20 @@ function getNextDraw(now: Date) {
 function formatCountdown(ms: number) {
   const seconds = Math.max(0, Math.floor(ms / 1000));
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function hotColdStats(draws: DrawSnapshot[]) {
+  const sample = draws.slice(0, 60);
+  const counts = Array.from({ length: 80 }, (_, index) => ({ number: String(index + 1).padStart(2, "0"), count: 0 }));
+  sample.forEach((draw) => draw.numbers.forEach((number) => {
+    const item = counts[Number(number) - 1];
+    if (item) item.count += 1;
+  }));
+  return {
+    sampleSize: sample.length,
+    hot: [...counts].sort((a, b) => b.count - a.count || Number(a.number) - Number(b.number)).slice(0, 10),
+    cold: [...counts].sort((a, b) => a.count - b.count || Number(a.number) - Number(b.number)).slice(0, 10),
+  };
 }
 
 function parseModels(draw: DrawSnapshot): Model[] {
@@ -349,6 +364,7 @@ function modelPlainLanguage(name: string) {
   if (name === "河圖洛書") return "用九宮數字定位，再觀察號碼和九宮位置的關係。";
   if (name === "數字卦（楚簡研究版）") return "採用文獻記載的數字集合，將期號轉成六個可重算數字特徵。";
   if (name === "奇門遁甲（九宮研究版）") return "取九宮、九星、八門三個結構做簡化特徵，不冒充完整奇門排盤。";
+  if (name === "多模型聚合") return "依各模型歷史回測表現加權整合，產生共識候選，不把共識當成保證。";
   return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
 function ScoreBar({
@@ -396,6 +412,7 @@ export function BingoResearchView() {
     () => bestPlayStats(sorted, latestModels),
     [sorted, latestModels],
   );
+  const hotCold = useMemo(() => hotColdStats(sorted), [sorted]);
   const sourceHealth = latest?.sourceHealth || [];
 
   const sync = useCallback(async () => {
@@ -547,6 +564,33 @@ export function BingoResearchView() {
                       等待首次同步。
                     </p>
                   )}
+                </section>
+                <section aria-labelledby="hot-cold-heading" className="rounded-3xl border border-violet-300/30 bg-slate-900/90 p-4 shadow-lg shadow-violet-950/20 backdrop-blur sm:p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs font-medium uppercase tracking-[0.18em] text-violet-200/80">Frequency view</p>
+                      <h2 id="hot-cold-heading" className="mt-1 text-lg font-bold text-violet-100">近期冷熱號碼</h2>
+                    </div>
+                    <span className="shrink-0 rounded-full border border-violet-300/30 bg-violet-300/10 px-2.5 py-1 text-xs text-violet-100">{hotCold.sampleSize} 期</span>
+                  </div>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">只統計最近資料中的出現次數；冷熱是描述，不代表下一期機率改變。</p>
+                  <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                    {[
+                      ["熱門", hotCold.hot, "text-orange-200", "border-orange-300/30", "bg-orange-300/15"],
+                      ["冷門", hotCold.cold, "text-sky-200", "border-sky-300/30", "bg-sky-300/15"],
+                    ].map(([label, values, tone, border, fill]) => (
+                      <div key={label as string} className={`rounded-2xl border ${border as string} bg-slate-950/50 p-3`}>
+                        <h3 className={`text-sm font-semibold ${tone as string}`}>{label as string}號碼</h3>
+                        <div className="mt-2 flex flex-wrap gap-1.5" role="list" aria-label={`近期${label as string}號碼`}>
+                          {(values as Array<{ number: string; count: number }>).map((item) => (
+                            <span key={item.number} role="listitem" className={`rounded-full border px-2 py-1 text-xs font-bold tabular-nums ${border as string} ${fill as string} ${tone as string}`}>
+                              {item.number} <span className="font-normal">{item.count}次</span>
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </section>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full rounded-3xl border border-amber-300/30 bg-slate-900/90 p-4 shadow-lg shadow-amber-950/20 backdrop-blur sm:p-5">
                   <div className="flex items-end justify-between gap-2">

@@ -403,6 +403,60 @@ function targetTraditionalCategory(casting, target, seed) {
   return value % 2 === 0 ? '雙' : '單';
 }
 
+function aggregateModel(models, history) {
+  const weightFor = (model, target) => {
+    const score = model.calculation?.evolution?.[target]?.score;
+    return score == null ? 1 : Math.max(0.25, 0.5 + score);
+  };
+  const weightedCategory = (target) => {
+    const totals = new Map();
+    models.forEach((model) => {
+      const value = target === 'size' ? model.official.size : model.official.oddEven;
+      if (value) totals.set(value, (totals.get(value) || 0) + weightFor(model, target));
+    });
+    return [...totals.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0] || '';
+  };
+  const weightedNumbers = (target) => {
+    const size = Number(String(target).replace('星', ''));
+    const totals = new Map();
+    models.forEach((model) => {
+      const weight = weightFor(model, target);
+      (model.official.basic[target] || []).forEach((number) => totals.set(number, (totals.get(number) || 0) + weight));
+    });
+    return [...totals.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, size).map(([number]) => number);
+  };
+  const superVotes = new Map();
+  models.forEach((model) => {
+    const number = model.official.superNumber;
+    if (number) superVotes.set(number, (superVotes.get(number) || 0) + weightFor(model, 'superNumber'));
+  });
+  const superNumber = [...superVotes.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0]))[0]?.[0] || '';
+  const basic = Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
+    const target = `${index + 1}星`;
+    return [target, weightedNumbers(target)];
+  }));
+  return {
+    name: '多模型聚合',
+    status: '依各模型 walk-forward 表現加權的共識模型',
+    rule: '多模型聚合；依各模型歷史回測表現加權投票，不保證提升下一期命中。',
+    sources: [],
+    calculation: {
+      method: 'ensemble',
+      castingSource: 'weighted-model-consensus',
+      historySamples: history.length,
+      aggregation: '依各模型各玩法回測分數加權；無回測分數時採等權重',
+    },
+    official: { size: weightedCategory('size'), oddEven: weightedCategory('oddEven'), superNumber, basic },
+    research: {
+      numberPicks: basic['10星'] || [],
+      sumBand: '由共識號碼另行統計',
+      oddEvenCount: '由共識號碼另行統計',
+      highLowCount: '由共識號碼另行統計',
+      zones: ['多模型加權共識'],
+    },
+  };
+}
+
 function buildModels(snapshot, history = [], options = {}) {
   const profiles = options.profiles || (options.evolve === false ? {} : evolveProfiles(history));
   const castingAt = options.castingAt || snapshot.castingAt || snapshot.drawAt || new Date().toISOString();
@@ -414,7 +468,7 @@ function buildModels(snapshot, history = [], options = {}) {
     { name: '奇門遁甲（九宮研究版）', kind: 'qimen', status: '九宮／九星／八門核心＋目標玩法適配，非完整排局', seedOffset: 89 },
     { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心＋目標玩法適配，非完整太乙排局', seedOffset: 97 },
   ];
-  return methods.map((method) => {
+  const baseModels = methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
     const weights = Object.fromEntries(predictionTargets.map((target) => [target, targetProfile(profiles, method.name, target).empiricalWeight ?? 0.32]));
     const targetCastings = Object.fromEntries(predictionTargets.map((target) => [target, castingFor(method.kind, snapshot, target, castingAt)]));
@@ -461,6 +515,7 @@ function buildModels(snapshot, history = [], options = {}) {
       },
     };
   });
+  return [...baseModels, aggregateModel(baseModels, history)];
 }
 
 async function fetchOfficial(daysOverride = null) {

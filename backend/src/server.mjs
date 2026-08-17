@@ -3,6 +3,10 @@ import http from 'node:http';
 const port = Number(process.env.PORT || 8080);
 const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
+const fallbackSources = [
+  { name: 'Pilio 賓果開獎查詢', url: 'https://www.pilio.idv.tw/bingo/list.asp' },
+  { name: 'Auzo 奧索樂透網', url: 'https://lotto.auzo.tw/bingobingo.php' },
+];
 
 function cleanHtml(html) {
   return html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -21,6 +25,23 @@ function pickNumbers(seed, count) {
     return scoreA - scoreB || a - b;
   });
   return values.slice(0, count).sort((a, b) => a - b).map((n) => String(n).padStart(2, '0'));
+}
+
+function datePartsTaipei() {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
+  return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+}
+
+function deriveSnapshot(period, numbers, source, drawAt = '') {
+  const parsed = numbers.map(Number);
+  if (!period || parsed.length !== 20 || parsed.some((number) => number < 1 || number > 80)) throw new Error('來源未回傳完整 20 個 1–80 號碼');
+  const bigCount = parsed.filter((number) => number >= 41).length;
+  const oddCount = parsed.filter((number) => number % 2 === 1).length;
+  return {
+    period: String(period), drawAt, numbers: parsed.map((number) => String(number).padStart(2, '0')),
+    superNumber: '', size: bigCount > 10 ? '大' : bigCount < 10 ? '小' : '和',
+    oddEven: oddCount > 10 ? '單' : oddCount < 10 ? '雙' : '和', source, sourceLabel: source,
+  };
 }
 
 function parseOfficialPage(html) {
@@ -68,9 +89,8 @@ function buildModels(snapshot) {
   });
 }
 
-async function latest() {
-  const dateParts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date());
-  const dateValue = Object.fromEntries(dateParts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
+async function fetchOfficial() {
+  const dateValue = datePartsTaipei();
   const openDate = `${dateValue.year}-${dateValue.month}-${dateValue.day}`;
   const response = await fetch(`${apiBaseUrl}?openDate=${openDate}&pageNum=1&pageSize=10`, { headers: { accept: 'application/json', origin: 'https://www.taiwanlottery.com' } });
   if (!response.ok) throw new Error(`官方資料 HTTP ${response.status}`);
@@ -82,15 +102,45 @@ async function latest() {
   const parsedNumbers = item.openShowOrder.map((n) => Number(n));
   const bigCount = parsedNumbers.filter((n) => n >= 41).length;
   const oddCount = parsedNumbers.filter((n) => n % 2 === 1).length;
-  const snapshot = {
-    period: String(item.drawTerm),
-    drawAt: openDate,
-    numbers: item.openShowOrder.map((n) => String(n).padStart(2, '0')),
-    superNumber: String(item.bullEyeTop || '').padStart(2, '0'),
-    size: item.highLowTop && item.highLowTop !== '－' ? item.highLowTop : bigCount > 10 ? '大' : bigCount < 10 ? '小' : '和',
-    oddEven: item.oddEvenTop && item.oddEvenTop !== '－' ? item.oddEvenTop : oddCount > 10 ? '單' : oddCount < 10 ? '雙' : '和',
-  };
-  return { ...snapshot, models: buildModels(snapshot), source: sourceUrl, fetchedAt: Date.now() };
+  const snapshot = deriveSnapshot(item.drawTerm, item.openShowOrder, apiBaseUrl, openDate);
+  snapshot.sourceLabel = '台灣彩券官方 API';
+  snapshot.superNumber = String(item.bullEyeTop || '').padStart(2, '0');
+  snapshot.size = item.highLowTop && item.highLowTop !== '－' ? item.highLowTop : snapshot.size;
+  snapshot.oddEven = item.oddEvenTop && item.oddEvenTop !== '－' ? item.oddEvenTop : snapshot.oddEven;
+  return snapshot;
+}
+
+function parseMirrorPage(html, sourceName) {
+  const text = cleanHtml(html);
+  const periodMatch = text.match(/(?:期別|期數)\s*[:：]?\s*(\d{7,9})/);
+  if (!periodMatch) throw new Error('未找到期別');
+  const start = periodMatch.index + periodMatch[0].length;
+  const tail = text.slice(start, start + 1200);
+  const values = [...tail.matchAll(/(?:^|[^0-9])(\d{1,2})(?=[^0-9]|$)/g)].map((match) => Number(match[1])).filter((number) => number >= 1 && number <= 80);
+  const numbers = [];
+  for (const number of values) { if (!numbers.includes(number)) numbers.push(number); if (numbers.length === 20) break; }
+  return deriveSnapshot(periodMatch[1], numbers, sourceName);
+}
+
+async function fetchMirror(source) {
+  const response = await fetch(source.url, { headers: { accept: 'text/html', 'user-agent': 'bingo-research-api/1.0' } });
+  if (!response.ok) throw new Error(`${source.name} HTTP ${response.status}`);
+  return parseMirrorPage(await response.text(), source.name);
+}
+
+async function latest() {
+  const health = [];
+  const attempts = [{ name: '台灣彩券官方 API', run: fetchOfficial }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
+  for (const attempt of attempts) {
+    try {
+      const snapshot = await attempt.run();
+      health.push({ name: attempt.name, ok: true });
+      return { ...snapshot, models: buildModels(snapshot), fetchedAt: Date.now(), sourceHealth: health };
+    } catch (error) {
+      health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
+    }
+  }
+  throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);
 }
 
 function send(res, status, body) {

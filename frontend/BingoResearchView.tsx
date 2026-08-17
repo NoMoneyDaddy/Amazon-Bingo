@@ -10,6 +10,7 @@ const MODEL_NAMES = ['梅花易數', '六爻八卦', '河圖洛書'];
 
 type DrawSnapshot = {
   period: string; drawAt: string; numbers: string[]; superNumber: string; size: string; oddEven: string;
+  source: string; sourceLabel: string; sourceHealth: Array<{ name: string; ok: boolean; error?: string }>;
   models: Array<{ name: string; rule: string; official: { size: string; oddEven: string; superNumber: string; basic: Record<string, string[]> }; research: { numberPicks: string[]; sumBand: string; oddEvenCount: string; highLowCount: string; zones: string[] } }>;
 };
 
@@ -30,6 +31,7 @@ function parseOfficialPage(html: string): DrawSnapshot {
     period: periodMatch[1], drawAt: dateMatch?.[1] ?? '',
     numbers: numbersMatch[1].trim().split(/\s+/).map((n) => n.padStart(2, '0')),
     superNumber: numbersMatch[2].padStart(2, '0'), size: sizeMatch?.[1] ?? '', oddEven: oddEvenMatch?.[1] ?? '',
+    source: '', sourceLabel: '', sourceHealth: [],
     models: [],
   };
 }
@@ -38,6 +40,24 @@ async function fetchLatest(): Promise<DrawSnapshot> {
   const response = await fetch(API_URL);
   if (!response.ok) throw new Error(`官方資料 HTTP ${response.status}`);
   return await response.json() as DrawSnapshot;
+}
+
+function getNextDraw(now: Date) {
+  const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const year = taipei.getUTCFullYear(); const month = taipei.getUTCMonth(); const day = taipei.getUTCDate();
+  const minute = taipei.getUTCHours() * 60 + taipei.getUTCMinutes();
+  const start = 7 * 60 + 5; const end = 23 * 60 + 55;
+  let targetDay = day; let targetMinutes = start;
+  if (minute < start) targetMinutes = start;
+  else if (minute >= end) { targetDay += 1; }
+  else targetMinutes = start + Math.ceil((minute - start + 1) / 5) * 5;
+  const targetUtc = Date.UTC(year, month, targetDay, Math.floor(targetMinutes / 60), targetMinutes % 60, 0) - 8 * 60 * 60 * 1000;
+  return new Date(targetUtc);
+}
+
+function formatCountdown(ms: number) {
+  const seconds = Math.max(0, Math.floor(ms / 1000));
+  return `${String(Math.floor(seconds / 3600)).padStart(2, '0')}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
 }
 
 function evaluate(draws: BingoDraw[]) {
@@ -64,6 +84,7 @@ export function BingoResearchView() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState('');
   const [lastSync, setLastSync] = useState<number | null>(null);
+  const [now, setNow] = useState(() => new Date());
   const stats = useMemo(() => evaluate(sorted), [sorted]);
 
   const sync = useCallback(async () => {
@@ -76,7 +97,8 @@ export function BingoResearchView() {
         id: existing?.id ?? generateObjectID(), itemType: 'BINGO_DRAW', name: `第${snapshot.period}期`,
         parents: existing?.parents ?? (folderId ? { [folderId]: Date.now() } : {}),
         ...snapshot, numbers: snapshot.numbers.join(','), modelPredictions: JSON.stringify(snapshot.models),
-        fetchedAt: Date.now(), syncStatus: 'official-ok',
+        sourceHealth: JSON.stringify(snapshot.sourceHealth), fetchedAt: Date.now(),
+        syncStatus: snapshot.sourceLabel === '台灣彩券官方 API' ? 'official-ok' : 'fallback-ok',
       } as unknown as BingoDraw, { needSync: true });
       setLastSync(Date.now()); toast(`已同步第 ${snapshot.period} 期`);
     } catch (err) { setError(err instanceof Error ? err.message : '同步失敗'); }
@@ -84,9 +106,13 @@ export function BingoResearchView() {
   }, [folderId, sorted, syncing]);
 
   useEffect(() => { void sync(); const timer = setInterval(() => void sync(), 60000); return () => clearInterval(timer); }, [sync]);
+  useEffect(() => { const timer = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(timer); }, []);
 
   const latest = sorted[0];
   const latestModels = latest ? (() => { try { return JSON.parse(latest.modelPredictions || '[]') as DrawSnapshot['models']; } catch { return []; } })() : [];
+  const nextDraw = getNextDraw(now);
+  const sourceHealth = latest?.sourceHealth ? (() => { try { return JSON.parse(latest.sourceHealth) as DrawSnapshot['sourceHealth']; } catch { return []; } })() : [];
+  const taipeiTime = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', dateStyle: 'medium', timeStyle: 'medium' }).format(now);
 
   return <div className="h-full flex flex-col min-h-0 bg-background text-foreground">
     <PluginTopbar title="賓果玄學研究台" rightButtons={[{ icon: syncing ? 'loader-2' : 'refresh', onClick: syncing ? undefined : () => void sync(), title: syncing ? '同步中' : '同步官方開獎' }]} />
@@ -96,13 +122,15 @@ export function BingoResearchView() {
           <div className="rounded-lg border border-border bg-card p-3 text-sm">
             <div className="flex items-center justify-between gap-2"><span className="font-semibold">研究模式</span><span className="text-muted-foreground">research-only／娛樂參考</span></div>
             <p className="text-muted-foreground mt-1">玄學方法被固定成可回測規則；勝率不代表因果，也不保證下一期結果。</p>
-            <p className="text-xs text-muted-foreground mt-2">來源：台灣彩券官方資料 · Zeabur API · 自動同步每 60 秒{lastSync ? ` · ${new Date(lastSync).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}` : ''}</p>
+            <p className="text-xs text-muted-foreground mt-2">來源：官方 API＋Pilio＋Auzo 備援 · Zeabur API · 自動同步每 60 秒{lastSync ? ` · ${new Date(lastSync).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' })}` : ''}</p>
           </div>
+          <section className="rounded-lg border border-border bg-card p-3"><div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div><div className="text-xs text-muted-foreground">目前台北時間</div><div className="mt-1 text-xl font-semibold tabular-nums">{taipeiTime}</div></div><div><div className="text-xs text-muted-foreground">下期開獎倒數</div><div className="mt-1 text-xl font-semibold tabular-nums">{formatCountdown(nextDraw.getTime() - now.getTime())}</div><div className="text-xs text-muted-foreground">預計 {new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', hour: '2-digit', minute: '2-digit' }).format(nextDraw)} 開獎</div></div></div></section>
           {error && <div className="rounded-lg border border-destructive bg-destructive/10 p-3 text-sm text-destructive">{error}</div>}
           <section className="rounded-lg border border-border bg-card p-3">
             <div className="flex items-center justify-between"><h2 className="font-semibold">最新開獎</h2><span className="text-xs text-muted-foreground">{latest?.drawAt || '尚未同步'}</span></div>
-            {latest ? <><div className="mt-2 text-sm">第 <span className="font-semibold tabular-nums">{latest.period}</span> 期</div><div className="flex flex-wrap gap-1.5 mt-2">{latest.numbers.split(',').map((n) => <span key={n} className="rounded-full bg-muted px-2 py-1 text-xs tabular-nums">{n}</span>)}</div><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><div>超級獎號 <b>{latest.superNumber || '—'}</b></div><div>大小／單雙 <b>{latest.size || '—'}／{latest.oddEven || '—'}</b></div></div></> : <p className="text-sm text-muted-foreground mt-2">尚無官方紀錄，請按同步。</p>}
+            {latest ? <><div className="mt-2 text-sm">第 <span className="font-semibold tabular-nums">{latest.period}</span> 期 · {latest.sourceLabel || '來源未知'}</div><div className="flex flex-wrap gap-1.5 mt-2">{latest.numbers.split(',').map((n) => <span key={n} className="rounded-full bg-muted px-2 py-1 text-xs tabular-nums">{n}</span>)}</div><div className="mt-3 grid grid-cols-2 gap-2 text-sm"><div>超級獎號 <b>{latest.superNumber || '—'}</b></div><div>大小／單雙 <b>{latest.size || '—'}／{latest.oddEven || '—'}</b></div></div></> : <p className="text-sm text-muted-foreground mt-2">尚無開獎紀錄，請按同步。</p>}
           </section>
+          <section className="rounded-lg border border-border bg-card p-3"><h2 className="font-semibold">資料來源健康度</h2><div className="mt-2 space-y-1 text-sm">{sourceHealth.length ? sourceHealth.map((source) => <div key={source.name} className="flex items-center justify-between gap-2"><span>{source.name}</span><span className={source.ok ? 'text-foreground' : 'text-destructive'}>{source.ok ? '可用' : `失敗：${source.error || '未知原因'}`}</span></div>) : <p className="text-muted-foreground">等待同步。</p>}</div></section>
           <section className="rounded-lg border border-border bg-card p-3"><h2 className="font-semibold">下一期玩法預測</h2><p className="text-xs text-muted-foreground mt-1">官方玩法與研究派生玩法分開呈現；固定規則只產生研究候選，不是機率保證。</p>{latestModels.length ? <div className="mt-2 space-y-3">{latestModels.map((m) => <div key={m.name} className="rounded-md bg-muted/50 p-3 text-sm"><div className="font-semibold">{m.name}</div><div className="mt-2 grid grid-cols-2 gap-2"><span>猜大小：<b>{m.official.size}</b></span><span>猜單雙：<b>{m.official.oddEven}</b></span><span>超級獎號：<b>{m.official.superNumber}</b></span><span>基本玩法：<b>{m.official.basic['10星']?.join('、')}</b></span></div><div className="mt-2 text-xs text-muted-foreground">號碼候選：{m.research.numberPicks.join('、')}</div><div className="mt-1 text-xs text-muted-foreground">總和：{m.research.sumBand} · 單雙分布：{m.research.oddEvenCount} · 大小分布：{m.research.highLowCount} · 區間：{m.research.zones.join('、')}</div></div>)}</div> : <p className="text-sm text-muted-foreground mt-2">等待同步。</p>}</section>
           <section className="rounded-lg border border-border bg-card p-3"><h2 className="font-semibold">歷史勝率統計</h2><p className="text-xs text-muted-foreground mt-1">只計入有官方大小／單雙結果且已保存模型的紀錄；樣本不足不解讀。</p><div className="mt-2 overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-border text-left text-muted-foreground"><th className="py-2">模型</th><th>樣本</th><th>大小</th><th>單雙</th></tr></thead><tbody>{stats.map((s) => <tr key={s.model} className="border-b border-border/60"><td className="py-2">{s.model}</td><td className="tabular-nums">{s.samples}</td><td><Rate value={s.sizeRate} /></td><td><Rate value={s.oddEvenRate} /></td></tr>)}</tbody></table></div></section>
           <section className="rounded-lg border border-border bg-card p-3"><h2 className="font-semibold">同步紀錄</h2><div className="mt-2 space-y-1">{sorted.slice(0, 20).map((draw) => <div key={draw.id} className="flex items-center justify-between gap-2 border-b border-border/60 py-2 text-xs"><span>第 {draw.period} 期</span><span className="text-muted-foreground">{draw.drawAt || '時間未知'}</span><span>{draw.syncStatus === 'official-ok' ? '官方已取' : draw.syncStatus}</span><Button variant="ghost" size="sm" onClick={() => void useItemStore.getState().removeItems([draw.id], { needSync: true })}>刪除</Button></div>)}{sorted.length === 0 && <p className="text-sm text-muted-foreground">尚無紀錄。</p>}</div></section>

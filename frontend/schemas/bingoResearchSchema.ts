@@ -23,4 +23,8 @@ export class BingoDraw extends BaseItem {
   modelPredictions: string = '';
   /** 同步或解析狀態 */
   syncStatus: string = '';
+  /** 實際採用的開獎資料來源 */
+  sourceLabel: string = '';
+  /** 各來源健康狀態 JSON */
+  sourceHealth: string = '';
 }

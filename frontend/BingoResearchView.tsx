@@ -103,19 +103,7 @@ export function BingoResearchView() {
     finally { syncingRef.current = false; setSyncing(false); }
   }, [folderId]);
 
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let cancelled = false;
-    const pollNearNextDraw = async () => {
-      await sync(false);
-      if (cancelled) return;
-      const nextDraw = getNextDraw(new Date());
-      const waitMs = Math.max(30_000, nextDraw.getTime() - Date.now() - 30_000);
-      timer = setTimeout(() => void pollNearNextDraw(), waitMs);
-    };
-    void pollNearNextDraw();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [sync]);
+  useEffect(() => { void sync(false); }, [sync]);
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(timer); }, []);
   const nextDraw = getNextDraw(now); const taipeiTime = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', dateStyle: 'medium', timeStyle: 'medium' }).format(now);
 

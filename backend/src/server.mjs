@@ -1,4 +1,7 @@
 import http from 'node:http';
+import pg from 'pg';
+
+const { Pool } = pg;
 
 const port = Number(process.env.PORT || 8080);
 const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
@@ -9,6 +12,66 @@ const fallbackSources = [
   { name: 'Pilio 賓果開獎查詢', url: 'https://www.pilio.idv.tw/bingo/list.asp' },
   { name: 'Auzo 奧索樂透網', url: 'https://lotto.auzo.tw/bingobingo.php' },
 ];
+const databaseUrl = process.env.DATABASE_URL || '';
+const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 4, idleTimeoutMillis: 30_000 }) : null;
+let databaseReady = false;
+let lastPersistedPeriod = '';
+let scheduledTimer;
+
+async function ensureDatabase() {
+  if (!pool || databaseReady) return;
+  await pool.query(`CREATE TABLE IF NOT EXISTS bingo_draws (
+    period TEXT PRIMARY KEY,
+    draw_at TEXT NOT NULL DEFAULT '',
+    numbers JSONB NOT NULL,
+    super_number TEXT NOT NULL DEFAULT '',
+    size TEXT NOT NULL DEFAULT '',
+    odd_even TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT '',
+    source_label TEXT NOT NULL DEFAULT '',
+    source_health JSONB NOT NULL DEFAULT '[]'::jsonb,
+    models JSONB NOT NULL DEFAULT '[]'::jsonb,
+    fetched_at BIGINT NOT NULL DEFAULT 0,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );`);
+  await pool.query('CREATE INDEX IF NOT EXISTS bingo_draws_updated_idx ON bingo_draws (updated_at DESC)');
+  databaseReady = true;
+}
+
+async function persistSnapshots(snapshots) {
+  if (!pool || !snapshots.length) return;
+  await ensureDatabase();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const item of snapshots) {
+      await client.query(`INSERT INTO bingo_draws
+        (period, draw_at, numbers, super_number, size, odd_even, source, source_label, source_health, models, fetched_at)
+        VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11)
+        ON CONFLICT (period) DO UPDATE SET draw_at=EXCLUDED.draw_at, numbers=EXCLUDED.numbers,
+        super_number=EXCLUDED.super_number, size=EXCLUDED.size, odd_even=EXCLUDED.odd_even,
+        source=EXCLUDED.source, source_label=EXCLUDED.source_label, source_health=EXCLUDED.source_health,
+        models=EXCLUDED.models, fetched_at=EXCLUDED.fetched_at, updated_at=NOW()` , [
+        item.period, item.drawAt || '', JSON.stringify(item.numbers), item.superNumber || '', item.size || '', item.oddEven || '',
+        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []), item.fetchedAt || Date.now(),
+      ]);
+    }
+    await client.query('COMMIT');
+    lastPersistedPeriod = snapshots[0]?.period || lastPersistedPeriod;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { client.release(); }
+}
+
+async function readPersisted(limit = 6000) {
+  if (!pool) return [];
+  await ensureDatabase();
+  const result = await pool.query(`SELECT period, draw_at AS "drawAt", numbers, super_number AS "superNumber",
+    size, odd_even AS "oddEven", source, source_label AS "sourceLabel", source_health AS "sourceHealth",
+    models, fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
+  return result.rows.map((row) => ({ ...row, numbers: Array.isArray(row.numbers) ? row.numbers : [], sourceHealth: row.sourceHealth || [], models: row.models || [] }));
+}
 
 function cleanHtml(html) {
   return html.replace(/<script[\s\S]*?<\/script>/gi, ' ').replace(/<style[\s\S]*?<\/style>/gi, ' ')
@@ -248,12 +311,38 @@ async function latest(daysOverride = null) {
       const syncedAt = Date.now();
       const rawHistory = result.history || [snapshot];
       const history = rawHistory.map((item, index) => ({ ...item, drawAt: formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000)), models: index < maxModelHistory ? buildModels(item, rawHistory.slice(index + 1, index + maxModelHistory + 1)) : [], fetchedAt: syncedAt, sourceHealth: health }));
+      await persistSnapshots(history);
       return { ...history[0], history, historyDays: result.historyDays || 1, sourceHealth: health };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }
   }
   throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);
+}
+
+function nextDrawAt(now = new Date()) {
+  const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const year = taipei.getUTCFullYear(); const month = taipei.getUTCMonth(); const day = taipei.getUTCDate();
+  const minute = taipei.getUTCHours() * 60 + taipei.getUTCMinutes(); const start = 425; const end = 1435;
+  let targetDay = day; let targetMinutes = start;
+  if (minute >= end) targetDay += 1;
+  else if (minute >= start) targetMinutes = start + Math.ceil((minute - start + 1) / 5) * 5;
+  return new Date(Date.UTC(year, month, targetDay, Math.floor(targetMinutes / 60), targetMinutes % 60, 0) - 8 * 60 * 60 * 1000);
+}
+
+async function scheduledSync(forceRepair = false) {
+  try {
+    const persisted = await readPersisted(1);
+    const requestedDays = forceRepair || !persisted.length ? 30 : 1;
+    const result = await latest(requestedDays);
+    if (!forceRepair && persisted[0]?.period && result.period !== persisted[0].period) await latest(30);
+    console.log(JSON.stringify({ event: 'sync-ok', period: result.period, historyDays: result.historyDays, persisted: Boolean(pool) }));
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'sync-failed', message: error instanceof Error ? error.message : '同步失敗' }));
+  } finally {
+    const wakeAt = nextDrawAt(new Date()).getTime() - Date.now() - 30_000;
+    scheduledTimer = setTimeout(() => void scheduledSync(false), Math.max(30_000, wakeAt));
+  }
 }
 
 function send(res, status, body) {
@@ -269,10 +358,16 @@ const server = http.createServer(async (req, res) => {
       const requestUrl = new URL(req.url, 'http://localhost');
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
+      const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : 600);
+      if (persisted.length && !daysOverride) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [] });
+      if (persisted.length && daysOverride === 1) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 1, sourceHealth: persisted[0].sourceHealth || [] });
       return send(res, 200, await latest(daysOverride));
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }
   }
   send(res, 404, { error: 'Not found' });
 });
 
-server.listen(port, '0.0.0.0', () => console.log(`bingo-api listening on ${port}`));
+server.listen(port, '0.0.0.0', () => {
+  console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
+  void scheduledSync(true);
+});

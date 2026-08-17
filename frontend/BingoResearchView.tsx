@@ -2,7 +2,14 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CustomScrollbar, PluginTopbar, Button } from "@cubelv/sdk";
 
 const API_URL = "https://bingo-api.zeabur.app/api/latest";
-const MODEL_NAMES = ["梅花易數", "六爻八卦", "河圖洛書"];
+const MODEL_NAMES = [
+  "梅花易數",
+  "六爻八卦",
+  "河圖洛書",
+  "數字卦（楚簡研究版）",
+  "奇門遁甲（九宮研究版）",
+  "太乙九宮（研究版）",
+];
 type Evolution = Record<
   string,
   {
@@ -15,6 +22,7 @@ type Evolution = Record<
 type Model = {
   name: string;
   rule: string;
+  sources?: Array<{ name: string; url: string }>;
   calculation?: {
     formula?: string;
     historySamples?: number;
@@ -213,6 +221,15 @@ const TARGET_LABELS: Record<string, string> = {
 };
 function targetLabel(target: string) {
   return TARGET_LABELS[target] || target.replace("星", " 星");
+}
+
+function modelPlainLanguage(name: string) {
+  if (name === "梅花易數") return "用年月日時取上下卦與動爻，再和歷史頻率比較。";
+  if (name === "六爻八卦") return "把期號逐位轉成六個爻值，公開判定陰陽與動爻；這是研究映射，不是假稱真的擲錢。";
+  if (name === "河圖洛書") return "用九宮數字定位，再觀察號碼和九宮位置的關係。";
+  if (name === "數字卦（楚簡研究版）") return "採用文獻記載的數字集合，將期號轉成六個可重算數字特徵。";
+  if (name === "奇門遁甲（九宮研究版）") return "取九宮、九星、八門三個結構做簡化特徵，不冒充完整奇門排盤。";
+  return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
 function ScoreBar({
   value,
@@ -460,9 +477,7 @@ export function BingoResearchView() {
                         <div className="truncate font-semibold text-white">{model.name}</div>
                         <span className="shrink-0 rounded-full bg-amber-300/15 px-2 py-1 text-[10px] text-amber-200">{model.calculation?.historySamples ?? 0} 期樣本</span>
                       </div>
-                      <p className="mt-1 text-xs leading-5 text-slate-400">
-                        {model.name === "梅花易數" ? "用年月日時換算卦象，再和歷史號碼頻率合併。" : model.name === "六爻八卦" ? "用期號固定模擬六爻，再和歷史號碼頻率合併。" : "用年月日時定位洛書宮位，再和歷史號碼頻率合併。"}
-                      </p>
+                      <p className="mt-1 text-xs leading-5 text-slate-400">{modelPlainLanguage(model.name)}</p>
                       <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900 p-2 text-[11px] leading-5 text-slate-300">
                         <span className="text-cyan-200">實際公式：</span>{model.calculation?.formula || "舊版紀錄沒有保存公式"}
                       </div>
@@ -493,6 +508,16 @@ export function BingoResearchView() {
                       <div className="mt-3 border-t border-slate-800 pt-2 text-xs leading-5 text-slate-300">
                         本模型候選：{model.research.numberPicks.join("、")} · 區間：{model.research.zones.join("、")} · 總和：{model.research.sumBand}
                       </div>
+                      {model.sources && model.sources.length > 0 && (
+                        <div className="mt-2 border-t border-slate-800 pt-2 text-[11px] leading-5 text-slate-500">
+                          <span className="text-slate-400">來源：</span>
+                          {model.sources.map((source) => (
+                            <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="ml-1 inline-block max-w-full truncate align-bottom text-cyan-400 underline">
+                              {source.name}
+                            </a>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>

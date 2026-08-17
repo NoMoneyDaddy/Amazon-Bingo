@@ -157,14 +157,15 @@ function meihuaCasting(snapshot) {
 }
 
 function sixyaoCasting(snapshot) {
-  const seed = Number(snapshot.period) + digitSum(snapshot.period) * 97;
-  const random = seededRandom(seed);
+  const seedDigits = String(snapshot.period).split('').map(Number);
   const lines = Array.from({ length: 6 }, () => {
-    const roll = 3 + Math.floor(random() * 15);
-    return { roll, value: roll % 4 === 0 ? 9 : roll % 4 === 1 ? 6 : roll % 2 === 0 ? 8 : 7, moving: roll === 6 || roll === 9 };
+    const digit = seedDigits.shift() ?? 0;
+    seedDigits.push(digit);
+    const value = [6, 7, 8, 9][(digit + seedDigits.length) % 4];
+    return { sourceDigit: digit, value, moving: value === 6 || value === 9 };
   });
   const binary = lines.map((line) => line.value === 6 || line.value === 8 ? 0 : 1).reverse().join('');
-  return { lines, binary, formula: '以期號作固定種子模擬六次三枚硬幣；由下往上記錄陰陽與動爻' };
+  return { lines, binary, formula: '將期號數字逐位映射為 6、7、8、9；6/9 為動爻，6/8 為陰，7/9 為陽，再由下往上排列。這是可重算的研究映射，不宣稱等同實際擲錢。' };
 }
 
 function luoshuCasting(snapshot) {
@@ -174,6 +175,28 @@ function luoshuCasting(snapshot) {
   const row = luoshu[Math.floor(palace / 3)];
   const center = luoshu[Math.floor(palace / 3)][palace % 3];
   return { luoshu, palace: palace + 1, center, formula: `以年月日時總和 mod 9 定洛書宮位=${palace + 1}；宮位數=${center}` };
+}
+
+function numeralGuaCasting(snapshot) {
+  const sourceDigits = String(snapshot.period).split('').map(Number);
+  const allowed = [1, 4, 5, 6, 8, 9];
+  const digits = Array.from({ length: 6 }, (_, index) => allowed[(sourceDigits[index % sourceDigits.length] + index + digitSum(snapshot.period)) % allowed.length]);
+  return { digits, formula: `依數字卦文獻使用的數字集合 ${allowed.join('、')}，將期號逐位及位置索引映射成六個可重算數字：${digits.join('、')}` };
+}
+
+function qimenCasting(snapshot) {
+  const sum = digitSum(snapshot.period);
+  const palace = (Number(snapshot.period) + sum) % 9 + 1;
+  const star = (sum + Number(snapshot.period.slice(-2))) % 9 + 1;
+  const door = (Number(snapshot.period.slice(-2)) + sum) % 8 + 1;
+  return { palace, star, door, formula: `九宮位置=(期號+期號數字和) mod 9=${palace}；九星=${star}；八門=${door}。這是把奇門的九宮／九星／八門結構轉成研究特徵，未宣稱完整奇門排盤。` };
+}
+
+function taiyiCasting(snapshot) {
+  const sum = digitSum(snapshot.period);
+  const palace = (Number(snapshot.period) + sum) % 9 + 1;
+  const cycle = (Number(snapshot.period) + sum) % 9;
+  return { palace, cycle, formula: `以太乙行九宮的文獻結構建立可重算索引：行宮=(期號+期號數字和) mod 9=${palace}；九宮循環位=${cycle}` };
 }
 
 function historicalFrequencies(history) {
@@ -194,7 +217,13 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32) {
       ? (1 - Math.abs((tradition.center + row + col) % 9 - 4) / 4) * 0.55 + (number % tradition.center === 0 ? 0.2 : 0)
       : tradition.kind === 'sixyao'
         ? ((tradition.bits[(number + tradition.moving) % 6] === '1' ? 1 : -1) * parity * 0.12) + (number % 8 === tradition.lower ? 0.18 : 0)
-        : ((number % 8 === tradition.upper ? 0.32 : 0) + (number % 6 === tradition.moving ? 0.16 : 0));
+        : tradition.kind === 'numeral-gua'
+          ? (tradition.digits.includes(number % 10) ? 0.3 : 0) + (number % 6 === tradition.digits[number % 6] ? 0.18 : 0)
+          : tradition.kind === 'qimen'
+            ? (number % 9 === tradition.palace - 1 ? 0.32 : 0) + (number % 9 === tradition.star - 1 ? 0.2 : 0) + (number % 8 === tradition.door - 1 ? 0.14 : 0)
+            : tradition.kind === 'taiyi'
+              ? (number % 9 === tradition.palace - 1 ? 0.34 : 0) + (number % 9 === tradition.cycle ? 0.18 : 0)
+              : ((number % 8 === tradition.upper ? 0.32 : 0) + (number % 6 === tradition.moving ? 0.16 : 0));
     const empirical = clamp(frequencies[number] / 0.25, 0, 1) * empiricalWeight;
     return { number, score: traditional * (1 - empiricalWeight) + empirical + random() * 0.06 };
   });
@@ -242,6 +271,14 @@ function parseOfficialPage(html) {
 }
 
 const predictionTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
+const modelSources = {
+  '梅花易數': [{ name: '邵雍《梅花易數》數字起卦文本', url: 'https://www.diancang.xyz/xuanxuewushu/meihuayishu/37733.html' }, { name: '北京大學：周易筮法源流考略', url: 'https://ruzang.pku.edu.cn/info/1067/2156.htm' }],
+  '六爻八卦': [{ name: '北京大學：周易筮法源流考略', url: 'https://ruzang.pku.edu.cn/info/1067/2156.htm' }, { name: '中國哲學書電子化計劃：周易卦變資料', url: 'https://ctext.org/datawiki.pl?if=en&res=484682' }],
+  '河圖洛書': [{ name: 'Luo Shu：同行同列對角線和為 15 的研究論文', url: 'https://journals.sagepub.com/doi/10.1177/2158244015585828' }],
+  '數字卦（楚簡研究版）': [{ name: '深圳大學學報：楚卜筮簡中的數字卦', url: 'https://xb.szu.edu.cn/article/2016/1000-260X-33-3-58.html' }, { name: '濟南大學學報：清華簡《筮法》研究', url: 'https://journal.ujn.edu.cn/zh/article/31373565/' }],
+  '奇門遁甲（九宮研究版）': [{ name: '北海道大學：奇門遁甲的基礎研究', url: 'https://eprints.lib.hokudai.ac.jp/repo/huscap/all/44606/' }, { name: 'EASTM：中國軍事占卜史研究', url: 'https://core.ac.uk/download/pdf/228877365.pdf' }],
+  '太乙九宮（研究版）': [{ name: 'Extrême-Orient：太乙、奇門遁甲與六壬研究', url: 'https://journals.openedition.org/extremeorient/pdf/270' }, { name: '柏林自由大學：中國帝制時期的認知占卜', url: 'https://refubium.fu-berlin.de/handle/fub188/154' }],
+};
 
 function targetProfile(profiles, methodName, target) {
   const profile = profiles?.[methodName] || {};
@@ -258,7 +295,7 @@ function categoryPrediction(seed, traditional, history, field, empiricalWeight) 
 
 function evolveProfiles(history = []) {
   const candidates = [0.12, 0.24, 0.32, 0.44, 0.56];
-  const methods = ['梅花易數', '六爻八卦', '河圖洛書'];
+  const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）'];
   return Object.fromEntries(methods.map((method) => {
     const targets = Object.fromEntries(predictionTargets.map((target) => {
       if (history.length < 4) return [target, { empiricalWeight: 0.32, validationSamples: 0, score: null, status: '樣本不足，使用預設權重' }];
@@ -292,10 +329,16 @@ function buildModels(snapshot, history = [], options = {}) {
   const meihua = meihuaCasting(snapshot);
   const sixyao = sixyaoCasting(snapshot);
   const luoshu = luoshuCasting(snapshot);
+  const numeralGua = numeralGuaCasting(snapshot);
+  const qimen = qimenCasting(snapshot);
+  const taiyi = taiyiCasting(snapshot);
   const methods = [
     { name: '梅花易數', kind: 'meihua', tradition: { kind: 'meihua', ...meihua }, seed: Number(snapshot.period) + 11, calculation: meihua },
     { name: '六爻八卦', kind: 'sixyao', tradition: { kind: 'sixyao', bits: sixyao.binary, moving: sixyao.lines.filter((line) => line.moving).length, lower: 1 }, seed: Number(snapshot.period) + 37, calculation: sixyao },
     { name: '河圖洛書', kind: 'luoshu', tradition: { kind: 'luoshu', center: luoshu.center }, seed: Number(snapshot.period) + 61, calculation: luoshu },
+    { name: '數字卦（楚簡研究版）', kind: 'numeral-gua', tradition: { kind: 'numeral-gua', digits: numeralGua.digits }, seed: Number(snapshot.period) + 73, calculation: numeralGua },
+    { name: '奇門遁甲（九宮研究版）', kind: 'qimen', tradition: { kind: 'qimen', ...qimen }, seed: Number(snapshot.period) + 89, calculation: qimen },
+    { name: '太乙九宮（研究版）', kind: 'taiyi', tradition: { kind: 'taiyi', ...taiyi }, seed: Number(snapshot.period) + 97, calculation: taiyi },
   ];
   return methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
@@ -312,7 +355,8 @@ function buildModels(snapshot, history = [], options = {}) {
     const traditionalOddEven = modelSeed % 3 === 0 ? '雙' : '單';
     return {
       name: method.name,
-      rule: '傳統起卦特徵＋歷史頻率先驗＋固定種子排序；非因果預測，需以未來期數回測',
+      rule: '文獻可追溯的傳統結構＋歷史頻率先驗＋固定種子排序；研究化簡，不宣稱因果預測，需以未來期數回測',
+      sources: modelSources[method.name] || [],
       calculation: { method: method.kind, ...method.calculation, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null },
       official: {
         size: categoryPrediction(modelSeed, traditionalSize, history, 'size', weights.size),

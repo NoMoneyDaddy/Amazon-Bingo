@@ -5,7 +5,7 @@ CubeLV 插件與 Zeabur 後端服務，提供台灣彩券 BINGO BINGO 官方開�
 ## 目錄
 
 - `frontend/`：CubeLV 插件原始碼
-- `backend/`：Node.js API 與 Zeabur Docker 部署檔
+- `service/`：獨立 Node.js API 與 Zeabur Docker 部署檔；插件前端不直接寫入資料
 
 ## 後端 API
 
@@ -24,7 +24,7 @@ curl http://localhost:8080/health
 
 ## Zeabur
 
-服務根目錄應指向 `backend/`，使用其中的 `Dockerfile` 建置。部署後將公開網址提供給 CubeLV 插件串接。
+服務根目錄應指向 `service/`，使用其中的 `Dockerfile` 建置。部署後將公開網址提供給 CubeLV 插件串接。
 
 ## 研究邊界
 

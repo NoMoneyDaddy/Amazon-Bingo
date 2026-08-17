@@ -21,6 +21,7 @@ type Evolution = Record<
 >;
 type Model = {
   name: string;
+  status?: string;
   rule: string;
   sources?: Array<{ name: string; url: string }>;
   calculation?: {
@@ -477,6 +478,7 @@ export function BingoResearchView() {
                         <div className="truncate font-semibold text-white">{model.name}</div>
                         <span className="shrink-0 rounded-full bg-amber-300/15 px-2 py-1 text-[10px] text-amber-200">{model.calculation?.historySamples ?? 0} 期樣本</span>
                       </div>
+                      <div className="mt-1 text-[11px] text-amber-200">{model.status || "版本狀態未保存"}</div>
                       <p className="mt-1 text-xs leading-5 text-slate-400">{modelPlainLanguage(model.name)}</p>
                       <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900 p-2 text-[11px] leading-5 text-slate-300">
                         <span className="text-cyan-200">實際公式：</span>{model.calculation?.formula || "舊版紀錄沒有保存公式"}

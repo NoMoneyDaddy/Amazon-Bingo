@@ -147,13 +147,28 @@ function parseTaipeiParts(value) {
   return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
 }
 
+function parseChineseCalendarParts(value) {
+  const date = value ? new Date(value.replace(/\//g, '-')) : new Date();
+  const parts = new Intl.DateTimeFormat('zh-TW-u-ca-chinese', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false }).formatToParts(date);
+  const monthNames = ['正月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
+  const monthPart = parts.find((part) => part.type === 'month')?.value || '';
+  return {
+    year: Number(parts.find((part) => part.type === 'relatedYear')?.value || date.getUTCFullYear()),
+    month: Math.max(1, monthNames.indexOf(monthPart.replace(/^閏/, '')) + 1),
+    day: Number(parts.find((part) => part.type === 'day')?.value || 1),
+    hour: Number(parts.find((part) => part.type === 'hour')?.value || 0),
+  };
+}
+
 function meihuaCasting(snapshot) {
   const t = parseTaipeiParts(snapshot.drawAt);
-  const total = t.year + t.month + t.day;
+  const lunar = parseChineseCalendarParts(snapshot.drawAt);
+  const yearBranch = ((t.year - 4) % 12 + 12) % 12 + 1;
+  const total = yearBranch + lunar.month + lunar.day;
   const upper = total % 8 || 8;
-  const lower = (total + t.hour) % 8 || 8;
-  const moving = (total + t.hour) % 6 || 6;
-  return { upper, lower, moving, formula: `上卦=(年+月+日) mod 8=${upper}；下卦=(年+月+日+時) mod 8=${lower}；動爻 mod 6=${moving}` };
+  const lower = (total + lunar.hour) % 8 || 8;
+  const moving = (total + lunar.hour) % 6 || 6;
+  return { upper, lower, moving, calendar: { yearBranch, lunarMonth: lunar.month, lunarDay: lunar.day, hour: lunar.hour }, formula: `年支=${yearBranch}、農曆月=${lunar.month}、日=${lunar.day}；上卦=(年支+月+日) mod 8=${upper}；下卦=(年支+月+日+時) mod 8=${lower}；動爻 mod 6=${moving}` };
 }
 
 function sixyaoCasting(snapshot) {
@@ -333,12 +348,12 @@ function buildModels(snapshot, history = [], options = {}) {
   const qimen = qimenCasting(snapshot);
   const taiyi = taiyiCasting(snapshot);
   const methods = [
-    { name: '梅花易數', kind: 'meihua', tradition: { kind: 'meihua', ...meihua }, seed: Number(snapshot.period) + 11, calculation: meihua },
-    { name: '六爻八卦', kind: 'sixyao', tradition: { kind: 'sixyao', bits: sixyao.binary, moving: sixyao.lines.filter((line) => line.moving).length, lower: 1 }, seed: Number(snapshot.period) + 37, calculation: sixyao },
-    { name: '河圖洛書', kind: 'luoshu', tradition: { kind: 'luoshu', center: luoshu.center }, seed: Number(snapshot.period) + 61, calculation: luoshu },
-    { name: '數字卦（楚簡研究版）', kind: 'numeral-gua', tradition: { kind: 'numeral-gua', digits: numeralGua.digits }, seed: Number(snapshot.period) + 73, calculation: numeralGua },
-    { name: '奇門遁甲（九宮研究版）', kind: 'qimen', tradition: { kind: 'qimen', ...qimen }, seed: Number(snapshot.period) + 89, calculation: qimen },
-    { name: '太乙九宮（研究版）', kind: 'taiyi', tradition: { kind: 'taiyi', ...taiyi }, seed: Number(snapshot.period) + 97, calculation: taiyi },
+    { name: '梅花易數', kind: 'meihua', status: '正統起卦核心＋賓果適配', tradition: { kind: 'meihua', ...meihua }, seed: Number(snapshot.period) + 11, calculation: meihua },
+    { name: '六爻八卦', kind: 'sixyao', status: '正統六爻結構核心＋期號起卦適配', tradition: { kind: 'sixyao', bits: sixyao.binary, moving: sixyao.lines.filter((line) => line.moving).length, lower: 1 }, seed: Number(snapshot.period) + 37, calculation: sixyao },
+    { name: '河圖洛書', kind: 'luoshu', status: '洛書九宮核心＋賓果適配', tradition: { kind: 'luoshu', center: luoshu.center }, seed: Number(snapshot.period) + 61, calculation: luoshu },
+    { name: '數字卦（楚簡研究版）', kind: 'numeral-gua', status: '文獻數字結構＋研究適配，非完整復原', tradition: { kind: 'numeral-gua', digits: numeralGua.digits }, seed: Number(snapshot.period) + 73, calculation: numeralGua },
+    { name: '奇門遁甲（九宮研究版）', kind: 'qimen', status: '九宮／九星／八門核心，非完整排局', tradition: { kind: 'qimen', ...qimen }, seed: Number(snapshot.period) + 89, calculation: qimen },
+    { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心，非完整太乙排局', tradition: { kind: 'taiyi', ...taiyi }, seed: Number(snapshot.period) + 97, calculation: taiyi },
   ];
   return methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
@@ -355,7 +370,7 @@ function buildModels(snapshot, history = [], options = {}) {
     const traditionalOddEven = modelSeed % 3 === 0 ? '雙' : '單';
     return {
       name: method.name,
-      rule: '文獻可追溯的傳統結構＋歷史頻率先驗＋固定種子排序；研究化簡，不宣稱因果預測，需以未來期數回測',
+      rule: `${method.status}；歷史頻率只做獨立統計排序，不修改傳統規則，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
       calculation: { method: method.kind, ...method.calculation, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null },
       official: {

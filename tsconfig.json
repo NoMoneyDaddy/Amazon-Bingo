@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+    "skipLibCheck": true,
+    "allowSyntheticDefaultImports": true,
+    "esModuleInterop": true,
+    "experimentalDecorators": true,
+    "useDefineForClassFields": false,
+    "noEmit": true,
+    "typeRoots": [
+      "/app/config/node_modules/@types"
+    ],
+    "paths": {
+      "@cubelv/sdk": [
+        "/app/config/cubelv-sdk.d.ts"
+      ],
+      "lightweight-charts": [
+        "/app/config/node_modules/lightweight-charts"
+      ]
+    }
+  },
+  "include": [
+    "frontend/**/*.ts",
+    "frontend/**/*.tsx"
+  ],
+  "exclude": [
+    "frontend/bundle.js",
+    "frontend/node_modules"
+  ]
+}

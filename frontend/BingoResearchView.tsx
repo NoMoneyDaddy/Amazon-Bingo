@@ -282,6 +282,58 @@ function PredictionValue({ value }: { value: string }) {
     </div>
   );
 }
+
+const HISTORY_PLAYS = [
+  { key: "size", label: "猜大小" },
+  { key: "oddEven", label: "猜單雙" },
+  { key: "superNumber", label: "超級獎號" },
+  ...Array.from({ length: 10 }, (_, index) => ({ key: `${index + 1}星`, label: `${index + 1} 星` })),
+];
+
+function predictionForPlay(model: Model, key: string) {
+  if (key === "size") return model.official.size || "—";
+  if (key === "oddEven") return model.official.oddEven || "—";
+  if (key === "superNumber") return model.official.superNumber || "—";
+  return model.official.basic[key]?.join("、") || "—";
+}
+
+function HistoricalModelDetails({ model, draw }: { model: Model; draw: DrawSnapshot }) {
+  return (
+    <details className="mt-3 rounded-2xl border border-cyan-300/20 bg-slate-900/70 p-3">
+      <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200">
+        <span className="flex items-center justify-between gap-2">
+          <span>{model.name}</span>
+          <span className="text-xs font-normal text-slate-300">查看當期預測與結算</span>
+        </span>
+      </summary>
+      <div className="mt-3 space-y-2">
+        {HISTORY_PLAYS.map((play) => {
+          const result = settleSingleBet(play.key, model, draw);
+          return (
+            <div key={play.key} className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="text-xs font-semibold text-amber-100">{play.label}</div>
+                  <div className="mt-1 text-xs text-slate-300">當期預測</div>
+                  <div className="mt-1 min-w-0"><PredictionValue value={predictionForPlay(model, play.key)} /></div>
+                </div>
+                <div className="shrink-0 text-right text-xs leading-6">
+                  <div className={result.won ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
+                    {result.won ? "中獎" : "未中獎"}
+                  </div>
+                  <div className="text-slate-300">派彩 {result.payout.toLocaleString("zh-TW")} 元</div>
+                  <div className={result.profit >= 0 ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
+                    淨 {formatNetProfit(result.profit)}
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
 const TARGET_LABELS: Record<string, string> = {
   size: "猜大小",
   oddEven: "猜單雙",
@@ -500,31 +552,27 @@ export function BingoResearchView() {
                   <div className="flex items-end justify-between gap-2">
                     <div>
                       <p className="text-xs font-medium uppercase tracking-[0.18em] text-amber-200/80">Research picks</p>
-                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">本期預測、中獎率與單注盈虧</h2>
+                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">本期預測與中獎率</h2>
                     </div>
                     <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">歷史回測</span>
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">按官方中獎門檻統計；每期模擬 1 注 25 元，淨盈虧為派彩減投注成本，不含加碼與倍投注。</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-300">按官方中獎門檻統計；每期的預測、派彩與單注盈虧請在「歷史紀錄」查看。</p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[4.5rem_3.5rem_4.5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-xs text-slate-300 sm:grid-cols-[6rem_4rem_5rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-xs text-slate-300 sm:grid-cols-[6rem_4rem_minmax(0,1fr)]">
                       <span>玩法</span>
                       <span>中獎率</span>
-                      <span>單注淨盈虧</span>
                       <span className="text-right">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (
                       <div
                         key={play.key}
-                        className="grid min-w-0 max-w-full grid-cols-[4.5rem_3.5rem_4.5rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-2 sm:grid-cols-[6rem_4rem_5rem_minmax(0,1fr)]"
+                        className="grid min-w-0 max-w-full grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-2 sm:grid-cols-[6rem_4rem_minmax(0,1fr)]"
                       >
                         <span className="shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
                           {play.label}
                         </span>
                         <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
                           <Rate value={play.best.rate} label={play.metricLabel} />
-                        </span>
-                        <span className={`text-xs font-semibold tabular-nums ${play.best.profit >= 0 ? "text-emerald-300" : "text-rose-300"}`} aria-label={`單注累計淨盈虧 ${formatNetProfit(play.best.profit)}`}>
-                          {formatNetProfit(play.best.profit)}
                         </span>
                         <div className="min-w-0 max-w-full">
                           <PredictionValue value={play.best.prediction} />
@@ -627,7 +675,7 @@ export function BingoResearchView() {
                 <p className="text-xs font-medium uppercase tracking-[0.18em] text-cyan-200/80">Archive</p>
                 <h2 id="history-heading" className="mt-1 text-lg font-bold text-cyan-100">歷史開獎與研究紀錄</h2>
                 <p className="mt-2 text-sm leading-6 text-slate-300">
-                  由官方資料服務提供，這裡只讀取紀錄，不在 Vault 建立、修改或刪除資料。
+                  每一期保留當時產生的預測；展開模型即可查看各玩法的中獎結果、派彩與單注淨盈虧。
                 </p>
                 <div className="relative mt-5 space-y-3 before:absolute before:bottom-3 before:left-3 before:top-3 before:w-px before:bg-cyan-300/25">
                   {sorted.slice(0, 50).map((draw) => (
@@ -651,6 +699,9 @@ export function BingoResearchView() {
                           .map((model) => model.name)
                           .join("、") || "—"}
                       </div>
+                      {parseModels(draw).map((model) => (
+                        <HistoricalModelDetails key={model.name} model={model} draw={draw} />
+                      ))}
                     </article>
                   ))}
                   {sorted.length === 0 && (

@@ -308,6 +308,22 @@ function Rate({ value, label = "勝率" }: { value: number | null; label?: strin
   );
 }
 
+function BacktestEvidence({
+  wins,
+  samples,
+  profit,
+}: {
+  wins: number;
+  samples: number;
+  profit: number;
+}) {
+  return (
+    <span className="block text-[10px] font-normal leading-4 text-muted-foreground">
+      {samples ? `${wins}/${samples} 命中` : "尚無有效樣本"} · {formatNetProfit(profit)}
+    </span>
+  );
+}
+
 function formatNetProfit(value: number | null) {
   if (value == null) return "—";
   return `${value > 0 ? "+" : ""}${Math.round(value).toLocaleString("zh-TW")} 元`;
@@ -346,18 +362,18 @@ function predictionForPlay(model: Model, key: string) {
 
 function HistoricalModelDetails({ model, draw }: { model: Model; draw: DrawSnapshot }) {
   return (
-    <details className="mt-3 rounded-2xl border border-cyan-300/20 bg-slate-900/70 p-3">
+    <details className="mt-3 rounded-2xl border border-border bg-background/70 p-3">
       <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200">
         <span className="flex items-center justify-between gap-2">
           <span>{model.name}</span>
-          <span className="text-xs font-normal text-slate-300">查看當期預測與結算</span>
+          <span className="text-xs font-normal text-muted-foreground">查看結算</span>
         </span>
       </summary>
       <div className="mt-3 space-y-2">
         {HISTORY_PLAYS.map((play) => {
           const result = settleSingleBet(play.key, model, draw);
           return (
-            <div key={play.key} className="rounded-xl border border-slate-700/80 bg-slate-950/60 p-3">
+            <div key={play.key} className="rounded-xl border border-border bg-card/70 p-3">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="text-xs font-semibold text-amber-100">{play.label}</div>
@@ -506,7 +522,7 @@ export function BingoResearchView() {
     </Button>
   );
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-background text-foreground">
+    <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-background font-sans text-foreground antialiased">
       <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
         <div className="absolute -left-24 -top-24 h-64 w-64 rounded-full bg-cyan-500/10 blur-3xl motion-safe:animate-pulse" />
         <div className="absolute -bottom-32 -right-20 h-72 w-72 rounded-full bg-orange-500/10 blur-3xl" />
@@ -630,23 +646,24 @@ export function BingoResearchView() {
                     </div>
                     <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">歷史回測</span>
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-slate-300">按官方中獎門檻統計；每期的預測、派彩與單注盈虧請在「歷史紀錄」查看。</p>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">先看歷史回測證據，再看本期預測；樣本不足時顯示「—」，不把未知當成 0%。</p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-xs text-slate-300 sm:grid-cols-[6rem_4rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[4.5rem_5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
                       <span>玩法</span>
-                      <span>中獎率</span>
+                      <span>歷史回測</span>
                       <span className="text-right">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (
                       <div
                         key={play.key}
-                        className="grid min-w-0 max-w-full grid-cols-[4.5rem_3.5rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-2 sm:grid-cols-[6rem_4rem_minmax(0,1fr)]"
+                        className="grid min-w-0 max-w-full grid-cols-[4.5rem_5rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
                       >
                         <span className="shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
                           {play.label}
                         </span>
                         <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
                           <Rate value={play.best.rate} label={play.metricLabel} />
+                          <BacktestEvidence wins={play.best.wins} samples={play.best.samples} profit={play.best.profit} />
                         </span>
                         <div className="min-w-0 max-w-full">
                           <PredictionValue value={play.best.prediction} />
@@ -660,9 +677,9 @@ export function BingoResearchView() {
             {page === "process" && (
               <section aria-labelledby="process-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 透明方法</p>
-                <h2 id="process-heading" className="mt-1 text-lg font-bold text-amber-100">計算過程與模型透明度</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  白話說：先讀取歷史資料，再計算特徵，接著用過去開獎做回測，最後才產生預測。這是統計研究，不是保證中獎。
+                <h2 id="process-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100">計算過程與模型透明度</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  四個步驟把資料轉成研究結果：讀取、計算、回測、輸出。每個模型都保留規則、輸入與證據，方便重新檢查。
                 </p>
                 <div className="mt-5 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
                   {[
@@ -671,28 +688,29 @@ export function BingoResearchView() {
                     ["03", "做回測", "逐玩法比較"],
                     ["04", "出結果", "預測與勝率"],
                   ].map(([number, title, detail]) => (
-                    <div key={number} className="rounded-2xl border border-slate-700/80 bg-gradient-to-br from-slate-800 to-slate-900 p-3 transition-transform duration-300 hover:-translate-y-0.5">
-                      <div className="text-xl font-bold tabular-nums text-amber-200">{number}</div>
-                      <div className="font-medium text-white">{title}</div>
-                      <div className="mt-0.5 text-xs text-slate-300">{detail}</div>
+                    <div key={number} className="rounded-2xl border border-border bg-background/70 p-3 transition-transform duration-300 hover:-translate-y-0.5">
+                      <div className="text-xs font-semibold tabular-nums text-amber-200">STEP {number}</div>
+                      <div className="mt-1 font-semibold text-foreground">{title}</div>
+                      <div className="mt-0.5 text-xs text-muted-foreground">{detail}</div>
                     </div>
                   ))}
                 </div>
                 <div className="mt-4 rounded-2xl border border-cyan-300/25 bg-cyan-300/10 p-4 text-sm leading-6 text-slate-200">
-                  <strong className="text-cyan-100">怎麼看這些數字？</strong>
-                  <p className="mt-1">權重越高，代表模型越重視歷史頻率；回測率則是把當時以前的資料拿來預測，再與實際開獎比對。兩者都不能解讀成下一期保證。</p>
+                  <strong className="text-cyan-100">怎麼讀研究證據？</strong>
+                  <p className="mt-1">權重是模型採用歷史訊號的比例；回測率是過往預測與實際結果的命中比例。兩者都不是下一期的機率或保證。</p>
                 </div>
                 <div className="mt-3 space-y-3">
                   {latestModels.map((model) => (
-                    <article key={model.name} className="min-w-0 rounded-2xl border border-amber-300/25 bg-slate-950/70 p-4 shadow-lg shadow-black/10 transition-transform duration-300 hover:-translate-y-0.5">
+                    <article key={model.name} className="min-w-0 rounded-2xl border border-border bg-background/70 p-4 shadow-lg shadow-black/10 transition-transform duration-300 hover:-translate-y-0.5">
                       <div className="flex min-w-0 items-center justify-between gap-2">
-                        <div className="truncate font-semibold text-white">{model.name}</div>
-                        <span className="shrink-0 rounded-full bg-amber-300/15 px-2 py-1 text-xs text-amber-100">{model.calculation?.historySamples ?? 0} 期樣本</span>
+                        <div className="truncate font-semibold text-foreground">{model.name}</div>
+                        <span className="shrink-0 rounded-full bg-amber-300/15 px-2 py-1 text-xs tabular-nums text-amber-100">樣本 {model.calculation?.historySamples ?? 0} 期</span>
                       </div>
                       <div className="mt-1 text-xs text-amber-100">{model.status || "狀態未提供"}</div>
                       <p className="mt-2 text-sm leading-6 text-slate-300">{modelPlainLanguage(model.name)}</p>
-                      <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900 p-2 text-xs leading-6 text-slate-200">
-                        <span className="text-cyan-200">起卦依據：</span>每個玩法／星級均以預測當下時間獨立起卦；目標期號與玩法只標記問題，不直接硬編碼成卦象。
+                      <div className="mt-3 rounded-xl border border-border bg-card p-3 text-xs leading-6 text-muted-foreground">
+                        <div className="mb-1 font-semibold text-cyan-200">計算輸入</div>
+                        <span className="text-foreground">起卦依據：</span>每個玩法／星級均以預測當下時間獨立起卦；目標期號與玩法只標記問題，不直接硬編碼成卦象。
                         <div className="mt-2 space-y-1">
                           {Object.entries(model.calculation?.targetCastings || {}).map(([target, formula]) => (
                             <div key={target} className="break-words"><span className="text-amber-200">{targetLabel(target)}：</span>{formula}{model.calculation?.targetCastingValues?.[target] ? `｜結果：${model.calculation.targetCastingValues[target]}` : ""}</div>
@@ -747,34 +765,34 @@ export function BingoResearchView() {
             {page === "history" && (
               <section aria-labelledby="history-heading" className="rounded-3xl border border-cyan-300/30 bg-card p-4 shadow-xl shadow-cyan-950/20 backdrop-blur sm:p-5">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200/80">04 · 歷史紀錄</p>
-                <h2 id="history-heading" className="mt-1 text-lg font-bold text-cyan-100">歷史開獎與研究紀錄</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-300">
-                  每一期保留當時產生的預測；展開模型即可查看各玩法的中獎結果、派彩與單注淨盈虧。
+                <h2 id="history-heading" className="mt-1 text-xl font-bold tracking-tight text-cyan-100">歷史開獎與研究紀錄</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">
+                  每一期先看官方結果，再展開模型查看預測、派彩與單注淨盈虧；數字只代表歷史紀錄，不代表未來結果。
                 </p>
                 <div className="relative mt-5 space-y-3 before:absolute before:bottom-3 before:left-3 before:top-3 before:w-px before:bg-cyan-300/25">
                   {sorted.slice(0, 50).map((draw) => (
                     <article
                       key={draw.period}
-                      className="relative ml-7 rounded-2xl border border-slate-700/80 bg-slate-950/50 p-4 transition-colors duration-300 hover:border-cyan-300/50"
+                      className="relative ml-7 rounded-2xl border border-border bg-background/70 p-3 transition-colors duration-300 hover:border-cyan-300/50 sm:p-4"
                     >
                       <span aria-hidden="true" className="absolute -left-[1.65rem] top-5 h-3 w-3 rounded-full border-2 border-slate-950 bg-cyan-300 shadow-[0_0_0_4px_rgba(103,232,249,0.15)]" />
                       <div className="flex flex-wrap items-baseline justify-between gap-2">
                         <h3 className="text-base font-bold text-white">第 {draw.period} 期</h3>
-                        <span className="rounded-full border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-300">研究紀錄</span>
+                        <span className="rounded-full border border-border bg-card px-2 py-1 text-[10px] font-semibold text-muted-foreground">已結算</span>
                       </div>
                         <div className="mt-1 text-xs leading-6 text-slate-300">
-                          開獎 {draw.drawAt || "時間未知"} · 來源{" "}
+                          開獎時間 {draw.drawAt || "未知"} · 資料來源{" "}
                           {draw.sourceLabel || "未知"}
                         </div>
                       <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3 text-sm leading-6 text-slate-200">
-                        <div className="mb-3 flex flex-wrap gap-2" aria-label={`第 ${draw.period} 期和、大小、單雙結果`}>
-                          <span className="rounded-full border border-violet-300/30 bg-violet-300/10 px-2.5 py-1 text-xs font-semibold tabular-nums text-violet-100">
-                            和：{numberSum(draw.numbers)}
+                        <div className="mb-3 flex flex-wrap gap-1.5" aria-label={`第 ${draw.period} 期總和、大小、單雙結果`}>
+                          <span className="rounded-full border border-violet-300/30 bg-violet-300/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-violet-100">
+                            總和：{numberSum(draw.numbers)}
                           </span>
-                          <span className="rounded-full border border-orange-300/30 bg-orange-300/10 px-2.5 py-1 text-xs font-semibold text-orange-100">
+                          <span className="rounded-full border border-orange-300/30 bg-orange-300/10 px-2 py-0.5 text-[11px] font-semibold text-orange-100">
                             大小：{draw.size || "—"}
                           </span>
-                          <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-xs font-semibold text-cyan-100">
+                          <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-100">
                             單雙：{draw.oddEven || "—"}
                           </span>
                         </div>
@@ -799,7 +817,7 @@ export function BingoResearchView() {
                             );
                           })}
                         </div>
-                        <div className="mt-3 text-xs text-slate-300">預測模型：
+                        <div className="mt-3 border-t border-border pt-2 text-[11px] text-muted-foreground">模型紀錄：
                         {parseModels(draw)
                           .map((model) => model.name)
                           .join("、") || "—"}

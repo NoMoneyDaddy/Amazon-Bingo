@@ -559,6 +559,14 @@ export function BingoResearchView() {
                   </div>
                   {latest ? (
                     <>
+                      <div className="mt-3 flex flex-wrap gap-2" aria-label={`第 ${latest.period} 期大小單雙結果`}>
+                        <span className="rounded-full border border-orange-300/40 bg-orange-300/10 px-3 py-1 text-xs font-semibold text-orange-100">
+                          大小：{latest.size || "—"}
+                        </span>
+                        <span className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-100">
+                          單雙：{latest.oddEven || "—"}
+                        </span>
+                      </div>
                       <div className="mt-5 grid grid-cols-5 gap-x-1.5 gap-y-3 rounded-2xl border border-orange-200/10 bg-slate-950/40 p-3 sm:grid-cols-10" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
                         {latest.numbers.map((number, index) => {
                           const isSuperNumber = latest.superNumber === number;
@@ -735,11 +743,34 @@ export function BingoResearchView() {
                           {draw.sourceLabel || "未知"}
                         </div>
                       <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3 text-sm leading-6 text-slate-200">
-                        號碼：{draw.numbers.join("、")} · 大小／單雙：
-                        {draw.size || "—"}／{draw.oddEven || "—"} · 預測模型：
+                        <div className="mb-3 flex flex-wrap gap-2" aria-label={`第 ${draw.period} 期大小單雙結果`}>
+                          <span className="rounded-full border border-orange-300/30 bg-orange-300/10 px-2.5 py-1 text-xs font-semibold text-orange-100">
+                            大小：{draw.size || "—"}
+                          </span>
+                          <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-xs font-semibold text-cyan-100">
+                            單雙：{draw.oddEven || "—"}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-5 gap-x-1.5 gap-y-3 sm:grid-cols-10" role="list" aria-label={`第 ${draw.period} 期的開獎號碼`}>
+                          {draw.numbers.map((number, index) => {
+                            const isSuperNumber = draw.superNumber === number;
+                            return (
+                              <div key={`${draw.period}-${number}-${index}`} role="listitem" aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : ""}`} className="flex min-w-0 flex-col items-center gap-1">
+                                <span className={`flex aspect-square w-full max-w-9 items-center justify-center rounded-full border text-xs font-bold tabular-nums text-white ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800" : "border-orange-100 bg-gradient-to-br from-orange-300 via-orange-500 to-orange-700"}`}>
+                                  {number}
+                                </span>
+                                <span className={`text-[10px] font-medium leading-none ${isSuperNumber ? "text-red-200" : "text-orange-100/80"}`}>
+                                  {isSuperNumber ? "超級" : "開獎"}
+                                </span>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-3 text-xs text-slate-300">預測模型：
                         {parseModels(draw)
                           .map((model) => model.name)
                           .join("、") || "—"}
+                        </div>
                       </div>
                       {parseModels(draw).map((model) => (
                         <HistoricalModelDetails key={model.name} model={model} draw={draw} />

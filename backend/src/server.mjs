@@ -189,9 +189,11 @@ function buildModels(snapshot, history = [], options = {}) {
   });
 }
 
-async function fetchOfficial() {
-  const requestedDays = Number(process.env.HISTORY_DAYS || defaultHistoryDays);
-  const historyDays = Math.min(30, Math.max(10, Number.isFinite(requestedDays) ? requestedDays : defaultHistoryDays));
+async function fetchOfficial(daysOverride = null) {
+  const requestedDays = daysOverride ?? Number(process.env.HISTORY_DAYS || defaultHistoryDays);
+  const historyDays = daysOverride != null
+    ? Math.min(30, Math.max(1, daysOverride))
+    : Math.min(30, Math.max(10, Number.isFinite(requestedDays) ? requestedDays : defaultHistoryDays));
   const openDates = Array.from({ length: historyDays }, (_, index) => taipeiDateKey(index));
   const dailyResults = await Promise.all(openDates.map(async (openDate) => {
     try {
@@ -235,9 +237,9 @@ async function fetchMirror(source) {
   return parseMirrorPage(await response.text(), source.name);
 }
 
-async function latest() {
+async function latest(daysOverride = null) {
   const health = [];
-  const attempts = [{ name: '台灣彩券官方 API', run: fetchOfficial }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
+  const attempts = [{ name: '台灣彩券官方 API', run: () => fetchOfficial(daysOverride) }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
   for (const attempt of attempts) {
     try {
       const result = await attempt.run();
@@ -262,8 +264,13 @@ function send(res, status, body) {
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 204, {});
   if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true, service: 'bingo-api' });
-  if (req.method === 'GET' && req.url === '/api/latest') {
-    try { return send(res, 200, await latest()); } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }
+  if (req.method === 'GET' && req.url.startsWith('/api/latest')) {
+    try {
+      const requestUrl = new URL(req.url, 'http://localhost');
+      const requestedDays = Number(requestUrl.searchParams.get('days'));
+      const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
+      return send(res, 200, await latest(daysOverride));
+    } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }
   }
   send(res, 404, { error: 'Not found' });
 });

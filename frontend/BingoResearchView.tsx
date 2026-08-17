@@ -8,8 +8,8 @@ type Model = { name: string; rule: string; calculation?: { formula?: string; his
 type DrawSnapshot = { period: string; drawAt: string; numbers: string[]; superNumber: string; size: string; oddEven: string; source: string; sourceLabel: string; sourceHealth: Array<{ name: string; ok: boolean; error?: string }>; models: Model[]; history?: DrawSnapshot[]; historyDays?: number };
 type Page = 'overview' | 'process' | 'history';
 
-async function fetchLatest(): Promise<DrawSnapshot> {
-  const response = await fetch(API_URL);
+async function fetchLatest(days = 1): Promise<DrawSnapshot> {
+  const response = await fetch(`${API_URL}?days=${days}`);
   if (!response.ok) throw new Error(`資料服務 HTTP ${response.status}`);
   return await response.json() as DrawSnapshot;
 }
@@ -69,6 +69,7 @@ export function BingoResearchView() {
   const sorted = useMemo(() => [...draws].sort((a, b) => Number(b.period) - Number(a.period) || b.fetchedAt - a.fetchedAt), [draws]);
   const drawsRef = useRef(draws);
   const syncingRef = useRef(false);
+  const lastRepairRef = useRef(0);
   const folderId = useSelectedItemsStore((s) => s.lastFolderId);
   const [syncing, setSyncing] = useState(false); const [error, setError] = useState(''); const [lastSync, setLastSync] = useState<number | null>(null); const [historyDays, setHistoryDays] = useState(30); const [now, setNow] = useState(() => new Date()); const [page, setPage] = useState<Page>('overview');
   const latest = sorted[0];
@@ -83,7 +84,13 @@ export function BingoResearchView() {
     if (syncingRef.current) return;
     syncingRef.current = true; setSyncing(true); setError('');
     try {
-      const snapshot = await fetchLatest(); setHistoryDays(snapshot.historyDays ?? 30); const records = snapshot.history?.length ? snapshot.history : [snapshot]; const savedAt = Date.now(); let newCount = 0;
+      const nowMs = Date.now();
+      const repairDue = drawsRef.current.length === 0 || nowMs - lastRepairRef.current >= 6 * 60 * 60 * 1000;
+      let snapshot = await fetchLatest(repairDue ? 30 : 1);
+      const currentLatestPeriod = drawsRef.current.reduce((latestPeriod, draw) => Math.max(latestPeriod, Number(draw.period) || 0), 0);
+      if (!repairDue && Number(snapshot.period) > currentLatestPeriod) snapshot = await fetchLatest(30);
+      if (repairDue) lastRepairRef.current = nowMs;
+      setHistoryDays(snapshot.historyDays ?? 30); const records = snapshot.history?.length ? snapshot.history : [snapshot]; const savedAt = nowMs; let newCount = 0;
       const existingPeriods = new Set(drawsRef.current.map((draw) => draw.period));
       for (const record of records) {
         if (existingPeriods.has(record.period)) continue;
@@ -96,7 +103,19 @@ export function BingoResearchView() {
     finally { syncingRef.current = false; setSyncing(false); }
   }, [folderId]);
 
-  useEffect(() => { void sync(false); const timer = setInterval(() => void sync(false), 300000); return () => clearInterval(timer); }, [sync]);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let cancelled = false;
+    const pollNearNextDraw = async () => {
+      await sync(false);
+      if (cancelled) return;
+      const nextDraw = getNextDraw(new Date());
+      const waitMs = Math.max(30_000, nextDraw.getTime() - Date.now() - 30_000);
+      timer = setTimeout(() => void pollNearNextDraw(), waitMs);
+    };
+    void pollNearNextDraw();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [sync]);
   useEffect(() => { const timer = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(timer); }, []);
   const nextDraw = getNextDraw(now); const taipeiTime = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', dateStyle: 'medium', timeStyle: 'medium' }).format(now);
 

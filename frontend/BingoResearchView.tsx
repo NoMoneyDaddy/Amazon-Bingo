@@ -14,6 +14,7 @@ type Evolution = Record<
   string,
   {
     empiricalWeight?: number;
+    castingSource?: string;
     validationSamples?: number;
     score?: number | null;
     status?: string;
@@ -31,6 +32,7 @@ type Model = {
     empiricalWeights?: Record<string, number>;
     evolution?: Evolution;
     targetCastings?: Record<string, string>;
+    targetCastingValues?: Record<string, string>;
   };
   official: {
     size: string;
@@ -226,8 +228,8 @@ function targetLabel(target: string) {
 }
 
 function modelPlainLanguage(name: string) {
-  if (name === "梅花易數") return "用年月日時取上下卦與動爻，再和歷史頻率比較。";
-  if (name === "六爻八卦") return "把期號逐位轉成六個爻值，公開判定陰陽與動爻；這是研究映射，不是假稱真的擲錢。";
+  if (name === "梅花易數") return "用預測當下的年支、農曆月日與時辰取上下卦、動爻；期號與玩法只是所問事項。";
+  if (name === "六爻八卦") return "用數位蓍草執行分二、掛一、揲四、歸奇三變，逐爻得到六、七、八、九；期號與玩法只是所問事項。";
   if (name === "河圖洛書") return "用九宮數字定位，再觀察號碼和九宮位置的關係。";
   if (name === "數字卦（楚簡研究版）") return "採用文獻記載的數字集合，將期號轉成六個可重算數字特徵。";
   if (name === "奇門遁甲（九宮研究版）") return "取九宮、九星、八門三個結構做簡化特徵，不冒充完整奇門排盤。";
@@ -482,10 +484,10 @@ export function BingoResearchView() {
                       <div className="mt-1 text-[11px] text-amber-200">{model.status || "版本狀態未保存"}</div>
                       <p className="mt-1 text-xs leading-5 text-slate-400">{modelPlainLanguage(model.name)}</p>
                       <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900 p-2 text-[11px] leading-5 text-slate-300">
-                        <span className="text-cyan-200">起卦依據：</span>每個玩法／星級均以目標期號與玩法序號獨立起卦；不是共用開獎時間或固定亂數。
+                        <span className="text-cyan-200">起卦依據：</span>每個玩法／星級均以預測當下時間獨立起卦；目標期號與玩法只標記問題，不直接硬編碼成卦象。
                         <div className="mt-2 space-y-1">
                           {Object.entries(model.calculation?.targetCastings || {}).map(([target, formula]) => (
-                            <div key={target} className="break-words"><span className="text-amber-200">{targetLabel(target)}：</span>{formula}</div>
+                            <div key={target} className="break-words"><span className="text-amber-200">{targetLabel(target)}：</span>{formula}{model.calculation?.targetCastingValues?.[target] ? `｜結果：${model.calculation.targetCastingValues[target]}` : ""}</div>
                           ))}
                         </div>
                       </div>

@@ -30,6 +30,7 @@ type Model = {
     empiricalWeight?: number;
     empiricalWeights?: Record<string, number>;
     evolution?: Evolution;
+    targetCastings?: Record<string, string>;
   };
   official: {
     size: string;
@@ -481,7 +482,12 @@ export function BingoResearchView() {
                       <div className="mt-1 text-[11px] text-amber-200">{model.status || "版本狀態未保存"}</div>
                       <p className="mt-1 text-xs leading-5 text-slate-400">{modelPlainLanguage(model.name)}</p>
                       <div className="mt-2 rounded-lg border border-slate-700 bg-slate-900 p-2 text-[11px] leading-5 text-slate-300">
-                        <span className="text-cyan-200">實際公式：</span>{model.calculation?.formula || "舊版紀錄沒有保存公式"}
+                        <span className="text-cyan-200">起卦依據：</span>每個玩法／星級均以目標期號與玩法序號獨立起卦；不是共用開獎時間或固定亂數。
+                        <div className="mt-2 space-y-1">
+                          {Object.entries(model.calculation?.targetCastings || {}).map(([target, formula]) => (
+                            <div key={target} className="break-words"><span className="text-amber-200">{targetLabel(target)}：</span>{formula}</div>
+                          ))}
+                        </div>
                       </div>
                       <div className="mt-3">
                         <div className="mb-2 text-xs font-medium text-amber-200">各玩法／星級的歷史權重</div>

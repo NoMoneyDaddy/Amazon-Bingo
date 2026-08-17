@@ -160,19 +160,40 @@ function parseChineseCalendarParts(value) {
   };
 }
 
-function meihuaCasting(snapshot) {
-  const t = parseTaipeiParts(snapshot.drawAt);
-  const lunar = parseChineseCalendarParts(snapshot.drawAt);
-  const yearBranch = ((t.year - 4) % 12 + 12) % 12 + 1;
-  const total = yearBranch + lunar.month + lunar.day;
-  const upper = total % 8 || 8;
-  const lower = (total + lunar.hour) % 8 || 8;
-  const moving = (total + lunar.hour) % 6 || 6;
-  return { upper, lower, moving, calendar: { yearBranch, lunarMonth: lunar.month, lunarDay: lunar.day, hour: lunar.hour }, formula: `年支=${yearBranch}、農曆月=${lunar.month}、日=${lunar.day}；上卦=(年支+月+日) mod 8=${upper}；下卦=(年支+月+日+時) mod 8=${lower}；動爻 mod 6=${moving}` };
+function playIndex(target) {
+  if (target === 'size') return 1;
+  if (target === 'oddEven') return 2;
+  if (target === 'superNumber') return 3;
+  const star = Number(String(target).replace('星', ''));
+  return Number.isFinite(star) && star > 0 ? star + 3 : 1;
 }
 
-function sixyaoCasting(snapshot) {
-  const seedDigits = String(snapshot.period).split('').map(Number);
+function targetInput(snapshot, target) {
+  const targetNo = playIndex(target);
+  const periodDigits = String(snapshot.period).split('').map(Number);
+  const periodValue = Number(snapshot.period);
+  return {
+    target,
+    targetNo,
+    period: String(snapshot.period),
+    periodValue,
+    digitSum: digitSum(String(snapshot.period)),
+    inputDigits: [...periodDigits, targetNo],
+  };
+}
+
+function meihuaCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
+  const total = input.periodValue + input.digitSum + input.targetNo;
+  const upper = total % 8 || 8;
+  const lower = (total + input.targetNo) % 8 || 8;
+  const moving = (total + input.targetNo) % 6 || 6;
+  return { input, upper, lower, moving, formula: `目標期號=${input.period}、玩法序號=${input.targetNo}；數字起卦上卦=(期號+期號數字和+玩法序號) mod 8=${upper}；下卦=(上式總和+玩法序號) mod 8=${lower}；動爻 mod 6=${moving}` };
+}
+
+function sixyaoCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
+  const seedDigits = input.inputDigits;
   const lines = Array.from({ length: 6 }, () => {
     const digit = seedDigits.shift() ?? 0;
     seedDigits.push(digit);
@@ -180,38 +201,38 @@ function sixyaoCasting(snapshot) {
     return { sourceDigit: digit, value, moving: value === 6 || value === 9 };
   });
   const binary = lines.map((line) => line.value === 6 || line.value === 8 ? 0 : 1).reverse().join('');
-  return { lines, binary, formula: '將期號數字逐位映射為 6、7、8、9；6/9 為動爻，6/8 為陰，7/9 為陽，再由下往上排列。這是可重算的研究映射，不宣稱等同實際擲錢。' };
+  return { input, lines, binary, formula: `目標期號=${input.period}、玩法序號=${input.targetNo}；將期號與玩法序號逐位映射為 6、7、8、9，6/9 為動爻，6/8 為陰，7/9 為陽，再由下往上排列。這是正統六爻數字起卦的賓果適配，不宣稱等同實際擲錢。` };
 }
 
-function luoshuCasting(snapshot) {
-  const t = parseTaipeiParts(snapshot.drawAt);
+function luoshuCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
   const luoshu = [[4, 9, 2], [3, 5, 7], [8, 1, 6]];
-  const palace = (t.year + t.month + t.day + t.hour) % 9;
-  const row = luoshu[Math.floor(palace / 3)];
+  const palace = (input.periodValue + input.digitSum + input.targetNo) % 9;
   const center = luoshu[Math.floor(palace / 3)][palace % 3];
-  return { luoshu, palace: palace + 1, center, formula: `以年月日時總和 mod 9 定洛書宮位=${palace + 1}；宮位數=${center}` };
+  return { input, luoshu, palace: palace + 1, center, formula: `目標期號=${input.period}、玩法序號=${input.targetNo}；以期號值+數字和+玩法序號 mod 9 定洛書宮位=${palace + 1}；宮位數=${center}` };
 }
 
-function numeralGuaCasting(snapshot) {
-  const sourceDigits = String(snapshot.period).split('').map(Number);
+function numeralGuaCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
+  const sourceDigits = input.inputDigits;
   const allowed = [1, 4, 5, 6, 8, 9];
   const digits = Array.from({ length: 6 }, (_, index) => allowed[(sourceDigits[index % sourceDigits.length] + index + digitSum(snapshot.period)) % allowed.length]);
-  return { digits, formula: `依數字卦文獻使用的數字集合 ${allowed.join('、')}，將期號逐位及位置索引映射成六個可重算數字：${digits.join('、')}` };
+  return { input, digits, formula: `目標期號=${input.period}、玩法序號=${input.targetNo}；依數字卦文獻使用的數字集合 ${allowed.join('、')}，將期號與玩法序號映射成六個可重算數字：${digits.join('、')}` };
 }
 
-function qimenCasting(snapshot) {
-  const sum = digitSum(snapshot.period);
-  const palace = (Number(snapshot.period) + sum) % 9 + 1;
-  const star = (sum + Number(snapshot.period.slice(-2))) % 9 + 1;
-  const door = (Number(snapshot.period.slice(-2)) + sum) % 8 + 1;
-  return { palace, star, door, formula: `九宮位置=(期號+期號數字和) mod 9=${palace}；九星=${star}；八門=${door}。這是把奇門的九宮／九星／八門結構轉成研究特徵，未宣稱完整奇門排盤。` };
+function qimenCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
+  const palace = (input.periodValue + input.digitSum + input.targetNo) % 9 + 1;
+  const star = (input.digitSum + input.targetNo + Number(snapshot.period.slice(-2))) % 9 + 1;
+  const door = (Number(snapshot.period.slice(-2)) + input.digitSum + input.targetNo) % 8 + 1;
+  return { input, palace, star, door, formula: `目標期號=${input.period}、玩法序號=${input.targetNo}；九宮=(期號+數字和+玩法序號) mod 9=${palace}；九星=${star}；八門=${door}。這是完整排局前提下的奇門結構適配，未宣稱完整奇門排盤。` };
 }
 
-function taiyiCasting(snapshot) {
-  const sum = digitSum(snapshot.period);
-  const palace = (Number(snapshot.period) + sum) % 9 + 1;
-  const cycle = (Number(snapshot.period) + sum) % 9;
-  return { palace, cycle, formula: `以太乙行九宮的文獻結構建立可重算索引：行宮=(期號+期號數字和) mod 9=${palace}；九宮循環位=${cycle}` };
+function taiyiCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
+  const palace = (input.periodValue + input.digitSum + input.targetNo) % 9 + 1;
+  const cycle = (input.periodValue + input.digitSum + input.targetNo) % 9;
+  return { input, palace, cycle, formula: `目標期號=${input.period}、玩法序號=${input.targetNo}；依太乙行九宮結構，行宮=(期號+數字和+玩法序號) mod 9=${palace}；九宮循環位=${cycle}。這是完整太乙排局前的結構適配。` };
 }
 
 function historicalFrequencies(history) {
@@ -339,43 +360,61 @@ function evolveProfiles(history = []) {
   }));
 }
 
+function castingFor(kind, snapshot, target) {
+  if (kind === 'meihua') return meihuaCasting(snapshot, target);
+  if (kind === 'sixyao') return sixyaoCasting(snapshot, target);
+  if (kind === 'luoshu') return luoshuCasting(snapshot, target);
+  if (kind === 'numeral-gua') return numeralGuaCasting(snapshot, target);
+  if (kind === 'qimen') return qimenCasting(snapshot, target);
+  return taiyiCasting(snapshot, target);
+}
+
+function traditionFor(kind, casting) {
+  if (kind === 'meihua') return { kind, upper: casting.upper, lower: casting.lower, moving: casting.moving };
+  if (kind === 'sixyao') return { kind, bits: casting.binary, moving: casting.lines.filter((line) => line.moving).length, lower: 1 };
+  if (kind === 'luoshu') return { kind, center: casting.center };
+  if (kind === 'numeral-gua') return { kind, digits: casting.digits };
+  return { kind, palace: casting.palace, star: casting.star, door: casting.door, cycle: casting.cycle };
+}
+
+function targetTraditionalCategory(casting, target, seed) {
+  const value = casting.upper || casting.palace || casting.center || casting.digits?.[0] || casting.cycle || seed;
+  if (target === 'size') return value % 2 === 0 ? '大' : '小';
+  return value % 2 === 0 ? '雙' : '單';
+}
+
 function buildModels(snapshot, history = [], options = {}) {
   const profiles = options.profiles || (options.evolve === false ? {} : evolveProfiles(history));
-  const meihua = meihuaCasting(snapshot);
-  const sixyao = sixyaoCasting(snapshot);
-  const luoshu = luoshuCasting(snapshot);
-  const numeralGua = numeralGuaCasting(snapshot);
-  const qimen = qimenCasting(snapshot);
-  const taiyi = taiyiCasting(snapshot);
   const methods = [
-    { name: '梅花易數', kind: 'meihua', status: '正統起卦核心＋賓果適配', tradition: { kind: 'meihua', ...meihua }, seed: Number(snapshot.period) + 11, calculation: meihua },
-    { name: '六爻八卦', kind: 'sixyao', status: '正統六爻結構核心＋期號起卦適配', tradition: { kind: 'sixyao', bits: sixyao.binary, moving: sixyao.lines.filter((line) => line.moving).length, lower: 1 }, seed: Number(snapshot.period) + 37, calculation: sixyao },
-    { name: '河圖洛書', kind: 'luoshu', status: '洛書九宮核心＋賓果適配', tradition: { kind: 'luoshu', center: luoshu.center }, seed: Number(snapshot.period) + 61, calculation: luoshu },
-    { name: '數字卦（楚簡研究版）', kind: 'numeral-gua', status: '文獻數字結構＋研究適配，非完整復原', tradition: { kind: 'numeral-gua', digits: numeralGua.digits }, seed: Number(snapshot.period) + 73, calculation: numeralGua },
-    { name: '奇門遁甲（九宮研究版）', kind: 'qimen', status: '九宮／九星／八門核心，非完整排局', tradition: { kind: 'qimen', ...qimen }, seed: Number(snapshot.period) + 89, calculation: qimen },
-    { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心，非完整太乙排局', tradition: { kind: 'taiyi', ...taiyi }, seed: Number(snapshot.period) + 97, calculation: taiyi },
+    { name: '梅花易數', kind: 'meihua', status: '正統數字起卦核心＋目標玩法適配', seedOffset: 11 },
+    { name: '六爻八卦', kind: 'sixyao', status: '正統六爻結構核心＋目標玩法數字起卦適配', seedOffset: 37 },
+    { name: '河圖洛書', kind: 'luoshu', status: '洛書九宮核心＋目標玩法適配', seedOffset: 61 },
+    { name: '數字卦（楚簡研究版）', kind: 'numeral-gua', status: '文獻數字結構＋目標玩法研究適配，非完整復原', seedOffset: 73 },
+    { name: '奇門遁甲（九宮研究版）', kind: 'qimen', status: '九宮／九星／八門核心＋目標玩法適配，非完整排局', seedOffset: 89 },
+    { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心＋目標玩法適配，非完整太乙排局', seedOffset: 97 },
   ];
   return methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
     const weights = Object.fromEntries(predictionTargets.map((target) => [target, targetProfile(profiles, method.name, target).empiricalWeight ?? 0.32]));
-    const picksByTarget = Object.fromEntries(predictionTargets.filter((target) => target !== 'size' && target !== 'oddEven').map((target, index) => [
-      target, scoreNumbers(method.seed + index * 101, 10, method.tradition, history, weights[target]),
-    ]));
-    const picks = picksByTarget['10星'] || scoreNumbers(method.seed, 10, method.tradition, history, weights.superNumber);
-    const modelSeed = method.seed;
+    const targetCastings = Object.fromEntries(predictionTargets.map((target) => [target, castingFor(method.kind, snapshot, target)]));
+    const picksByTarget = Object.fromEntries(predictionTargets.filter((target) => target !== 'size' && target !== 'oddEven').map((target) => {
+      const casting = targetCastings[target];
+      const seed = Number(snapshot.period) + method.seedOffset + playIndex(target) * 101;
+      return [target, scoreNumbers(seed, 10, traditionFor(method.kind, casting), history, weights[target])];
+    }));
+    const picks = picksByTarget['10星'] || scoreNumbers(Number(snapshot.period) + method.seedOffset, 10, traditionFor(method.kind, targetCastings['10星']), history, weights.superNumber);
+    const modelSeed = Number(snapshot.period) + method.seedOffset;
     const sumBand = ['低區', '中區', '高區'][modelSeed % 3];
     const oddEvenCount = ['單數偏多', '雙數偏多', '均衡'][modelSeed % 3];
     const highLowCount = ['小號偏多', '大號偏多', '均衡'][Math.floor(modelSeed / 3) % 3];
-    const traditionalSize = modelSeed % 2 === 0 ? '大' : '小';
-    const traditionalOddEven = modelSeed % 3 === 0 ? '雙' : '單';
     return {
       name: method.name,
       rule: `${method.status}；歷史頻率只做獨立統計排序，不修改傳統規則，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
-      calculation: { method: method.kind, ...method.calculation, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null },
+      calculation: { method: method.kind, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])) },
       official: {
-        size: categoryPrediction(modelSeed, traditionalSize, history, 'size', weights.size),
-        oddEven: categoryPrediction(modelSeed, traditionalOddEven, history, 'oddEven', weights.oddEven),
+        size: categoryPrediction(modelSeed, targetTraditionalCategory(targetCastings.size, 'size', modelSeed), history, 'size', weights.size),
+        oddEven: categoryPrediction(modelSeed, targetTraditionalCategory(targetCastings.oddEven, 'oddEven', modelSeed), history, 'oddEven', weights.oddEven),
         superNumber: (picksByTarget.superNumber || picks)[modelSeed % (picksByTarget.superNumber || picks).length],
         basic: Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
           const target = `${index + 1}星`;
@@ -503,7 +542,8 @@ const server = http.createServer(async (req, res) => {
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
       const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : 600);
       if (persisted.length && !daysOverride) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
-      if (persisted.length && daysOverride === 1) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 1, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      const hasTargetAwareModels = persisted.length && persisted[0].models?.length && persisted[0].models.every((model) => Object.keys(model.calculation?.targetCastings || {}).length === predictionTargets.length);
+      if (persisted.length && daysOverride === 1 && hasTargetAwareModels) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 1, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       return send(res, 200, await latest(daysOverride));
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }
   }

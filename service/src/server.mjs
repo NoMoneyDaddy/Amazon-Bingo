@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v50-realtime-casting-time';
+const reproducibilityVersion = 'bingo-research-v52-fast-sync-timeout';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -1450,11 +1450,12 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         const modelCastingAt = isNextPrediction ? predictionCastingAt : castingAt;
         const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt, castingAt: modelCastingAt } : { ...item, castingAt };
         const modelHistory = rawHistory.slice(index + 1, index + maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
-        // 歷史回測一律重新計算，禁止重用可能由舊版本或錯誤資料集產生的模型快取。
-        // 歷史折只用固定預設權重以控制成本；下一期才在其目標期以前資料上做 walk-forward 調參。
-        const models = index > maxModelHistory
-          ? []
-          : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: isNextPrediction, castingAt: modelCastingAt });
+        // 同步只重新計算最新一期的「當期 → 下一期」模型。
+        // 舊歷史模型若已存在就保留；同步歷史資料不應逐期重新啟動 worker，否則 31 日查詢會阻塞首屏。
+        const previous = historyByPeriod.get(String(item.period));
+        const models = isNextPrediction
+          ? await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt })
+          : previous?.models || item.models || [];
         history.push({
           ...item,
           drawAt,

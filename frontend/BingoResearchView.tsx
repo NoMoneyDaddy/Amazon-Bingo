@@ -237,7 +237,7 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
     const controller = new AbortController();
     const timeout = window.setTimeout(
       () => controller.abort("資料服務逾時"),
-      12_000,
+      30_000,
     );
     try {
       const response = await fetch(`${API_URL}?days=${days}&castingAt=${encodeURIComponent(castingAt)}`, {

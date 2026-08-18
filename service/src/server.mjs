@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v66-settlement-weighted-zones';
+const reproducibilityVersion = 'bingo-research-v67-calibrated-baselines';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -542,7 +542,9 @@ function zodiacElementCasting(snapshot, target) {
 
 function historicalFrequencies(history) {
   const counts = Array(81).fill(0);
-  history.forEach((draw, index) => draw.numbers.forEach((number) => { counts[Number(number)] += 1 / (index + 1); }));
+  // 頻率是「出現期數／期數」，不可把每期的 20 球當成 80 次獨立抽樣，
+  // 也不可用未正規化的倒數時間權重冒充機率；近期性另由分段窗口處理。
+  history.forEach((draw) => draw.numbers.forEach((number) => { counts[Number(number)] += 1; }));
   const total = history.length || 1;
   return counts.map((count) => count / total);
 }
@@ -568,6 +570,40 @@ function hypergeometricInclusion(number, history) {
   const draws = history.length;
   const hits = history.reduce((sum, draw) => sum + (draw.numbers.some((value) => Number(value) === number) ? 1 : 0), 0);
   return (hits + 1) / (draws + 4);
+}
+
+function frequencyBaselinePrediction(history, count = 10) {
+  const frequencies = windowFrequencies(history, Math.min(60, Math.max(1, history.length)));
+  return Array.from({ length: 80 }, (_, index) => index + 1)
+    .sort((a, b) => frequencies[b] - frequencies[a] || a - b)
+    .slice(0, count)
+    .sort((a, b) => a - b)
+    .map((number) => String(number).padStart(2, '0'));
+}
+
+function betaBaselinePrediction(history, count = 10) {
+  return Array.from({ length: 80 }, (_, index) => index + 1)
+    .sort((a, b) => hypergeometricInclusion(b, history) - hypergeometricInclusion(a, history) || a - b)
+    .slice(0, count)
+    .sort((a, b) => a - b)
+    .map((number) => String(number).padStart(2, '0'));
+}
+
+function deterministicBootstrap(values, seed = '') {
+  if (!values.length) return { mean: null, lower: null, upper: null, samples: 0 };
+  const replications = Math.min(400, Math.max(200, values.length * 20));
+  const means = [];
+  for (let replication = 0; replication < replications; replication += 1) {
+    let total = 0;
+    for (let index = 0; index < values.length; index += 1) {
+      const random = deterministicTie(`${seed}|${replication}`, index);
+      total += values[Math.floor(random * values.length)];
+    }
+    means.push(total / values.length);
+  }
+  means.sort((a, b) => a - b);
+  const at = (q) => means[Math.min(means.length - 1, Math.max(0, Math.floor(q * means.length)))];
+  return { mean: values.reduce((sum, value) => sum + value, 0) / values.length, lower: at(0.025), upper: at(0.975), samples: replications };
 }
 
 function behaviorAudit(draws = []) {
@@ -963,7 +999,8 @@ function forecastEvaluation(history = []) {
       samples: 0,
       size: { brier: 0, logLoss: 0, randomBrier: 0.25, randomLogLoss: Math.log(2), wins: 0, randomWins: 0 },
       oddEven: { brier: 0, logLoss: 0, randomBrier: 0.25, randomLogLoss: Math.log(2), wins: 0, randomWins: 0 },
-      tenStar: { meanMatches: 0, randomMeanMatches: 0, positiveProfitRate: 0, randomPositiveProfitRate: 0, wins: 0, randomWins: 0 },
+      tenStar: { meanMatches: 0, randomMeanMatches: 0, frequencyMeanMatches: 0, betaMeanMatches: 0, positiveProfitRate: 0, randomPositiveProfitRate: 0, wins: 0, randomWins: 0 },
+      deltas: { sizeBrier: [], oddEvenBrier: [], tenStarRandom: [], tenStarFrequency: [], tenStarBeta: [] },
     };
     result.samples += 1;
     ['size', 'oddEven'].forEach((target) => {
@@ -971,8 +1008,12 @@ function forecastEvaluation(history = []) {
       const actualValue = target === 'size' ? actual.size : actual.oddEven;
       const correct = normalizeDrawCategory(predicted, target) === normalizeDrawCategory(actualValue, target);
       const probability = prequentialCategoryProbability(target, model.name, prior).probability;
-      result[target].brier += (probability - 1) ** 2;
-      result[target].logLoss += -Math.log(probability);
+      // 真值必須由目標期實際結果決定；舊版把每期 outcome 固定成 1，
+      // 會讓未命中的 Brier／Log Loss 也被當成命中。
+      const outcome = correct ? 1 : 0;
+      result[target].brier += (probability - outcome) ** 2;
+      result[target].logLoss += -Math.log(outcome ? probability : 1 - probability);
+      result.deltas[target === 'size' ? 'sizeBrier' : 'oddEvenBrier'].push((probability - outcome) ** 2 - (0.5 - outcome) ** 2);
       result[target].wins += correct ? 1 : 0;
       const randomValue = randomPrediction(target, `random-baseline|${model.name}|${target}|${actual.period}|${recordIndex}`);
       const randomCorrect = normalizeDrawCategory(randomValue, target) === normalizeDrawCategory(actualValue, target);
@@ -981,8 +1022,15 @@ function forecastEvaluation(history = []) {
     const predictedNumbers = model.official.basic?.['10星'] || [];
     const actualNumbers = new Set(actual.numbers);
     const randomNumbers = randomPrediction('10星', `random-baseline|${model.name}|10星|${actual.period}|${recordIndex}`);
+    const frequencyNumbers = frequencyBaselinePrediction(prior, 10);
+    const betaNumbers = betaBaselinePrediction(prior, 10);
     result.tenStar.meanMatches += predictedNumbers.filter((number) => actualNumbers.has(number)).length;
     result.tenStar.randomMeanMatches += randomNumbers.filter((number) => actualNumbers.has(number)).length;
+    result.tenStar.frequencyMeanMatches = (result.tenStar.frequencyMeanMatches || 0) + frequencyNumbers.filter((number) => actualNumbers.has(number)).length;
+    result.tenStar.betaMeanMatches = (result.tenStar.betaMeanMatches || 0) + betaNumbers.filter((number) => actualNumbers.has(number)).length;
+    result.deltas.tenStarRandom.push(predictedNumbers.filter((number) => actualNumbers.has(number)).length - randomNumbers.filter((number) => actualNumbers.has(number)).length);
+    result.deltas.tenStarFrequency.push(predictedNumbers.filter((number) => actualNumbers.has(number)).length - frequencyNumbers.filter((number) => actualNumbers.has(number)).length);
+    result.deltas.tenStarBeta.push(predictedNumbers.filter((number) => actualNumbers.has(number)).length - betaNumbers.filter((number) => actualNumbers.has(number)).length);
     result.tenStar.wins += hasPositiveProfit('10星', predictedNumbers, actual) ? 1 : 0;
     result.tenStar.randomWins += hasPositiveProfit('10星', randomNumbers, actual) ? 1 : 0;
     byModel.set(model.name, result);
@@ -995,7 +1043,14 @@ function forecastEvaluation(history = []) {
       samples: result.samples,
       size: { brier: result.size.brier / samples, logLoss: result.size.logLoss / samples, randomBrier: result.size.randomBrier, randomLogLoss: result.size.randomLogLoss, winRate: result.size.wins / samples, randomWinRate: result.size.randomWins / samples },
       oddEven: { brier: result.oddEven.brier / samples, logLoss: result.oddEven.logLoss / samples, randomBrier: result.oddEven.randomBrier, randomLogLoss: result.oddEven.randomLogLoss, winRate: result.oddEven.wins / samples, randomWinRate: result.oddEven.randomWins / samples },
-      tenStar: { meanMatches: result.tenStar.meanMatches / samples, randomMeanMatches: result.tenStar.randomMeanMatches / samples, positiveProfitRate: result.tenStar.wins / samples, randomPositiveProfitRate: result.tenStar.randomWins / samples },
+      tenStar: { meanMatches: result.tenStar.meanMatches / samples, randomMeanMatches: result.tenStar.randomMeanMatches / samples, frequencyMeanMatches: (result.tenStar.frequencyMeanMatches || 0) / samples, betaMeanMatches: (result.tenStar.betaMeanMatches || 0) / samples, positiveProfitRate: result.tenStar.wins / samples, randomPositiveProfitRate: result.tenStar.randomWins / samples },
+      uncertainty: {
+        sizeBrierDeltaVsUniform: deterministicBootstrap(result.deltas.sizeBrier, `${result.name}|size-brier`),
+        oddEvenBrierDeltaVsUniform: deterministicBootstrap(result.deltas.oddEvenBrier, `${result.name}|odd-even-brier`),
+        tenStarMatchesDeltaVsRandom: deterministicBootstrap(result.deltas.tenStarRandom, `${result.name}|10-star-random`),
+        tenStarMatchesDeltaVsFrequency: deterministicBootstrap(result.deltas.tenStarFrequency, `${result.name}|10-star-frequency`),
+        tenStarMatchesDeltaVsBayes: deterministicBootstrap(result.deltas.tenStarBeta, `${result.name}|10-star-bayes`),
+      },
       caveat: '機率由目標期以前的 prequential 命中率以 Beta(1,1) 平滑估計；不使用當期結果倒推信心，仍不代表下一期具有可預測性。',
     };
   });
@@ -1356,7 +1411,8 @@ function researchAudit(draws = []) {
 }
 
 function evolveProfiles(history = []) {
-  const candidates = [0.24, 0.32, 0.40];
+  // 0 是純基線；其餘只允許小幅候選，避免人工權重跳躍造成過擬合。
+  const candidates = [0, 0.12, 0.24, 0.32];
   // 參數調校維持 30 期快取 walk-forward，避免同步延遲；長期 300 期評估另行執行。
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - 1));
   // 所有玩法都使用同一套 walk-forward + Wilson 下限規則，不讓 4～10 星退回固定權重。
@@ -1403,7 +1459,9 @@ function evolveProfiles(history = []) {
     });
     const best = results.sort((a, b) => (b.roi ?? -Infinity) - (a.roi ?? -Infinity) || b.confidence - a.confidence || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0] || { empiricalWeight: 0, wins: 0, trials: 0, score: null, baselineRate: null, estimatedRate: 0, confidence: 0, roi: null, baselineRoi: null, validationSamples: 0 };
     const eligible = best.roi != null && best.baselineRoi != null && best.roi > best.baselineRoi && best.profit > 0 && best.confidence > (best.baselineRate ?? 0);
-    return [target, { ...best, empiricalWeight: eligible ? best.empiricalWeight : 0, eligible, status: eligible ? `walk-forward ${validationWindow} 期／ROI ${(best.roi * 100).toFixed(1)}%，平均每期 ${best.averageProfit.toFixed(2)} 元，超過理論基線，納入權重` : `walk-forward ${validationWindow} 期／淨利／ROI 未可靠超過理論基線，不納入權重` }];
+    const evidenceShrink = eligible ? clamp((best.validationSamples - 10) / 30, 0.25, 1) : 0;
+    const effectiveWeight = eligible ? Number((best.empiricalWeight * evidenceShrink).toFixed(4)) : 0;
+    return [target, { ...best, empiricalWeight: effectiveWeight, selectedWeight: best.empiricalWeight, evidenceShrink, eligible, status: eligible ? `walk-forward ${validationWindow} 期／ROI ${(best.roi * 100).toFixed(1)}%，證據收縮 ${(evidenceShrink * 100).toFixed(0)}%，納入有限權重` : `walk-forward ${validationWindow} 期／淨利／ROI 未可靠超過理論基線，不納入權重` }];
   })) }]));
 }
 
@@ -1570,6 +1628,10 @@ function buildMlNegativeControl(snapshot, history, castingAt, options = {}) {
 
 function aggregateModel(models, history) {
   const eligibleModels = models.filter((model) => model.calculation?.predictionEligible !== false);
+  const hasValidatedWeight = eligibleModels.some((model) => predictionTargets.some((target) => {
+    const evolution = model.calculation?.evolution?.[target];
+    return evolution?.eligible === true && Number(evolution?.empiricalWeight) > 0;
+  }));
   const weightFor = (model, target) => {
     const evolution = model.calculation?.evolution?.[target];
     const score = evolution?.score;
@@ -1577,6 +1639,8 @@ function aggregateModel(models, history) {
     const confidence = evolution?.confidence;
     const roi = evolution?.roi;
     const baselineRoi = evolution?.baselineRoi;
+    // 沒有任何模型通過驗證時，只保留超幾何模型作透明 fallback；不把文化規則硬湊成共識。
+    if (!hasValidatedWeight && model.calculation?.method === 'hypergeometric') return 1;
     if (evolution?.eligible !== true || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
     // 聚合權重以 ROI 超額為主，再用命中率信賴下限與樣本量收縮，避免短樣本高派彩偶然主導共識。
     const roiUplift = Math.max(0, Math.min(1, roi - baselineRoi));
@@ -1618,7 +1682,7 @@ function aggregateModel(models, history) {
   const zonePredictions = NUMBER_ZONES.map((zone) => {
     const totals = new Map();
     eligibleModels.forEach((model) => {
-      const weight = weightFor(model, '10星') || (eligibleModels.length ? 1 / eligibleModels.length : 0);
+      const weight = weightFor(model, '10星');
       const zoneResult = model.research?.zonePredictions?.find((item) => item.key === zone.key);
       if (weight <= 0 || !zoneResult) return;
       (zoneResult.numbers || []).forEach((number) => totals.set(number, (totals.get(number) || 0) + weight));

@@ -138,7 +138,14 @@ type DrawSnapshot = {
     samples: number;
     size: { brier: number; logLoss: number; randomBrier: number; randomLogLoss: number; winRate: number; randomWinRate: number };
     oddEven: { brier: number; logLoss: number; randomBrier: number; randomLogLoss: number; winRate: number; randomWinRate: number };
-    tenStar: { meanMatches: number; randomMeanMatches: number; positiveProfitRate: number; randomPositiveProfitRate: number };
+    tenStar: { meanMatches: number; randomMeanMatches: number; frequencyMeanMatches?: number; betaMeanMatches?: number; positiveProfitRate: number; randomPositiveProfitRate: number };
+    uncertainty?: {
+      sizeBrierDeltaVsUniform?: { mean: number | null; lower: number | null; upper: number | null; samples: number };
+      oddEvenBrierDeltaVsUniform?: { mean: number | null; lower: number | null; upper: number | null; samples: number };
+      tenStarMatchesDeltaVsRandom?: { mean: number | null; lower: number | null; upper: number | null; samples: number };
+      tenStarMatchesDeltaVsFrequency?: { mean: number | null; lower: number | null; upper: number | null; samples: number };
+      tenStarMatchesDeltaVsBayes?: { mean: number | null; lower: number | null; upper: number | null; samples: number };
+    };
     caveat: string;
   }>;
   calibratedProbabilityEvaluation?: Array<{
@@ -1181,8 +1188,9 @@ export function BingoResearchView() {
                           <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-3">
                             <span>大小 Brier {item.size.brier.toFixed(3)}／隨機 {item.size.randomBrier.toFixed(3)}</span>
                             <span>單雙 Brier {item.oddEven.brier.toFixed(3)}／隨機 {item.oddEven.randomBrier.toFixed(3)}</span>
-                            <span>10 星命中 {item.tenStar.meanMatches.toFixed(2)}／隨機 {item.tenStar.randomMeanMatches.toFixed(2)}</span>
+                            <span>10 星命中 {item.tenStar.meanMatches.toFixed(2)}／均勻 {item.tenStar.randomMeanMatches.toFixed(2)}／頻率 {(item.tenStar.frequencyMeanMatches ?? 0).toFixed(2)}／Bayes {(item.tenStar.betaMeanMatches ?? 0).toFixed(2)}</span>
                           </div>
+                          <div className="mt-1 text-[11px] text-muted-foreground">差異 95% CI：隨機 {item.uncertainty?.tenStarMatchesDeltaVsRandom?.lower == null ? "—" : `${item.uncertainty.tenStarMatchesDeltaVsRandom.lower.toFixed(2)}～${item.uncertainty.tenStarMatchesDeltaVsRandom.upper == null ? "—" : item.uncertainty.tenStarMatchesDeltaVsRandom.upper.toFixed(2)}`} · 頻率 {item.uncertainty?.tenStarMatchesDeltaVsFrequency?.lower == null ? "—" : `${item.uncertainty.tenStarMatchesDeltaVsFrequency.lower.toFixed(2)}～${item.uncertainty.tenStarMatchesDeltaVsFrequency.upper == null ? "—" : item.uncertainty.tenStarMatchesDeltaVsFrequency.upper.toFixed(2)}`}</div>
                         </div>
                       ))}
                     </div>

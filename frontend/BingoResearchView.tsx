@@ -241,6 +241,9 @@ type TechnicalAnalysisData = {
 function normalizeModel(value: Partial<Model> | null | undefined): Model {
   const official = (value?.official || {}) as Partial<Model["official"]>;
   const research = (value?.research || {}) as Partial<Model["research"]>;
+  const basic = official.basic && typeof official.basic === "object"
+    ? Object.fromEntries(Object.entries(official.basic).map(([key, numbers]) => [key, sanitizeBingoNumbers(numbers)]))
+    : {};
   const targetResearch = value?.research?.targetResearch && typeof value.research.targetResearch === "object"
     ? Object.fromEntries(Object.entries(value.research.targetResearch).map(([key, rawItem]) => {
       const item = rawItem as Partial<NonNullable<Model["research"]["targetResearch"]>[string]>;
@@ -263,11 +266,11 @@ function normalizeModel(value: Partial<Model> | null | undefined): Model {
     official: {
       size: official.size || "",
       oddEven: official.oddEven || "",
-      superNumber: official.superNumber || "",
-      basic: official.basic && typeof official.basic === "object" ? official.basic : {},
+      superNumber: sanitizeBingoNumber(official.superNumber) || "",
+      basic,
     },
     research: {
-      numberPicks: Array.isArray(research.numberPicks) ? research.numberPicks : [],
+      numberPicks: sanitizeBingoNumbers(research.numberPicks),
       sumBand: research.sumBand || "—",
       oddEvenCount: research.oddEvenCount || "—",
       highLowCount: research.highLowCount || "—",
@@ -283,8 +286,8 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
   return {
     period: String(value.period || ""),
     drawAt: value.drawAt || "",
-    numbers: Array.isArray(value.numbers) ? value.numbers : [],
-    superNumber: value.superNumber || "",
+    numbers: sanitizeBingoNumbers(value.numbers),
+    superNumber: sanitizeBingoNumber(value.superNumber) || "",
     size: value.size || "",
     oddEven: value.oddEven || "",
     source: value.source || "",
@@ -307,6 +310,36 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     zoneProfitabilityEvaluation: Array.isArray(value.zoneProfitabilityEvaluation) ? value.zoneProfitabilityEvaluation : [],
     technicalAnalysis: value.technicalAnalysis,
   };
+}
+
+const LOCAL_FALLBACK_VERSION = "bingo-local-fallback-v1";
+
+function sanitizeBingoNumber(value: unknown): string | null {
+  const parsed = typeof value === "number" || typeof value === "string"
+    ? Number(value)
+    : NaN;
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > 80) return null;
+  return String(parsed).padStart(2, "0");
+}
+
+function sanitizeBingoNumbers(values: unknown, limit = 80): string[] {
+  if (!Array.isArray(values)) return [];
+  const unique = new Set<string>();
+  for (const value of values) {
+    const number = sanitizeBingoNumber(value);
+    if (number) unique.add(number);
+    if (unique.size >= limit) break;
+  }
+  return [...unique].sort((a, b) => Number(a) - Number(b));
+}
+
+function isLocalFallbackModel(model: Model): boolean {
+  return model.name === "本地備援基線"
+    || model.calculation?.algorithmVersion === LOCAL_FALLBACK_VERSION;
+}
+
+function hasFormalModels(models: Model[]): boolean {
+  return models.some((model) => !isLocalFallbackModel(model));
 }
 
 const LATEST_REFRESH_MS = 30_000;
@@ -341,13 +374,33 @@ function mergeDrawSnapshots(current: DrawSnapshot[], incoming: DrawSnapshot[]) {
     if (!draw.period) return;
     const existing = byPeriod.get(draw.period);
     const existingIsFormal = Boolean(existing?.models.length)
-      && !existing?.models.every((model) => model.calculation?.algorithmVersion === "bingo-local-fallback-v1");
+      && hasFormalModels(existing!.models);
     const incomingIsLocalFallback = draw.models.length > 0
-      && draw.models.every((model) => model.calculation?.algorithmVersion === "bingo-local-fallback-v1");
+      && draw.models.every(isLocalFallbackModel);
+    const incomingIsFormal = hasFormalModels(draw.models);
     // 最新一期快速回應可能只有本地備援；不能用它覆蓋已完成的正式模型與回測。
-    byPeriod.set(draw.period, existingIsFormal && incomingIsLocalFallback
-      ? { ...draw, models: existing!.models, profitabilityEvaluation: existing!.profitabilityEvaluation, zoneProfitabilityEvaluation: existing!.zoneProfitabilityEvaluation, forecastEvaluation: existing!.forecastEvaluation, calibratedProbabilityEvaluation: existing!.calibratedProbabilityEvaluation }
-      : draw);
+    if (existingIsFormal && incomingIsLocalFallback) {
+      byPeriod.set(draw.period, {
+        ...draw,
+        models: existing!.models,
+        profitabilityEvaluation: existing!.profitabilityEvaluation,
+        zoneProfitabilityEvaluation: existing!.zoneProfitabilityEvaluation,
+        forecastEvaluation: existing!.forecastEvaluation,
+        calibratedProbabilityEvaluation: existing!.calibratedProbabilityEvaluation,
+      });
+    } else if (existingIsFormal && incomingIsFormal) {
+      // 正式模型可以先於盈利回測抵達；後續空回測回應不可清掉已完成的回測。
+      byPeriod.set(draw.period, {
+        ...existing,
+        ...draw,
+        profitabilityEvaluation: draw.profitabilityEvaluation.length ? draw.profitabilityEvaluation : existing!.profitabilityEvaluation,
+        zoneProfitabilityEvaluation: draw.zoneProfitabilityEvaluation.length ? draw.zoneProfitabilityEvaluation : existing!.zoneProfitabilityEvaluation,
+        forecastEvaluation: draw.forecastEvaluation.length ? draw.forecastEvaluation : existing!.forecastEvaluation,
+        calibratedProbabilityEvaluation: draw.calibratedProbabilityEvaluation.length ? draw.calibratedProbabilityEvaluation : existing!.calibratedProbabilityEvaluation,
+      });
+    } else {
+      byPeriod.set(draw.period, draw);
+    }
   });
   return [...byPeriod.values()].sort(
     (a, b) => Number(b.period) - Number(a.period) || (b.fetchedAt || 0) - (a.fetchedAt || 0),
@@ -406,7 +459,7 @@ function localModel(history: DrawSnapshot[], targetPeriod: string): Model {
   const prediction: Model = {
     name: "本地備援基線", status: "本地備援；正式模型同步中", rule: "只使用目標期以前的官方開獎資料；此為暫時顯示基線，不代表正式模型選擇。",
     sources: [{ name: "台灣彩券官方 API", url: OFFICIAL_API_URL }],
-    calculation: { algorithmVersion: "bingo-local-fallback-v1", historySamples: history.length, predictionEligible: true },
+    calculation: { algorithmVersion: LOCAL_FALLBACK_VERSION, historySamples: history.length, predictionEligible: true },
     official: { size, oddEven, superNumber: localNumberPrediction(history, 1)[0] || "", basic },
     research: { numberPicks: basic["10星"] || [], sumBand: "—", oddEvenCount: "—", highLowCount: "—", zones: [] },
   };
@@ -428,7 +481,7 @@ function localExclusionModel(history: DrawSnapshot[]): Model {
     name: "排除濾網基線", status: "官方資料備援；等待後端 walk-forward 驗證濾網",
     rule: "先排除上一期重複號與短窗過熱號，再從剩餘集合排序；未通過樣本外驗證的濾網不宣稱有效。",
     sources: [{ name: "台灣彩券官方 API", url: OFFICIAL_API_URL }],
-    calculation: { algorithmVersion: "bingo-local-fallback-v1", method: "exclusion", historySamples: history.length, predictionEligible: true, exclusionFilters: { activeFilters: history.length >= 30 ? ["repeat-last-draw", "short-hot"] : [], excludedNumbers: [...excluded].sort((a, b) => a - b).map((value) => String(value).padStart(2, "0")), caveat: "本地備援僅供顯示；正式啟用需由後端 walk-forward 檢驗。" } },
+    calculation: { algorithmVersion: LOCAL_FALLBACK_VERSION, method: "exclusion", historySamples: history.length, predictionEligible: true, exclusionFilters: { activeFilters: history.length >= 30 ? ["repeat-last-draw", "short-hot"] : [], excludedNumbers: [...excluded].sort((a, b) => a - b).map((value) => String(value).padStart(2, "0")), caveat: "本地備援僅供顯示；正式啟用需由後端 walk-forward 檢驗。" } },
     official: { size: localPrediction(history, "size"), oddEven: localPrediction(history, "oddEven"), superNumber: basic["1星"]?.[0] || "", basic },
     research: { numberPicks: basic["10星"] || [], sumBand: "排除後候選", oddEvenCount: "—", highLowCount: "—", zones: [] },
   };
@@ -447,7 +500,7 @@ function localRegressionModel(history: DrawSnapshot[]): Model {
     name: "趨勢加權回歸基線", status: "官方資料備援；等待後端近期超基準閘門",
     rule: "依近 12／60／300 期趨勢與動能排序；正式權重必須通過近期樣本外基準檢驗。",
     sources: [{ name: "台灣彩券官方 API", url: OFFICIAL_API_URL }],
-    calculation: { algorithmVersion: "bingo-local-fallback-v1", method: "trend-weighted-logistic", historySamples: history.length, predictionEligible: false, recentGate: { eligible: false, reason: "本地備援不宣稱回歸優勢" } },
+    calculation: { algorithmVersion: LOCAL_FALLBACK_VERSION, method: "trend-weighted-logistic", historySamples: history.length, predictionEligible: false, recentGate: { eligible: false, reason: "本地備援不宣稱回歸優勢" } },
     official: { size: localPrediction(history, "size"), oddEven: localPrediction(history, "oddEven"), superNumber: basic["1星"]?.[0] || "", basic },
     research: { numberPicks: basic["10星"] || [], sumBand: "趨勢加權候選", oddEvenCount: "—", highLowCount: "—", zones: [] },
   };
@@ -491,6 +544,10 @@ function localProfitability(history: DrawSnapshot[]) {
 function enrichLocalFallback(rows: DrawSnapshot[]) {
   const ordered = [...rows].sort((a, b) => Number(b.period) - Number(a.period));
   const current = ordered[0];
+  if (!current || hasFormalModels(current.models)) {
+    // 正式模型已經存在時，不能因回測尚未完成而覆蓋成備援模型。
+    return { ...current, history: ordered };
+  }
   const model = localModel(ordered.slice(1), String(Number(current.period) + 1));
   const exclusionModel = localExclusionModel(ordered.slice(1));
   const regressionModel = localRegressionModel(ordered.slice(1));
@@ -524,7 +581,8 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
         ? payload.history.map((item) => normalizeSnapshot(item))
         : [normalizeSnapshot(payload)];
       const latest = normalizeSnapshot({ ...payload, history });
-      return latest.models.length && latest.profitabilityEvaluation?.length
+      // 模型與回測是兩個獨立生命週期；回測尚未完成時仍保留正式模型。
+      return hasFormalModels(latest.models)
         ? { ...latest, history }
         : enrichLocalFallback(history);
     } catch (error) {
@@ -865,8 +923,10 @@ const HISTORY_PLAYS = [
 function predictionForPlay(model: Model, key: string) {
   if (key === "size") return ["大", "小"].includes(model.official.size) ? model.official.size : "—";
   if (key === "oddEven") return ["單", "雙"].includes(model.official.oddEven) ? model.official.oddEven : "—";
-  if (key === "superNumber") return model.official.superNumber || "—";
-  return model.official.basic[key]?.join("、") || "—";
+  if (key === "superNumber") return sanitizeBingoNumber(model.official.superNumber) || "—";
+  const expectedCount = Number(key.replace("星", ""));
+  const numbers = sanitizeBingoNumbers(model.official.basic[key], expectedCount);
+  return numbers.length === expectedCount ? numbers.join("、") : "—";
 }
 
 function HistoricalModelDetails({ model, draw }: { model: Model; draw: DrawSnapshot }) {
@@ -1555,13 +1615,7 @@ export function BingoResearchView() {
                           <div className="mb-2 text-xs font-semibold text-amber-200">各玩法／星級差異摘要</div>
                           <div className="grid gap-2 sm:grid-cols-2">
                             {Object.entries(model.research.targetResearch).map(([target, result]) => {
-                              const prediction = target === "size"
-                                ? model.official.size
-                                : target === "oddEven"
-                                  ? model.official.oddEven
-                                  : target === "superNumber"
-                                  ? model.official.superNumber
-                                  : result.numberPicks.join("、");
+                              const prediction = predictionForPlay(model, target);
                               const weight = model.calculation?.empiricalWeights?.[target];
                               const score = model.calculation?.evolution?.[target]?.score;
                               const baselineRate = model.calculation?.evolution?.[target]?.baselineRate;

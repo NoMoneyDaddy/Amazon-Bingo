@@ -2483,7 +2483,10 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   const evaluationHistory = [{ ...current, models }, ...visible.slice(1)];
   const storedForecast = current.forecastEvaluation?.length ? current.forecastEvaluation : forecastEvaluation(evaluationHistory);
   const storedCalibrated = current.calibratedProbabilityEvaluation?.length ? current.calibratedProbabilityEvaluation : calibratedProbabilityEvaluation(evaluationHistory);
-  const storedProfitability = current.profitabilityEvaluation?.length ? current.profitabilityEvaluation : profitabilityEvaluation(evaluationHistory);
+  const storedProfitabilityReady = Array.isArray(current.profitabilityEvaluation) && current.profitabilityEvaluation.length > 0
+    && current.profitabilityEvaluation.every((play) => Array.isArray(play.best?.periodResults)
+      && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
+  const storedProfitability = storedProfitabilityReady ? current.profitabilityEvaluation : profitabilityEvaluation(evaluationHistory);
   const storedZone = current.zoneProfitabilityEvaluation?.length ? current.zoneProfitabilityEvaluation : zoneProfitabilityEvaluation(evaluationHistory);
   const storedTechnical = Object.keys(current.technicalAnalysis || {}).length ? current.technicalAnalysis : technicalAnalysis(evaluationHistory);
   return {
@@ -2511,7 +2514,10 @@ function refreshInBackground(persisted, days = 1) {
   if (refreshInFlight) return;
   refreshInFlight = true;
   // 已有正式模型但缺少回測時，只補寫評估快照；不要為了回測再次重跑模型。
-  if (days === 1 && persisted[0]?.models?.length && !persisted[0]?.profitabilityEvaluation?.length) {
+  const storedProfitabilityReady = Array.isArray(persisted[0]?.profitabilityEvaluation) && persisted[0].profitabilityEvaluation.length > 0
+    && persisted[0].profitabilityEvaluation.every((play) => Array.isArray(play.best?.periodResults)
+      && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
+  if (days === 1 && persisted[0]?.models?.length && !storedProfitabilityReady) {
     setImmediate(() => void (async () => {
       try {
         const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);

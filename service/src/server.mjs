@@ -2375,6 +2375,15 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       // 首屏快速路徑只確認最新開獎資料；模型補建與 GitHub 備份交給背景同步，
       // 不得因慢來源、worker 或備份服務讓 /api/latest?days=1 長時間沒有回應。
       if (!options.deferLatestModel && !options.deferEvaluationModels) await hydrateEvaluationModels(history);
+      const evaluation = {
+        forecastEvaluation: forecastEvaluation(history),
+        calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history),
+        profitabilityEvaluation: profitabilityEvaluation(history),
+        zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history),
+        technicalAnalysis: technicalAnalysis(history),
+      };
+      // 模型、預測、回測與技術摘要必須同一批寫入，避免重開後只剩開獎資料或號碼。
+      history[0] = { ...history[0], ...evaluation };
       await persistSnapshots(history);
       const backup = options.deferLatestModel
         ? { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath, deferred: true }
@@ -2382,7 +2391,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const responseHistory = daysOverride && daysOverride > 1
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, modelStatus: history[0].modelStatus, modelError: history[0].modelError, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), profitabilityEvaluation: profitabilityEvaluation(history), zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history), technicalAnalysis: technicalAnalysis(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, modelStatus: history[0].modelStatus, modelError: history[0].modelError, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), ...evaluation, theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       const errorMessage = error instanceof Error ? error.message : '來源失敗';
@@ -2569,9 +2578,14 @@ const server = http.createServer(async (req, res) => {
       if (persisted.length && daysOverride && daysOverride > 1) {
         const recent = selectRecentHistory(persisted, retentionDays);
         if (recent.length > fastResponseHistoryLimit) {
-          const cached = await persistedResponse(recent.slice(0, fastResponseHistoryLimit), castingAt);
+          const cached = {
+            ...recent[0],
+            history: compactHistoryForResponse(recent),
+            historyDays: retentionDays,
+            modelStatus: recent[0].models?.length ? 'formal' : 'queued',
+          };
           refreshInBackground(persisted, hasRetentionCoverage(recent, retentionDays) ? 1 : retentionDays);
-          return send(res, 200, { ...cached, history: compactHistoryForResponse(recent), historyDays: retentionDays }, req);
+          return send(res, 200, cached, req);
         }
       }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;

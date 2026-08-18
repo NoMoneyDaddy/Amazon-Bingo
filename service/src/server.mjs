@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v69-predictions-exclude-draw';
+const reproducibilityVersion = 'bingo-research-v70-walk-forward-exclusion-filters';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -678,6 +678,91 @@ function targetAdapterSignal(number, target, tradition) {
   return (zoneHit ? 0.18 : 0) + (diagonal ? 0.08 : 0) + (remainder ? 0.12 : 0);
 }
 
+const exclusionFilterDefinitions = [
+  {
+    key: 'repeat-last-draw',
+    label: '排除上一期重複號',
+    apply: (number, prior) => (prior[0]?.numbers || []).some((value) => Number(value) === number),
+  },
+  {
+    key: 'short-hot',
+    label: '排除短窗過熱號',
+    apply: (number, prior) => {
+      const recent = prior.slice(0, 12);
+      const count = recent.reduce((total, draw) => total + (draw.numbers || []).some((value) => Number(value) === number), 0);
+      return recent.length >= 8 && count >= Math.ceil(recent.length * 0.42);
+    },
+  },
+  {
+    key: 'zone-overweight',
+    label: '排除過度集中區段',
+    apply: (number, prior) => {
+      const recent = prior.slice(0, 20);
+      if (recent.length < 12) return false;
+      const zone = Math.floor((number - 1) / 20);
+      const total = recent.reduce((sum, draw) => sum + (draw.numbers || []).filter((value) => Math.floor((Number(value) - 1) / 20) === zone).length, 0);
+      return total / (recent.length * 20) > 0.29;
+    },
+  },
+];
+
+function exclusionSet(filter, prior = []) {
+  return new Set(Array.from({ length: 80 }, (_, index) => index + 1).filter((number) => filter.apply(number, prior)));
+}
+
+function evaluateExclusionFilters(history = []) {
+  return exclusionFilterDefinitions.map((filter) => {
+    let excludedHits = 0;
+    let excludedSlots = 0;
+    let folds = 0;
+    for (let index = 0; index < Math.min(history.length - 1, 180); index += 1) {
+      const actual = history[index];
+      const prior = history.slice(index + 1);
+      const excluded = exclusionSet(filter, prior);
+      if (!excluded.size || excluded.size > 48) continue;
+      excludedHits += (actual.numbers || []).filter((value) => excluded.has(Number(value))).length;
+      excludedSlots += excluded.size;
+      folds += 1;
+    }
+    const rate = excludedSlots ? excludedHits / excludedSlots : null;
+    const baseline = 20 / 80;
+    const standardError = rate == null ? null : Math.sqrt(Math.max(0, baseline * (1 - baseline)) / Math.max(1, excludedSlots));
+    const upperBound = rate == null ? null : rate + 1.96 * (standardError || 0);
+    return {
+      key: filter.key, label: filter.label, folds, excludedSlots, excludedHits, rate,
+      baselineRate: baseline, upperBound,
+      active: folds >= 30 && excludedSlots >= 300 && upperBound != null && upperBound < baseline && rate < baseline * 0.9,
+      rule: '只用每個目標期以前資料；排除集合命中率以每個被排除號碼的實際出現率計算。',
+    };
+  });
+}
+
+function exclusionPrediction(seed, count, history = [], target = '10星') {
+  const validation = evaluateExclusionFilters(history);
+  const active = exclusionFilterDefinitions.filter((filter) => validation.find((item) => item.key === filter.key)?.active);
+  const excluded = new Set();
+  active.forEach((filter) => exclusionSet(filter, history).forEach((number) => excluded.add(number)));
+  // 排除過多代表規則不穩定，寧可停用全部濾網，也不把剩餘小集合冒充高機率。
+  const usableExcluded = excluded.size <= 48 ? excluded : new Set();
+  const frequencies = historicalFrequencies(history);
+  const recent = windowFrequencies(history, 12);
+  const medium = windowFrequencies(history, 60);
+  const candidates = Array.from({ length: 80 }, (_, index) => index + 1)
+    .filter((number) => !usableExcluded.has(number))
+    .map((number) => {
+      const stable = recent[number] * 0.55 + medium[number] * 0.45;
+      const score = stable * 0.7 + frequencies[number] * 0.3 + deterministicTie(`${seed}|exclusion|${target}`, number) * 0.000001;
+      return { number, score };
+    })
+    .sort((a, b) => b.score - a.score || a.number - b.number);
+  return {
+    numbers: candidates.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0')),
+    validation,
+    activeFilters: active.map((filter) => filter.key),
+    excludedNumbers: [...usableExcluded].sort((a, b) => a - b).map((number) => String(number).padStart(2, '0')),
+  };
+}
+
 function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, target = '') {
   const frequencies = historicalFrequencies(history);
   const recentFrequencies = windowFrequencies(history, 12);
@@ -907,6 +992,7 @@ const modelSources = {
   '貝葉斯平滑基線': [{ name: 'Predicting Winning Lottery Numbers（統計模型研究）', url: 'https://arxiv.org/abs/2403.12836' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '超幾何集合基線': [{ name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '多窗口穩定性基線': [{ name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
+  '排除濾網基線': [{ name: 'NIST SP 800-22 隨機性測試', url: 'https://csrc.nist.gov/pubs/sp/800/22/r1/upd1/final' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '機器學習負對照': [{ name: '序列式機率預測與評估', url: 'https://arxiv.org/abs/0905.1673' }, { name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }],
 };
 const researchEvidenceRegistry = [
@@ -1789,6 +1875,7 @@ export function buildModels(snapshot, history = [], options = {}) {
     { name: '貝葉斯平滑基線', kind: 'bayesian', status: 'Beta／Dirichlet 平滑頻率基線；可重算但不主張改變隨機機率', seedOffset: 149 },
     { name: '超幾何集合基線', kind: 'hypergeometric', status: '80 選 20 不放回抽樣；用集合包含率與精確抽樣假設做基線', seedOffset: 163 },
     { name: '多窗口穩定性基線', kind: 'multiscale', status: '近 12／60／300 期多時間窗；對短期訊號施加穩定性懲罰', seedOffset: 179 },
+    { name: '排除濾網基線', kind: 'exclusion', status: 'walk-forward 排除驗證；只啟用樣本外顯著低於 25% 基準的濾網', seedOffset: 191 },
   ].filter((method) => !options.onlyMethod || method.name === options.onlyMethod);
   const baseModels = methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
@@ -1800,9 +1887,12 @@ export function buildModels(snapshot, history = [], options = {}) {
       const casting = targetCastings[target];
       const seed = `${castingAt}|${snapshot.period}|${method.kind}|${target}|${method.seedOffset}`;
       const targetCount = target === 'superNumber' ? 1 : Number(String(target).replace('星', '')) || 10;
-      return [target, scoreNumbers(seed, targetCount, traditionFor(method.kind, casting), history, weights[target], target)];
+      return [target, method.kind === 'exclusion'
+        ? exclusionPrediction(seed, targetCount, history, target).numbers
+        : scoreNumbers(seed, targetCount, traditionFor(method.kind, casting), history, weights[target], target)];
     }));
-    const picks = picksByTarget['10星'] || scoreNumbers(`${castingAt}|${snapshot.period}|${method.kind}|10星`, 10, traditionFor(method.kind, targetCastings['10星']), history, weights['10星'], '10星');
+    const exclusionDetails = method.kind === 'exclusion' ? exclusionPrediction(`${castingAt}|${snapshot.period}`, 10, history, '10星') : null;
+    const picks = picksByTarget['10星'] || (exclusionDetails?.numbers || scoreNumbers(`${castingAt}|${snapshot.period}|${method.kind}|10星`, 10, traditionFor(method.kind, targetCastings['10星']), history, weights['10星'], '10星'));
     const zonePredictions = zonePredictionSet(`${castingAt}|${snapshot.period}|${method.kind}|10星|${method.seedOffset}`, traditionFor(method.kind, commonCasting), history, weights['10星']);
     const modelSeed = playIndex('10星') + method.seedOffset;
     const pickSummary = summarizePick(picks);
@@ -1823,7 +1913,7 @@ export function buildModels(snapshot, history = [], options = {}) {
       status: method.status,
       rule: `${method.status}；歷史資料只允許用於目標期以前的排序與回測，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
-      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, evidenceTier: ['bayesian', 'statistics', 'hypergeometric', 'multiscale'].includes(method.kind) ? '可檢驗統計基線' : '文化／文本特徵適配，非已證實預測法', predictionEligible: true, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : method.kind === 'statistics' ? '統計基線：熱度／遺漏／和值／奇偶／區間' : method.kind === 'bayesian' ? 'Beta／Dirichlet 平滑：避免零頻率與過度追逐短期波動' : method.kind === 'hypergeometric' ? '超幾何集合：每期 80 選 20、不放回，不把號碼誤當獨立抽樣' : method.kind === 'multiscale' ? '多窗口頻率：12／60／300 期加權，偏離穩定性時降權' : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
+      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, evidenceTier: ['bayesian', 'statistics', 'hypergeometric', 'multiscale', 'exclusion'].includes(method.kind) ? '可檢驗統計基線' : '文化／文本特徵適配，非已證實預測法', predictionEligible: true, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, exclusionFilters: exclusionDetails, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : method.kind === 'statistics' ? '統計基線：熱度／遺漏／和值／奇偶／區間' : method.kind === 'bayesian' ? 'Beta／Dirichlet 平滑：避免零頻率與過度追逐短期波動' : method.kind === 'hypergeometric' ? '超幾何集合：每期 80 選 20、不放回，不把號碼誤當獨立抽樣' : method.kind === 'multiscale' ? '多窗口頻率：12／60／300 期加權，偏離穩定性時降權' : method.kind === 'exclusion' ? '排除濾網：逐濾網 walk-forward 驗證，低於 25% 基準且樣本足夠才啟用' : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
         const casting = targetCastings[target];
         if (method.kind === 'sixyao') return [target, casting.lines.map((line) => line.value).join('、')];
         if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];

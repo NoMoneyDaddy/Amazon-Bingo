@@ -15,6 +15,7 @@ const MODEL_NAMES = [
   "貝葉斯平滑基線",
   "超幾何集合基線",
   "多窗口穩定性基線",
+  "排除濾網基線",
   "機器學習負對照",
   "多模型聚合",
 ];
@@ -41,6 +42,7 @@ type Model = {
   sources?: Array<{ name: string; url: string }>;
   calculation?: {
     formula?: string;
+    method?: string;
     algorithmVersion?: string;
     evidenceTier?: string;
     predictionEligible?: boolean;
@@ -49,6 +51,7 @@ type Model = {
     empiricalWeight?: number;
     empiricalWeights?: Record<string, number>;
     evolution?: Evolution;
+    exclusionFilters?: Record<string, unknown>;
     commonCasting?: string;
     commonCastingValue?: string;
     targetRules?: Record<string, string>;
@@ -361,6 +364,27 @@ function localModel(history: DrawSnapshot[], targetPeriod: string): Model {
   return prediction;
 }
 
+function localExclusionModel(history: DrawSnapshot[]): Model {
+  const recent = history.slice(0, 12);
+  const counts = new Map<number, number>();
+  recent.forEach((draw) => draw.numbers.forEach((value) => counts.set(Number(value), (counts.get(Number(value)) || 0) + 1)));
+  const excluded = new Set<number>();
+  (history[0]?.numbers || []).forEach((value) => excluded.add(Number(value)));
+  counts.forEach((count, number) => { if (recent.length >= 8 && count >= Math.ceil(recent.length * 0.42)) excluded.add(number); });
+  const candidates = Array.from({ length: 80 }, (_, index) => index + 1).filter((number) => !excluded.has(number))
+    .sort((a, b) => (counts.get(b) || 0) - (counts.get(a) || 0) || a - b);
+  const basic: Record<string, string[]> = {};
+  for (let count = 1; count <= 10; count += 1) basic[`${count}星`] = candidates.slice(0, count).sort((a, b) => a - b).map((value) => String(value).padStart(2, "0"));
+  return {
+    name: "排除濾網基線", status: "官方資料備援；等待後端 walk-forward 驗證濾網",
+    rule: "先排除上一期重複號與短窗過熱號，再從剩餘集合排序；未通過樣本外驗證的濾網不宣稱有效。",
+    sources: [{ name: "台灣彩券官方 API", url: OFFICIAL_API_URL }],
+    calculation: { algorithmVersion: "bingo-local-fallback-v1", method: "exclusion", historySamples: history.length, predictionEligible: true, exclusionFilters: { activeFilters: history.length >= 30 ? ["repeat-last-draw", "short-hot"] : [], excludedNumbers: [...excluded].sort((a, b) => a - b).map((value) => String(value).padStart(2, "0")), caveat: "本地備援僅供顯示；正式啟用需由後端 walk-forward 檢驗。" } },
+    official: { size: localPrediction(history, "size"), oddEven: localPrediction(history, "oddEven"), superNumber: basic["1星"]?.[0] || "", basic },
+    research: { numberPicks: basic["10星"] || [], sumBand: "排除後候選", oddEvenCount: "—", highLowCount: "—", zones: [] },
+  };
+}
+
 function localProfitability(history: DrawSnapshot[]) {
   const rows = [
     { key: "size", label: "猜大小", cost: 25 },
@@ -394,7 +418,8 @@ function enrichLocalFallback(rows: DrawSnapshot[]) {
   const ordered = [...rows].sort((a, b) => Number(b.period) - Number(a.period));
   const current = ordered[0];
   const model = localModel(ordered.slice(1), String(Number(current.period) + 1));
-  return { ...current, models: [model], profitabilityEvaluation: localProfitability(ordered), history: ordered.map((item, index) => index === 0 ? { ...item, models: [model] } : item) };
+  const exclusionModel = localExclusionModel(ordered.slice(1));
+  return { ...current, models: [model, exclusionModel], profitabilityEvaluation: localProfitability(ordered), history: ordered.map((item, index) => index === 0 ? { ...item, models: [model, exclusionModel] } : item) };
 }
 
 function officialFallbackDrawTime(period: string, date: string, firstPeriod: number) {

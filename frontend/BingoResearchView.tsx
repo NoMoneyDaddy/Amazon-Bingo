@@ -1040,6 +1040,10 @@ export function BingoResearchView() {
                       <span>盈利定義：淨盈利大於 0</span>
                       <span>可切換：固定連買／連續跟買</span>
                     </div>
+                    <div className="mt-1.5 grid gap-1 border-t border-cyan-300/15 pt-1.5 text-[11px] leading-4">
+                      <div><span className="font-semibold text-cyan-200">固定連買：</span>使用 10 期前的預測號碼，固定套用到後續 10 期。</div>
+                      <div><span className="font-semibold text-cyan-200">連續跟買：</span>每一期採用上一期產生的新預測，逐期跟買 10 期。</div>
+                    </div>
                   </div>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
                     <div className="grid grid-cols-[5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)]">

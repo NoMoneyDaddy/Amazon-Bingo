@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v47-theoretical-risk-baseline';
+const reproducibilityVersion = 'bingo-research-v48-baseline-gated-weights';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -100,6 +100,21 @@ function theoreticalRiskBaseline() {
     rows,
     caveat: '這是玩法理論基線，不是個人化下注建議；歷史模型若看似優於基線，仍須以無洩漏樣本與信賴區間核驗。',
   };
+}
+
+function positiveProfitBaseline(target, actuals = []) {
+  if (!actuals.length) return null;
+  if (target === 'size' || target === 'oddEven') {
+    const field = target === 'size' ? 'size' : 'oddEven';
+    const valid = actuals.filter((item) => ['大', '小', '單', '雙'].includes(normalizeDrawCategory(item[field], field)));
+    return valid.length ? valid.length / (actuals.length * 2) : 0;
+  }
+  if (target === 'superNumber') return actuals.filter((item) => item.superNumber && Number(item.superNumber) >= 1 && Number(item.superNumber) <= 80).length / (actuals.length * 80);
+  const star = Number(String(target).replace('星', ''));
+  const payoutTable = basicPayouts[target] || {};
+  return Object.entries(payoutTable).reduce((sum, [hits, gross]) => (
+    gross > singleBetCost ? sum + hypergeometricProbability(80, 20, star, Number(hits)) : sum
+  ), 0);
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = upstreamTimeoutMs) {
@@ -945,7 +960,7 @@ function evolveProfiles(history = []) {
   const tunableTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
   const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線', '貝葉斯平滑基線', '超幾何集合基線', '多窗口穩定性基線'];
   if (history.length < minimumValidationSamples + 1) {
-    return Object.fromEntries(methods.map((method) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0.32, validationSamples: validationWindow, score: null, status: `樣本不足（至少需要 ${minimumValidationSamples} 期），使用預設權重` }])) }]));
+    return Object.fromEntries(methods.map((method) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0, validationSamples: validationWindow, score: null, baselineRate: null, eligible: false, status: `樣本不足（至少需要 ${minimumValidationSamples} 期），不納入聚合權重` }])) }]));
   }
   // 批次化 walk-forward：每個方法／權重／折只建一次模型，從約 7,000 次重複建構降至 11×3×20 次。
   const scores = Object.fromEntries(methods.map((method) => [method, Object.fromEntries(tunableTargets.map((target) => [target, []]))]));
@@ -967,10 +982,12 @@ function evolveProfiles(history = []) {
   return Object.fromEntries(methods.map((method) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => {
     const results = scores[method][target].map((item) => {
       const rate = item.trials ? item.wins / item.trials : 0;
-      return { ...item, score: rate, estimatedRate: item.trials ? (item.wins + 2) / (item.trials + 4) : 0, confidence: lowerConfidenceBound(rate, item.trials), validationSamples: item.trials };
+      const baselineRate = positiveProfitBaseline(target, history.slice(0, validationWindow));
+      return { ...item, score: rate, estimatedRate: item.trials ? (item.wins + 2) / (item.trials + 4) : 0, confidence: lowerConfidenceBound(rate, item.trials), baselineRate, validationSamples: item.trials };
     });
-    const best = results.sort((a, b) => b.confidence - a.confidence || b.estimatedRate - a.estimatedRate || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0] || { empiricalWeight: 0.32, wins: 0, trials: 0, score: null, estimatedRate: 0, confidence: 0, validationSamples: 0 };
-    return [target, { ...best, status: `walk-forward ${validationWindow} 期／批次掃描／Wilson 下限選參數` }];
+    const best = results.sort((a, b) => b.confidence - a.confidence || b.estimatedRate - a.estimatedRate || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0] || { empiricalWeight: 0, wins: 0, trials: 0, score: null, baselineRate: null, estimatedRate: 0, confidence: 0, validationSamples: 0 };
+    const eligible = best.score != null && best.baselineRate != null && best.score > best.baselineRate;
+    return [target, { ...best, empiricalWeight: eligible ? best.empiricalWeight : 0, eligible, status: eligible ? `walk-forward ${validationWindow} 期／勝率 ${(best.score * 100).toFixed(1)}% > 基線 ${(best.baselineRate * 100).toFixed(1)}%，納入權重` : `walk-forward ${validationWindow} 期／勝率未超出基線，不納入權重` }];
   })) }]));
 }
 
@@ -1124,14 +1141,18 @@ function buildMlNegativeControl(snapshot, history, castingAt, options = {}) {
 function aggregateModel(models, history) {
   const eligibleModels = models.filter((model) => model.calculation?.predictionEligible !== false);
   const weightFor = (model, target) => {
-    const score = model.calculation?.evolution?.[target]?.score;
-    return score == null ? 1 : Math.max(0.25, 0.5 + score);
+    const evolution = model.calculation?.evolution?.[target];
+    const score = evolution?.score;
+    const baselineRate = evolution?.baselineRate;
+    if (evolution?.eligible !== true || score == null || baselineRate == null || score <= baselineRate) return 0;
+    return score - baselineRate;
   };
   const weightedCategory = (target) => {
     const totals = new Map();
     eligibleModels.forEach((model) => {
       const value = target === 'size' ? model.official.size : model.official.oddEven;
-      if (value) totals.set(value, (totals.get(value) || 0) + weightFor(model, target));
+      const weight = weightFor(model, target);
+      if (value && weight > 0) totals.set(value, (totals.get(value) || 0) + weight);
     });
     return [...totals.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0] || '';
   };
@@ -1140,6 +1161,7 @@ function aggregateModel(models, history) {
     const totals = new Map();
     eligibleModels.forEach((model) => {
       const weight = weightFor(model, target);
+      if (weight <= 0) return;
       (model.official.basic[target] || []).forEach((number) => totals.set(number, (totals.get(number) || 0) + weight));
     });
     return [...totals.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, size).map(([number]) => number);
@@ -1147,13 +1169,15 @@ function aggregateModel(models, history) {
   const superVotes = new Map();
   eligibleModels.forEach((model) => {
     const number = model.official.superNumber;
-    if (number) superVotes.set(number, (superVotes.get(number) || 0) + weightFor(model, 'superNumber'));
+    const weight = weightFor(model, 'superNumber');
+    if (number && weight > 0) superVotes.set(number, (superVotes.get(number) || 0) + weight);
   });
   const superNumber = [...superVotes.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0]))[0]?.[0] || '';
   const basic = Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
     const target = `${index + 1}星`;
     return [target, weightedNumbers(target)];
   }));
+  const weightedModelCount = eligibleModels.filter((model) => predictionTargets.some((target) => weightFor(model, target) > 0)).length;
   return {
     name: '多模型聚合',
     status: '依各模型 walk-forward 表現加權的共識模型',
@@ -1165,7 +1189,8 @@ function aggregateModel(models, history) {
       castingSource: 'weighted-model-consensus',
       castingAt: models[0]?.calculation?.castingAt || '',
       historySamples: history.length,
-      aggregation: '依各模型各玩法回測分數加權；無回測分數時採等權重',
+      aggregation: '只有 walk-forward 勝率嚴格高於同玩法隨機基線的模型才有權重；其餘模型權重為 0',
+      weightedModelCount,
       commonCasting: '多模型聚合不另起卦；它整合各子模型在同一固定輸入下的結果。',
       commonCastingValue: '多模型加權整合',
       targetRules: Object.fromEntries(predictionTargets.map((target) => [target, '依各子模型同一玩法的回測權重加權投票，不產生獨立卦象。'])),

@@ -24,6 +24,8 @@ type Evolution = Record<
     castingSource?: string;
     validationSamples?: number;
     score?: number | null;
+    baselineRate?: number | null;
+    eligible?: boolean;
     status?: string;
   }
 >;
@@ -846,7 +848,7 @@ export function BingoResearchView() {
                 </div>
                 <div className="mt-4 rounded-2xl border border-cyan-300/25 bg-cyan-300/10 p-4 text-sm leading-6 text-slate-200">
                   <strong className="text-cyan-100">怎麼讀研究證據？</strong>
-                  <p className="mt-1">權重是模型採用歷史訊號的比例；回測率是過往預測帶來正盈利的比例，打平不算勝利。兩者都不是下一期的機率或保證。</p>
+                  <p className="mt-1">只有 walk-forward 正盈利率嚴格超出同玩法隨機基線才取得聚合權重；等於或低於基線一律為 0。這不是下一期機率或保證。</p>
                 </div>
                 {latest?.theoreticalRiskBaseline?.rows?.length ? (
                   <div className="mt-3 rounded-2xl border border-rose-300/25 bg-rose-300/10 p-4 text-sm leading-6 text-slate-200">
@@ -1000,6 +1002,8 @@ export function BingoResearchView() {
                                   : result.numberPicks.join("、");
                               const weight = model.calculation?.empiricalWeights?.[target];
                               const score = model.calculation?.evolution?.[target]?.score;
+                              const baselineRate = model.calculation?.evolution?.[target]?.baselineRate;
+                              const eligible = model.calculation?.evolution?.[target]?.eligible;
                               return (
                                 <div key={target} className="rounded-xl border border-amber-300/20 bg-card/70 px-2.5 py-2.5 text-[11px]">
                                   <div className="flex items-center justify-between gap-2">
@@ -1008,8 +1012,9 @@ export function BingoResearchView() {
                                   </div>
                                   <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px]">
                                     <div className="rounded-md bg-amber-300/10 px-1.5 py-1"><span className="block text-muted-foreground">歷史權重</span><span className="font-semibold tabular-nums text-amber-200">{weight == null ? "—" : `${(weight * 100).toFixed(0)}%`}</span></div>
-                                    <div className="rounded-md bg-cyan-300/10 px-1.5 py-1"><span className="block text-muted-foreground">正盈利率</span><span className="font-semibold tabular-nums text-cyan-200">{score == null ? "—" : `${(score * 100).toFixed(1)}%`}</span></div>
+                                    <div className="rounded-md bg-cyan-300/10 px-1.5 py-1"><span className="block text-muted-foreground">正盈利率／基線</span><span className="font-semibold tabular-nums text-cyan-200">{score == null ? "—" : `${(score * 100).toFixed(1)}% / ${baselineRate == null ? "—" : `${(baselineRate * 100).toFixed(1)}%`}`}</span></div>
                                   </div>
+                                  <div className={`mt-1.5 rounded-md px-1.5 py-1 ${eligible ? "bg-emerald-300/10 text-emerald-100" : "bg-slate-700/40 text-muted-foreground"}`}>{eligible ? "已超出基線，取得聚合權重" : "未超出基線，不取得聚合權重"}</div>
                                   <div className="mt-1.5 rounded-md bg-slate-700/40 px-1.5 py-1 text-muted-foreground"><span className="text-slate-200">玩法適配：</span>{model.calculation?.targetRules?.[target] || "—"}</div>
                                   <div className="mt-1.5 text-muted-foreground">研究描述：{result.sumBand} · {result.oddEvenCount} · {result.highLowCount}</div>
                                 </div>

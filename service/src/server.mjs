@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v45-ml-negative-control';
+const reproducibilityVersion = 'bingo-research-v46-ml-prequential-evaluation';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -655,11 +655,23 @@ function randomPrediction(target, seed) {
   return values.slice(0, count).sort((a, b) => a - b).map((value) => String(value).padStart(2, '0'));
 }
 
+function evaluationModelFor(actual, name, prior, includeNumbers = true) {
+  const saved = actual.models?.find((model) => model.name === name);
+  if (saved || name !== '機器學習負對照') return saved;
+  // 舊保存期數可能沒有新模型；只用該目標期以前的資料即時補算。
+  return buildMlNegativeControl(actual, prior, reproducibleCastingAt(actual.drawAt, actual.period), { includeNumbers });
+}
+
 function forecastEvaluation(history = []) {
   const records = history.slice(1, maxModelHistory + 1).filter((item) => Array.isArray(item.models) && item.models.length);
+  const modelNames = [...new Set(records.flatMap((item) => item.models.map((model) => model.name)).filter((name) => name !== '多模型聚合'))];
+  if (records.length && !modelNames.includes('機器學習負對照')) modelNames.push('機器學習負對照');
   const byModel = new Map();
-  records.forEach((actual, recordIndex) => actual.models.forEach((model) => {
-    if (model.name === '多模型聚合') return;
+  records.forEach((actual, recordIndex) => {
+    const prior = records.slice(recordIndex + 1);
+    modelNames.forEach((name) => {
+    const model = evaluationModelFor(actual, name, prior, true);
+    if (!model) return;
     const result = byModel.get(model.name) || {
       name: model.name,
       samples: 0,
@@ -688,7 +700,8 @@ function forecastEvaluation(history = []) {
     result.tenStar.wins += hasPositiveProfit('10星', predictedNumbers, actual) ? 1 : 0;
     result.tenStar.randomWins += hasPositiveProfit('10星', randomNumbers, actual) ? 1 : 0;
     byModel.set(model.name, result);
-  }));
+    });
+  });
   return [...byModel.values()].map((result) => {
     const samples = Math.max(1, result.samples);
     return {
@@ -705,16 +718,17 @@ function forecastEvaluation(history = []) {
 function calibratedProbabilityEvaluation(history = []) {
   const records = history.slice(1, maxModelHistory + 1).filter((item) => Array.isArray(item.models) && item.models.length);
   const modelNames = [...new Set(records.flatMap((item) => item.models.map((model) => model.name)).filter((name) => name !== '多模型聚合'))];
+  if (records.length && !modelNames.includes('機器學習負對照')) modelNames.push('機器學習負對照');
   return modelNames.map((name) => {
     const metrics = { size: { brier: 0, logLoss: 0, count: 0, nextProbability: 0.5, bins: new Map() }, oddEven: { brier: 0, logLoss: 0, count: 0, nextProbability: 0.5, bins: new Map() } };
     records.forEach((actual, recordIndex) => {
-      const model = actual.models.find((item) => item.name === name);
+      const model = evaluationModelFor(actual, name, records.slice(recordIndex + 1), false);
       if (!model) return;
       const older = records.slice(recordIndex + 1);
       ['size', 'oddEven'].forEach((target) => {
         let wins = 0; let trials = 0;
-        older.forEach((past) => {
-          const pastModel = past.models.find((item) => item.name === name);
+        older.forEach((past, olderIndex) => {
+          const pastModel = evaluationModelFor(past, name, records.slice(recordIndex + olderIndex + 2), false);
           if (!pastModel) return;
           const predicted = target === 'size' ? pastModel.official.size : pastModel.official.oddEven;
           const actualValue = target === 'size' ? past.size : past.oddEven;
@@ -739,8 +753,8 @@ function calibratedProbabilityEvaluation(history = []) {
     });
     ['size', 'oddEven'].forEach((target) => {
       let wins = 0; let trials = 0;
-      records.forEach((past) => {
-        const pastModel = past.models.find((item) => item.name === name);
+      records.forEach((past, pastIndex) => {
+        const pastModel = evaluationModelFor(past, name, records.slice(pastIndex + 1), false);
         if (!pastModel) return;
         const predicted = target === 'size' ? pastModel.official.size : pastModel.official.oddEven;
         const actualValue = target === 'size' ? past.size : past.oddEven;
@@ -1005,7 +1019,8 @@ function logisticProbability(model, sample) {
   return 1 / (1 + Math.exp(-clamp(model.bias + sample.reduce((sum, value, index) => sum + value * model.weights[index], 0), -30, 30)));
 }
 
-function buildMlNegativeControl(snapshot, history, castingAt) {
+function buildMlNegativeControl(snapshot, history, castingAt, options = {}) {
+  const includeNumbers = options.includeNumbers !== false;
   const samples = []; const sizeLabels = []; const oddEvenLabels = [];
   const trainingLimit = Math.min(48, Math.max(0, history.length - 1));
   for (let index = 0; index < trainingLimit; index += 1) {
@@ -1023,7 +1038,7 @@ function buildMlNegativeControl(snapshot, history, castingAt) {
   const oddEvenModel = trainLogistic(samples, oddEvenLabels);
   const sizeProbability = logisticProbability(sizeModel, currentFeatures);
   const oddEvenProbability = logisticProbability(oddEvenModel, currentFeatures);
-  const scores = Array.from({ length: 80 }, (_, index) => {
+  const scores = includeNumbers ? Array.from({ length: 80 }, (_, index) => {
     const number = index + 1;
     const numberSamples = []; const numberLabels = [];
     for (let sampleIndex = 0; sampleIndex < trainingLimit; sampleIndex += 1) {
@@ -1033,7 +1048,7 @@ function buildMlNegativeControl(snapshot, history, castingAt) {
       numberLabels.push(history[sampleIndex].numbers.some((value) => Number(value) === number) ? 1 : 0);
     }
     return { number, score: logisticProbability(trainLogistic(numberSamples, numberLabels, 40, 0.06, 0.5), currentFeatures) };
-  }).sort((a, b) => b.score - a.score || a.number - b.number);
+  }).sort((a, b) => b.score - a.score || a.number - b.number) : [];
   const picks = (count) => scores.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
   const basic = Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`${index + 1}星`, picks(index + 1)]));
   const superNumber = picks(1)[0] || '';

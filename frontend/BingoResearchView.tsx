@@ -700,15 +700,22 @@ export function BingoResearchView() {
     setSyncing(true);
     setError("");
     try {
-      // 首次讀取與手動重新讀取都抓最近一個月，避免畫面只剩 60 期。
-      // 目前最新期號是輸入，服務端以此計算下一期期號；起卦時間取本次同步當下。
-      const snapshot = await fetchLatest(31, new Date().toISOString());
+      // 首屏先取最新一期；歷史 31 日由後端背景建庫，稍後再補到畫面。
+      const castingAt = new Date().toISOString();
+      const snapshot = await fetchLatest(1, castingAt);
       const records = snapshot.history?.length ? snapshot.history : [snapshot];
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");
       }
       setDraws(records);
       setLastSync(Date.now());
+      void new Promise((resolve) => window.setTimeout(resolve, 2000))
+        .then(() => fetchLatest(31, castingAt))
+        .then((fullSnapshot) => {
+          const fullRecords = fullSnapshot.history?.length ? fullSnapshot.history : [fullSnapshot];
+          if (fullRecords.length > records.length) setDraws(fullRecords);
+        })
+        .catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "讀取失敗");
     } finally {

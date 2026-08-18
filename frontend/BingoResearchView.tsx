@@ -159,7 +159,20 @@ type DrawSnapshot = {
   };
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
   profitabilityEvaluation?: ProfitabilityPlay[];
+  zoneProfitabilityEvaluation?: ZoneProfitabilityResult[];
   technicalAnalysis?: TechnicalAnalysisData;
+};
+
+type ZoneProfitabilityResult = {
+  mode: "fixed" | "follow";
+  model: string;
+  samples: number;
+  wins: number;
+  profit: number;
+  payoutTotal: number;
+  costTotal: number;
+  profitRate: number | null;
+  zones: Array<{ key: string; label: string; samples: number; wins: number; matches: number; payout: number; profit: number }>;
 };
 type Page = "overview" | "technical" | "history";
 
@@ -276,6 +289,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     theoreticalRiskBaseline: value.theoreticalRiskBaseline,
     researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
     profitabilityEvaluation: Array.isArray(value.profitabilityEvaluation) ? value.profitabilityEvaluation : [],
+    zoneProfitabilityEvaluation: Array.isArray(value.zoneProfitabilityEvaluation) ? value.zoneProfitabilityEvaluation : [],
     technicalAnalysis: value.technicalAnalysis,
   };
 }
@@ -484,8 +498,16 @@ function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
     matches = item.official.oddEven && normalizeCategory(item.official.oddEven) === normalizeCategory(draw.oddEven) ? 1 : 0;
     payout = matches ? 150 : 0;
   } else if (key === "superNumber") {
-    matches = normalizeNumber(item.official.superNumber) === normalizeNumber(draw.superNumber) ? 1 : 0;
-    payout = matches ? 1200 : 0;
+    const selected = normalizeNumber(item.official.superNumber);
+    const drawnNumbers = new Set(draw.numbers.map(normalizeNumber));
+    const superNumber = normalizeNumber(draw.superNumber);
+    if (selected && selected === superNumber) {
+      matches = 1;
+      payout = 150;
+    } else if (selected && drawnNumbers.has(selected)) {
+      matches = 1;
+      payout = 50;
+    }
   } else {
     const predicted = item.official.basic[key] || [];
     const drawnNumbers = new Set(draw.numbers.map(normalizeNumber));
@@ -493,7 +515,8 @@ function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
     targetCount = predicted.length;
     payout = BASIC_PAYOUTS[key]?.[matches] || 0;
   }
-  const profit = payout - SINGLE_BET_COST;
+  const cost = key === "superNumber" ? SINGLE_BET_COST * 2 : SINGLE_BET_COST;
+  const profit = payout - cost;
   return { payout, profit, won: profit > 0, matches, targetCount };
 }
 
@@ -1235,6 +1258,22 @@ export function BingoResearchView() {
                               </div>
                             ))}
                           </div>
+                          {(() => {
+                            const zoneBacktest = latest?.zoneProfitabilityEvaluation?.find((item) => item.model === model.name && item.mode === profitStrategy);
+                            return zoneBacktest ? (
+                              <div className="mt-2 rounded-lg border border-border/70 bg-background/40 px-2 py-1.5 text-[10px] leading-5 text-muted-foreground">
+                                <div className="flex flex-wrap items-center justify-between gap-x-2">
+                                  <span>分區回測（{profitStrategy === "fixed" ? "固定連買" : "連續跟買"}）</span>
+                                  <span className={zoneBacktest.profit > 0 ? "text-emerald-300" : "text-rose-300"}>淨賺賠 {formatNetProfit(zoneBacktest.profit)}</span>
+                                </div>
+                                <div className="mt-0.5 flex flex-wrap gap-x-2">
+                                  <span>{zoneBacktest.samples} 區次</span>
+                                  <span>正盈利 {zoneBacktest.wins} 次</span>
+                                  <span>盈利機率 {zoneBacktest.profitRate == null ? "—" : `${(zoneBacktest.profitRate * 100).toFixed(1)}%`}</span>
+                                </div>
+                              </div>
+                            ) : null;
+                          })()}
                         </div>
                       ) : null}
                       {model.research.targetResearch && (

@@ -18,10 +18,11 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v65-zonal-predictions';
+const reproducibilityVersion = 'bingo-research-v66-settlement-weighted-zones';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
+const superNumberAddOnCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
   "2星": { 2: 75, 1: 25 },
@@ -145,12 +146,14 @@ function theoreticalRiskBaseline() {
     houseEdgePct: Number(((1 - pBig * 6) * 100).toFixed(3)),
     recommendation: '研究用途：和局／未達門檻不計勝，不建議下注',
   });
+  const superExpectedPayout = (150 + 19 * 50) / 80;
+  const superCost = singleBetCost + superNumberAddOnCost;
   rows.push({
-    playtype: '超級獎號',
-    expectedGrossMultiple: 0.6,
-    expectedNetPerBet: -10,
-    houseEdgePct: 40,
-    recommendation: '研究用途：理論負期望，不建議下注',
+    playtype: '超級獎號（1星加購）',
+    expectedGrossMultiple: Number((superExpectedPayout / superCost).toFixed(6)),
+    expectedNetPerBet: Number((superExpectedPayout - superCost).toFixed(2)),
+    houseEdgePct: Number(((1 - superExpectedPayout / superCost) * 100).toFixed(3)),
+    recommendation: '研究用途：超級獎號必須搭配基本玩法，打平不算盈利',
   });
   rows.sort((a, b) => a.houseEdgePct - b.houseEdgePct);
   return {
@@ -177,13 +180,27 @@ function positiveProfitBaseline(target, actuals = []) {
   ), 0);
 }
 
+function betCostForTarget(target) {
+  return target === 'superNumber' ? singleBetCost + superNumberAddOnCost : singleBetCost;
+}
+
+function settleSuperNumber(predicted, actual) {
+  const selected = normalizeNumberValue(predicted);
+  const drawn = new Set((actual.numbers || []).map(normalizeNumberValue));
+  const superNumber = normalizeNumberValue(actual.superNumber);
+  if (!selected || !superNumber) return { payout: 0, matches: 0, cost: betCostForTarget('superNumber') };
+  if (selected === superNumber) return { payout: 150, matches: 1, cost: betCostForTarget('superNumber') };
+  if (drawn.has(selected)) return { payout: 50, matches: 1, cost: betCostForTarget('superNumber') };
+  return { payout: 0, matches: 0, cost: betCostForTarget('superNumber') };
+}
+
 function theoreticalNetPerBet(target) {
   if (target === 'size' || target === 'oddEven') {
     const thresholdProbability = Array.from({ length: 21 }, (_, count) => hypergeometricProbability(80, 40, 20, count))
       .slice(13).reduce((sum, value) => sum + value, 0);
     return thresholdProbability * 150 - singleBetCost;
   }
-  if (target === 'superNumber') return 1200 / 80 - singleBetCost;
+  if (target === 'superNumber') return ((150 + 19 * 50) / 80) - betCostForTarget('superNumber');
   const star = Number(String(target).replace('星', ''));
   const payoutTable = basicPayouts[target] || {};
   const expectedPayout = Object.entries(payoutTable).reduce((sum, [hits, payout]) => (
@@ -881,13 +898,13 @@ function hasPositiveProfit(target, predicted, actual) {
   let payout = 0;
   if (target === 'size') payout = normalizeDrawCategory(predicted, 'size') === normalizeDrawCategory(actual.size, 'size') ? 150 : 0;
   else if (target === 'oddEven') payout = normalizeDrawCategory(predicted, 'oddEven') === normalizeDrawCategory(actual.oddEven, 'oddEven') ? 150 : 0;
-  else if (target === 'superNumber') payout = normalizeNumberValue(predicted) === normalizeNumberValue(actual.superNumber) ? 1200 : 0;
+  else if (target === 'superNumber') payout = settleSuperNumber(predicted, actual).payout;
   else {
     const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
     const matches = (predicted || []).filter((number) => actualNumbers.has(normalizeNumberValue(number))).length;
     payout = basicPayouts[target]?.[matches] || 0;
   }
-  return payout - singleBetCost > 0;
+  return payout - betCostForTarget(target) > 0;
 }
 
 function normalizeNumberValue(value) {
@@ -1045,7 +1062,7 @@ function calibratedProbabilityEvaluation(history = []) {
 function backtestPayout(target, predicted, actual) {
   if (target === 'size') return normalizeDrawCategory(predicted, 'size') === normalizeDrawCategory(actual.size, 'size') ? 150 : 0;
   if (target === 'oddEven') return normalizeDrawCategory(predicted, 'oddEven') === normalizeDrawCategory(actual.oddEven, 'oddEven') ? 150 : 0;
-  if (target === 'superNumber') return normalizeNumberValue(predicted) === normalizeNumberValue(actual.superNumber) ? 1200 : 0;
+  if (target === 'superNumber') return settleSuperNumber(predicted, actual).payout;
   const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
   const matches = (Array.isArray(predicted) ? predicted : []).filter((number) => actualNumbers.has(normalizeNumberValue(number))).length;
   return basicPayouts[target]?.[matches] || 0;
@@ -1084,7 +1101,8 @@ function profitabilityEvaluation(history = []) {
               ? model.official?.superNumber
               : model.official?.basic?.[play.key] || [];
         const payout = backtestPayout(play.key, predicted, actual);
-        const net = payout - singleBetCost;
+        const cost = betCostForTarget(play.key);
+        const net = payout - cost;
         periodResults.push({ period: String(actual.period || ''), drawAt: actual.drawAt || '', payout, net, profitable: net > 0 });
         wins += net > 0 ? 1 : 0;
         payoutTotal += payout;
@@ -1110,7 +1128,7 @@ function profitabilityEvaluation(history = []) {
       const profitRate = trials ? wins / trials : null;
       const averageProfit = trials ? profit / trials : null;
       return {
-        mode, model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal: trials * singleBetCost,
+        mode, model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal: trials * betCostForTarget(play.key),
         matches, targetCount, averageProfit, positiveExpected: averageProfit != null && averageProfit > 0,
         profitRate, estimatedRate: evolution?.estimatedRate ?? null,
         confidence: evolution?.confidence ?? -1, prediction: prediction || '—', periodResults,
@@ -1126,6 +1144,49 @@ function profitabilityEvaluation(history = []) {
     const follow = candidateModels.map((model) => evaluate(model, 'follow')).sort(rank)[0] || empty('follow');
     return { ...play, best: fixed, fixed, follow, metricLabel: '盈利機率' };
   });
+}
+
+function zoneProfitabilityEvaluation(history = []) {
+  const horizon = profitabilityBacktestWindow;
+  const currentModels = history[0]?.models || [];
+  const candidates = currentModels.filter((model) => model?.research?.zonePredictions?.length);
+  const evaluate = (currentModel, mode) => {
+    const rows = mode === 'fixed'
+      ? (() => {
+        const model = history[horizon]?.models?.find((item) => item.name === currentModel.name);
+        return model ? history.slice(0, horizon).map((actual) => ({ actual, model })) : [];
+      })()
+      : history.slice(0, horizon).flatMap((actual, index) => {
+        const model = history[index + 1]?.models?.find((item) => item.name === currentModel.name);
+        return model ? [{ actual, model }] : [];
+      });
+    const zones = new Map();
+    let profit = 0; let payoutTotal = 0; let costTotal = 0; let wins = 0; let trials = 0;
+    rows.forEach(({ actual, model }) => {
+      (model.research.zonePredictions || []).forEach((zone) => {
+        const predicted = Array.isArray(zone.numbers) ? zone.numbers : [];
+        const payout = backtestPayout('5星', predicted, actual);
+        const cost = singleBetCost;
+        const net = payout - cost;
+        const state = zones.get(zone.key) || { key: zone.key, label: zone.label, samples: 0, wins: 0, matches: 0, payout: 0, profit: 0, periodResults: [] };
+        const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
+        state.samples += 1;
+        state.wins += net > 0 ? 1 : 0;
+        state.matches += predicted.filter((number) => actualNumbers.has(normalizeNumberValue(number))).length;
+        state.payout += payout;
+        state.profit += net;
+        state.periodResults.push({ period: String(actual.period || ''), net, profitable: net > 0 });
+        zones.set(zone.key, state);
+        trials += 1;
+        wins += net > 0 ? 1 : 0;
+        payoutTotal += payout;
+        profit += net;
+        costTotal += cost;
+      });
+    });
+    return { mode, model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal, profitRate: trials ? wins / trials : null, zones: [...zones.values()] };
+  };
+  return candidates.flatMap((model) => ['fixed', 'follow'].map((mode) => evaluate(model, mode)));
 }
 
 async function hydrateEvaluationModels(history = []) {
@@ -1319,7 +1380,7 @@ function evolveProfiles(history = []) {
         bucket.trials += 1;
         const payout = backtestPayout(target, prediction, actual);
         bucket.payout += payout;
-        bucket.profit += payout - singleBetCost;
+        bucket.profit += payout - betCostForTarget(target);
         const baselineRate = positiveProfitBaseline(target, training);
         if (baselineRate != null) {
           bucket.baselineSum += baselineRate;
@@ -1333,10 +1394,11 @@ function evolveProfiles(history = []) {
     const results = scores[method][target].map((item) => {
       const rate = item.trials ? item.wins / item.trials : 0;
       const baselineRate = item.baselineTrials ? item.baselineSum / item.baselineTrials : null;
-      const cost = item.trials * singleBetCost;
+      const targetCost = betCostForTarget(target);
+      const cost = item.trials * targetCost;
       const roi = cost ? item.profit / cost : null;
       const baselineNetPerBet = theoreticalNetPerBet(target);
-      const baselineRoi = baselineNetPerBet / singleBetCost;
+      const baselineRoi = baselineNetPerBet / targetCost;
       return { ...item, score: rate, estimatedRate: item.trials ? (item.wins + 2) / (item.trials + 4) : 0, confidence: lowerConfidenceBound(rate, item.trials), baselineRate, baselineNetPerBet, baselineRoi, averageProfit: item.trials ? item.profit / item.trials : null, roi, validationSamples: item.trials };
     });
     const best = results.sort((a, b) => (b.roi ?? -Infinity) - (a.roi ?? -Infinity) || b.confidence - a.confidence || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0] || { empiricalWeight: 0, wins: 0, trials: 0, score: null, baselineRate: null, estimatedRate: 0, confidence: 0, roi: null, baselineRoi: null, validationSamples: 0 };
@@ -1892,7 +1954,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const responseHistory = daysOverride && daysOverride > 1
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), profitabilityEvaluation: profitabilityEvaluation(history), technicalAnalysis: technicalAnalysis(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), profitabilityEvaluation: profitabilityEvaluation(history), zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history), technicalAnalysis: technicalAnalysis(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       const errorMessage = error instanceof Error ? error.message : '來源失敗';
@@ -1942,6 +2004,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     forecastEvaluation: forecastEvaluation([{ ...current, models }, ...visible.slice(1)]),
     calibratedProbabilityEvaluation: calibratedProbabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
     profitabilityEvaluation: profitabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
+    zoneProfitabilityEvaluation: zoneProfitabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
     technicalAnalysis: technicalAnalysis([{ ...current, models }, ...visible.slice(1)]),
     theoreticalRiskBaseline: theoreticalRiskBaseline(),
     researchEvidence: researchEvidenceRegistry,

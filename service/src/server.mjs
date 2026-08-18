@@ -2519,7 +2519,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       if (shouldComputeEvaluation && history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
         await hydrateEvaluationModels(history);
       }
-      const evaluation = options.deferEvaluationModels && !latestDrawChanged
+      const evaluation = !shouldComputeEvaluation
         ? {
           forecastEvaluation: history[0]?.forecastEvaluation || [],
           calibratedProbabilityEvaluation: history[0]?.calibratedProbabilityEvaluation || [],

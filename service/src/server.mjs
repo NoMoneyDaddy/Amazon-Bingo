@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v19-persisted-profile';
+const reproducibilityVersion = 'bingo-research-v20-all-star-tuning';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -537,9 +537,10 @@ function lowerConfidenceBound(rate, samples) {
 
 function evolveProfiles(history = []) {
   const candidates = [0.24, 0.32, 0.40];
-  // 回測仍使用 60 期；參數調校採獨立 30 期窗口，降低計算量與短期噪音。
+  // 回測仍使用 60 期；參數調校採獨立 20 期窗口，降低計算量與短期噪音。
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - 1));
-  const tunableTargets = ['size', 'oddEven', 'superNumber', '1星', '2星', '3星'];
+  // 所有玩法都使用同一套 walk-forward + Wilson 下限規則，不讓 4～10 星退回固定權重。
+  const tunableTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
   const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線'];
   return Object.fromEntries(methods.map((method) => {
     const targets = Object.fromEntries(tunableTargets.map((target) => {

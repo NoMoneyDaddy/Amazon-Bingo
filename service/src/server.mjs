@@ -218,11 +218,14 @@ function parseChineseCalendarParts(value) {
   const monthPart = parts.find((part) => part.type === 'month')?.value || '';
   const normalizedMonth = monthPart.replace(/^閏/, '').replace('腊', '臘');
   const month = normalizedMonth === '臘月' ? 12 : monthNames.indexOf(normalizedMonth) + 1;
+  const hour24 = Number(parts.find((part) => part.type === 'hour')?.value || 0);
+  const hourBranch = Math.floor(((hour24 + 1) % 24) / 2) + 1;
   return {
     year: Number(parts.find((part) => part.type === 'relatedYear')?.value || date.getUTCFullYear()),
     month: Math.max(1, month),
     day: Number(parts.find((part) => part.type === 'day')?.value || 1),
-    hour: Number(parts.find((part) => part.type === 'hour')?.value || 0),
+    hour: hourBranch,
+    hour24,
   };
 }
 
@@ -234,7 +237,7 @@ function playIndex(target) {
   return Number.isFinite(star) && star > 0 ? star + 3 : 1;
 }
 
-function targetInput(snapshot, target, castingAt = snapshot.drawAt || new Date().toISOString()) {
+function targetInput(snapshot, target, castingAt = reproducibleCastingAt(snapshot.castingAt || snapshot.drawAt, snapshot.period)) {
   const targetNo = playIndex(target);
   return {
     target,
@@ -587,7 +590,7 @@ function aggregateModel(models, history) {
 
 export function buildModels(snapshot, history = [], options = {}) {
   const profiles = options.profiles || (options.evolve === false ? {} : evolveProfiles(history));
-  const castingAt = options.castingAt || snapshot.castingAt || snapshot.drawAt || new Date().toISOString();
+  const castingAt = reproducibleCastingAt(options.castingAt || snapshot.castingAt || snapshot.drawAt, snapshot.period);
   const methods = [
     { name: '梅花易數', kind: 'meihua', status: '經典時間起卦公式＋各目標獨立研究排序', seedOffset: 11 },
     { name: '六爻八卦', kind: 'sixyao', status: '正統大衍筮法結構＋數位蓍草適配', seedOffset: 37 },
@@ -628,7 +631,7 @@ export function buildModels(snapshot, history = [], options = {}) {
       status: method.status,
       rule: `${method.status}；歷史頻率只做獨立統計排序，不修改傳統規則，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
-      calculation: { algorithmVersion, method: method.kind, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
+      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
         const casting = targetCastings[target];
         if (method.kind === 'sixyao') return [target, casting.lines.map((line) => line.value).join('、')];
         if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];

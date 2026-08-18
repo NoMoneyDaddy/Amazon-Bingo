@@ -537,7 +537,7 @@ export function BingoResearchView() {
       />
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-x-hidden" aria-busy={syncing}>
         <CustomScrollbar orientation="vertical">
-          <div className="mx-auto min-w-0 max-w-5xl space-y-4 overflow-x-hidden p-3 pb-24 sm:space-y-5 sm:p-5 sm:pb-6">
+          <div className="mx-auto min-w-0 max-w-5xl space-y-4 overflow-x-hidden p-3 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:space-y-5 sm:p-5 sm:pb-6">
             <header className="overflow-hidden rounded-xl border border-border bg-card px-2.5 py-2 shadow-lg shadow-black/15 sm:px-3">
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-baseline gap-1.5">

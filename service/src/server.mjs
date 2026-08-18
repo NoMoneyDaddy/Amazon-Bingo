@@ -2456,6 +2456,29 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
 function refreshInBackground(persisted, days = 1) {
   if (refreshInFlight) return;
   refreshInFlight = true;
+  // 已有正式模型但缺少回測時，只補寫評估快照；不要為了回測再次重跑模型。
+  if (days === 1 && persisted[0]?.models?.length && !persisted[0]?.profitabilityEvaluation?.length) {
+    void (async () => {
+      try {
+        const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);
+        const evaluation = {
+          forecastEvaluation: forecastEvaluation(history),
+          calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history),
+          profitabilityEvaluation: profitabilityEvaluation(history),
+          zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history),
+          technicalAnalysis: technicalAnalysis(history),
+        };
+        history[0] = { ...history[0], ...evaluation };
+        await persistSnapshots(history);
+        writeLatestResponseCache('latest-1', { ...history[0], history: compactHistoryForResponse(history), historyDays: retentionDays, modelStatus: 'formal', ...evaluation });
+      } catch (error) {
+        console.error(JSON.stringify({ event: 'background-evaluation-failed', message: error instanceof Error ? error.message : '回測補寫失敗' }));
+      } finally {
+        refreshInFlight = false;
+      }
+    })();
+    return;
+  }
   void latest(days, persisted, '', { deferEvaluationModels: true })
     .then((result) => {
       if (days === 1) writeLatestResponseCache('latest-1', result);

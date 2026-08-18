@@ -1015,6 +1015,15 @@ const server = http.createServer(async (req, res) => {
         refreshInBackground(persisted);
         return send(res, 200, cached, req);
       }
+      // 月份查詢優先使用已保存的近期資料；官方補同步在背景執行，避免 6000 筆保存集阻塞首屏。
+      if (persisted.length && daysOverride && daysOverride > 1) {
+        const recent = selectRecentHistory(persisted, retentionDays);
+        if (recent.length > fastResponseHistoryLimit) {
+          const cached = await persistedResponse(recent.slice(0, fastResponseHistoryLimit));
+          refreshInBackground(persisted);
+          return send(res, 200, { ...cached, history: recent, historyDays: retentionDays }, req);
+        }
+      }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
       const hasUsableHistory = persisted.length >= persistedHistoryLimit;
       if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory && forecastFresh) return send(res, 200, { ...persisted[0], history: selectRecentHistory(persisted, retentionDays), historyDays: retentionDays, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });

@@ -1037,16 +1037,17 @@ export function BingoResearchView() {
                       <span className="text-center">玩法</span>
                       <span className="text-center sm:hidden">推薦</span>
                       <span className="hidden items-center justify-center gap-1 text-center sm:flex">
+                        <span>盈利回測：</span>
                         <button type="button" className={profitStrategy === "fixed" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定連買10期</button>
                         <span>/</span>
                         <button type="button" className={profitStrategy === "follow" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>連續跟買10期</button>
                       </span>
                       <span className="flex items-center justify-center gap-1 text-center sm:hidden">
+                        <span>盈利：</span>
                         <button type="button" className={profitStrategy === "fixed" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定</button>
                         <span>/</span>
                         <button type="button" className={profitStrategy === "follow" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>跟買</button>
                       </span>
-                      <span className="text-center sm:hidden">盈利</span>
                       <span className="hidden text-center sm:inline">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (

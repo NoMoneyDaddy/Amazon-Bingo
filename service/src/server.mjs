@@ -339,11 +339,6 @@ async function persistSnapshots(snapshots) {
         JSON.stringify(item.forecastEvaluation || []), JSON.stringify(item.calibratedProbabilityEvaluation || []), JSON.stringify(item.profitabilityEvaluation || []), JSON.stringify(item.zoneProfitabilityEvaluation || []),
         JSON.stringify(item.technicalAnalysis || {}), JSON.stringify(item.audit || {}), JSON.stringify(item.behaviorAudit || {}), JSON.stringify(item.backtestIntegrity || {}),
         item.predictionTargetPeriod || '', item.castingAt || '', item.forecastCastingAt || '', item.fetchedAt || Date.now(),
-        item.period, item.drawAt || '', JSON.stringify(item.numbers), item.superNumber || '', item.size || '', item.oddEven || '',
-        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []),
-        JSON.stringify(item.forecastEvaluation || []), JSON.stringify(item.calibratedProbabilityEvaluation || []), JSON.stringify(item.profitabilityEvaluation || []), JSON.stringify(item.zoneProfitabilityEvaluation || []),
-        JSON.stringify(item.technicalAnalysis || {}), JSON.stringify(item.audit || {}), JSON.stringify(item.behaviorAudit || {}), JSON.stringify(item.backtestIntegrity || {}),
-        item.predictionTargetPeriod || '', item.castingAt || '', item.forecastCastingAt || '', item.fetchedAt || Date.now(),
       ]);
     }
     await client.query('COMMIT');
@@ -363,7 +358,6 @@ async function readPersisted(limit = 6000) {
     models, forecast_evaluation AS "forecastEvaluation", calibrated_probability_evaluation AS "calibratedProbabilityEvaluation",
     profitability_evaluation AS "profitabilityEvaluation", zone_profitability_evaluation AS "zoneProfitabilityEvaluation",
     technical_analysis AS "technicalAnalysis", audit, behavior_audit AS "behaviorAudit", backtest_integrity AS "backtestIntegrity",
-    prediction_target_period AS "predictionTargetPeriod", casting_at AS "castingAt", forecast_casting_at AS "forecastCastingAt", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
     prediction_target_period AS "predictionTargetPeriod", casting_at AS "castingAt", forecast_casting_at AS "forecastCastingAt", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
   return result.rows.map((row) => {
     const numbers = Array.isArray(row.numbers) ? row.numbers : [];

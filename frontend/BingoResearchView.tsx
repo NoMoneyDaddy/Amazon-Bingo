@@ -28,6 +28,8 @@ type Model = {
   sources?: Array<{ name: string; url: string }>;
   calculation?: {
     formula?: string;
+    algorithmVersion?: string;
+    castingAt?: string;
     historySamples?: number;
     empiricalWeight?: number;
     empiricalWeights?: Record<string, number>;
@@ -663,7 +665,8 @@ export function BingoResearchView() {
                         <div className="mb-1 font-semibold text-cyan-200">共同計算輸入</div>
                         <div><span className="text-foreground">起卦核心：</span>{model.calculation?.commonCastingValue || "—"}</div>
                         <div className="mt-1 break-words text-[11px]">{model.calculation?.commonCasting || "共同預測時間未提供"}</div>
-                        <div className="mt-2 text-[11px] text-amber-100">這組起卦只計算一次；下方每個玩法顯示的是獨立適配規則與回測，不是重新起卦。</div>
+                        <div className="mt-2 text-[11px] text-amber-100">固定輸入：{model.calculation?.castingAt || "—"} · 版本：{model.calculation?.algorithmVersion || "—"}</div>
+                        <div className="mt-1 text-[11px] text-amber-100">這組起卦只計算一次；下方每個玩法顯示的是獨立適配規則與回測，不是重新起卦。</div>
                       </div>
                       <div className="mt-3 border-t border-slate-800 pt-2 text-xs leading-5 text-slate-300">
                         本模型候選：{model.research.numberPicks.join("、")} · 區間：{model.research.zones.join("、")} · 總和：{model.research.sumBand}

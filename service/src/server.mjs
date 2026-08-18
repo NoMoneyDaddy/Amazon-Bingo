@@ -11,6 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
+const reproducibilityVersion = 'bingo-research-v4-reproducible';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -81,7 +82,7 @@ async function ensureDatabase() {
   databaseReady = true;
 }
 
-function algorithmVersion() { return 'bingo-models-v3-target-casting'; }
+function algorithmVersion() { return reproducibilityVersion; }
 
 function modelProfileFromSnapshot(snapshot) {
   return {
@@ -192,6 +193,17 @@ function seededRandom(seed) {
 }
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
+
+function reproducibleCastingAt(value, period = '') {
+  const raw = String(value || '').trim();
+  const fullDate = new Date(raw.replace(/\//g, '-'));
+  if (raw && Number.isFinite(fullDate.getTime())) return fullDate.toISOString();
+  const dateOnly = raw.match(/^(\d{4}-\d{2}-\d{2})$/);
+  if (dateOnly) return new Date(`${dateOnly[1]}T04:00:00.000Z`).toISOString();
+  const digest = createHash('sha256').update(`casting|${period}`).digest('hex');
+  const minutes = Number.parseInt(digest.slice(0, 8), 16) % (365 * 24 * 60);
+  return new Date(Date.UTC(2020, 0, 1) + minutes * 60_000).toISOString();
+}
 
 function parseTaipeiParts(value) {
   const date = value ? new Date(value.replace(/\//g, '-')) : new Date();
@@ -616,7 +628,7 @@ export function buildModels(snapshot, history = [], options = {}) {
       status: method.status,
       rule: `${method.status}；歷史頻率只做獨立統計排序，不修改傳統規則，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
-      calculation: { method: method.kind, castingSource: 'prediction-time-common', historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
+      calculation: { algorithmVersion, method: method.kind, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
         const casting = targetCastings[target];
         if (method.kind === 'sixyao') return [target, casting.lines.map((line) => line.value).join('、')];
         if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];
@@ -745,20 +757,29 @@ async function latest(daysOverride = null, existingHistory = []) {
       });
       const rawHistory = [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period));
       const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);
+      const previousCastingAt = reproducibleCastingAt(rawHistory[0]?.castingAt || rawHistory[0]?.drawAt, rawHistory[0]?.period);
+      const storedForecastCastingAt = rawHistory[0]?.forecastCastingAt;
+      const predictionCastingAt = storedForecastCastingAt
+        ? reproducibleCastingAt(storedForecastCastingAt, nextPeriod)
+        : new Date(new Date(previousCastingAt).getTime() + 5 * 60_000).toISOString();
       const history = [];
       for (let index = 0; index < rawHistory.length; index += 1) {
         await new Promise((resolve) => setImmediate(resolve));
         const item = rawHistory[index];
-        const drawAt = formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000));
+        const castingAt = isFinite(index) ? reproducibleCastingAt(item.castingAt || item.drawAt, item.period) : previousCastingAt;
+        const drawAt = item.drawAt || formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000));
         const isNextPrediction = index === 0;
-        const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt } : item;
+        const modelCastingAt = isNextPrediction ? predictionCastingAt : castingAt;
+        const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt, castingAt: modelCastingAt } : { ...item, castingAt };
         const modelHistory = rawHistory.slice(index + 1, index + maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
         const models = index > 0 && item.models?.length
           ? item.models
-          : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: isNextPrediction, castingAt: new Date(syncedAt - index * 5 * 60 * 1000).toISOString() });
+          : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: isNextPrediction, castingAt: modelCastingAt });
         history.push({
           ...item,
           drawAt,
+          castingAt: modelCastingAt,
+          forecastCastingAt: isNextPrediction ? predictionCastingAt : item.forecastCastingAt,
           predictionTargetPeriod: isNextPrediction ? nextPeriod : item.period,
           models: index < maxModelHistory ? models : [],
           fetchedAt: syncedAt,

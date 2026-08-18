@@ -2816,7 +2816,8 @@ const server = http.createServer(async (req, res) => {
       if (priorityRefresh && daysOverride === 1) {
         const persistedForPriority = await readPersistedCached(persistedHistoryLimit);
         const prioritySnapshot = await latest(1, persistedForPriority, castingAt, {
-          deferLatestModel: true,
+          // 冷啟動沒有任何保存模型時，優先請求直接建立一次；已有模型則沿用以保持快速。
+          deferLatestModel: Boolean(persistedForPriority[0]?.models?.length),
           deferEvaluationModels: true,
         });
         void readPersistedCached(persistedHistoryLimit)

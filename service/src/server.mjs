@@ -22,6 +22,7 @@ const upstreamTimeoutMs = 15_000;
 let databaseReady = false;
 let lastPersistedPeriod = '';
 let scheduledTimer;
+let refreshInFlight = false;
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = upstreamTimeoutMs) {
   const controller = new AbortController();
@@ -658,6 +659,25 @@ async function latest(daysOverride = null, existingHistory = []) {
   throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);
 }
 
+function persistedResponse(persisted) {
+  if (!persisted.length) return null;
+  return {
+    ...persisted[0],
+    history: persisted,
+    historyDays: Math.max(30, persisted.length),
+    sourceHealth: persisted[0].sourceHealth || [],
+    backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
+  };
+}
+
+function refreshInBackground(persisted) {
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  void latest(1, persisted)
+    .catch((error) => console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' })))
+    .finally(() => { refreshInFlight = false; });
+}
+
 function nextDrawAt(now = new Date()) {
   const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   const year = taipei.getUTCFullYear(); const month = taipei.getUTCMonth(); const day = taipei.getUTCDate();
@@ -697,6 +717,12 @@ const server = http.createServer(async (req, res) => {
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
       const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : maxModelHistory);
+      // 非開獎時段不應被官方 API 的空回應或逾時清空畫面；先回傳最近一筆已確認開獎資料，更新在背景完成。
+      if (persisted.length && daysOverride === 1) {
+        const cached = persistedResponse(persisted);
+        refreshInBackground(persisted);
+        return send(res, 200, cached);
+      }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
       const hasUsableHistory = persisted.length >= maxModelHistory;
       if (persisted.length && daysOverride === 1 && !hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: persisted.length, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });

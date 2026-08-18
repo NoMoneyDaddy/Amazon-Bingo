@@ -212,7 +212,7 @@ type ProfitabilityPlay = {
     estimatedRate?: number | null;
     confidence?: number | null;
     prediction: string;
-    periodResults?: Array<{ period: string; drawAt?: string; prediction?: string; matches: number; targetCount: number; payout: number; net: number; profitable: boolean }>;
+    periodResults?: Array<{ period: string; drawAt?: string; prediction?: string; matches?: number; targetCount?: number; payout: number; net: number; profitable: boolean }>;
   };
   fixed?: ProfitabilityPlay["best"];
   follow?: ProfitabilityPlay["best"];
@@ -875,9 +875,14 @@ function BacktestEvidence({
 
 function ProfitabilityDetail({
   best,
+  playKey,
+  history,
 }: {
   best: ProfitabilityPlay["best"];
+  playKey: string;
+  history: DrawSnapshot[];
 }) {
+  const actualByPeriod = new Map(history.map((draw) => [String(draw.period), draw]));
   return (
     <div className="grid gap-1.5 border-t border-slate-800 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground sm:grid-cols-4">
       <span>有效回測期數：<strong className="tabular-nums text-slate-200">{best.samples} 期</strong></span>
@@ -896,12 +901,34 @@ function ProfitabilityDetail({
         {best.periodResults?.length ? (
           <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
             {best.periodResults.map((item) => (
-              <div key={item.period} className={`rounded-md border px-2 py-1.5 text-center ${item.profitable ? "border-emerald-300/30 bg-emerald-300/5" : "border-rose-300/25 bg-rose-300/5"}`}>
+              (() => {
+                const draw = actualByPeriod.get(String(item.period));
+                let matches = item.matches;
+                let targetCount = item.targetCount;
+                if (!Number.isFinite(matches) || !Number.isFinite(targetCount)) {
+                  const prediction = String(item.prediction || "").trim();
+                  if (playKey === "size" || playKey === "oddEven") {
+                    matches = draw && prediction === (playKey === "size" ? draw.size : draw.oddEven) ? 1 : 0;
+                    targetCount = 1;
+                  } else if (playKey === "superNumber") {
+                    const selected = normalizeNumber(prediction);
+                    const drawn = new Set((draw?.numbers || []).map(normalizeNumber));
+                    matches = draw && selected && (selected === normalizeNumber(draw.superNumber) || drawn.has(selected)) ? 1 : 0;
+                    targetCount = 1;
+                  } else {
+                    const predicted = prediction.split("、").filter(Boolean);
+                    const drawn = new Set((draw?.numbers || []).map(normalizeNumber));
+                    matches = predicted.filter((value) => drawn.has(normalizeNumber(value))).length;
+                    targetCount = predicted.length;
+                  }
+                }
+                return <div key={item.period} className={`rounded-md border px-2 py-1.5 text-center ${item.profitable ? "border-emerald-300/30 bg-emerald-300/5" : "border-rose-300/25 bg-rose-300/5"}`}>
                 <div className="text-[9px] text-muted-foreground">第 {item.period.slice(-4)} 期</div>
                 <div className="mt-0.5 truncate text-[9px] text-cyan-200">{item.prediction || "—"}</div>
-                <div className="mt-0.5 text-[10px] font-semibold tabular-nums text-amber-200">命中 {item.matches}/{item.targetCount}</div>
+                <div className="mt-0.5 text-[10px] font-semibold tabular-nums text-amber-200">命中 {matches}/{targetCount}</div>
                 <div className={`mt-0.5 font-semibold tabular-nums ${item.profitable ? "text-emerald-300" : "text-rose-300"}`}>{formatNetProfit(item.net)}</div>
-              </div>
+                </div>;
+              })()
             ))}
           </div>
         ) : <div className="mt-1 text-center text-[10px]">尚無逐期資料</div>}
@@ -1408,7 +1435,7 @@ export function BingoResearchView() {
                           </span>
                           </>; })()}
                         </summary>
-                        <ProfitabilityDetail best={profitStrategy === "fixed" ? (play.fixed || play.best) : (play.follow || play.best)} />
+                        <ProfitabilityDetail playKey={play.key} history={sorted} best={profitStrategy === "fixed" ? (play.fixed || play.best) : (play.follow || play.best)} />
                       </details>
                     ))}
                   </div>

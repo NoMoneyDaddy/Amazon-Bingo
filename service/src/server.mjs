@@ -204,9 +204,11 @@ function parseChineseCalendarParts(value) {
   const parts = new Intl.DateTimeFormat('zh-TW-u-ca-chinese', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false }).formatToParts(date);
   const monthNames = ['正月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
   const monthPart = parts.find((part) => part.type === 'month')?.value || '';
+  const normalizedMonth = monthPart.replace(/^閏/, '').replace('腊', '臘');
+  const month = normalizedMonth === '臘月' ? 12 : monthNames.indexOf(normalizedMonth) + 1;
   return {
     year: Number(parts.find((part) => part.type === 'relatedYear')?.value || date.getUTCFullYear()),
-    month: Math.max(1, monthNames.indexOf(monthPart.replace(/^閏/, '')) + 1),
+    month: Math.max(1, month),
     day: Number(parts.find((part) => part.type === 'day')?.value || 1),
     hour: Number(parts.find((part) => part.type === 'hour')?.value || 0),
   };
@@ -233,14 +235,13 @@ function targetInput(snapshot, target, castingAt = snapshot.drawAt || new Date()
 
 function meihuaCasting(snapshot, target, castingAt) {
   const input = targetInput(snapshot, target, castingAt);
-  const solar = parseTaipeiParts(input.castingAt);
   const lunar = parseChineseCalendarParts(input.castingAt);
-  const yearBranch = ((solar.year - 4) % 12 + 12) % 12 + 1;
+  const yearBranch = ((lunar.year - 4) % 12 + 12) % 12 + 1;
   const total = yearBranch + lunar.month + lunar.day;
   const upper = total % 8 || 8;
   const lower = (total + lunar.hour) % 8 || 8;
   const moving = (total + lunar.hour) % 6 || 6;
-  return { input, upper, lower, moving, formula: `預測時間=${input.castingAt}；年支=${yearBranch}、農曆月=${lunar.month}、日=${lunar.day}、時=${lunar.hour}；上卦=(年支+月+日) mod 8=${upper}；下卦=(年支+月+日+時) mod 8=${lower}；動爻 mod 6=${moving}。期號與玩法僅作所問事項：${input.question}` };
+  return { input, upper, lower, moving, formula: `預測時間=${input.castingAt}；年支=${yearBranch}、農曆月=${lunar.month}、日=${lunar.day}、時=${lunar.hour}；上卦=(年支+月+日) mod 8=${upper}；下卦=(年支+月+日+時) mod 8=${lower}；動爻=(年支+月+日+時) mod 6=${moving}。同一預測時刻的時間起卦核心一致；期號與玩法僅作所問事項，各目標再獨立套用研究排序：${input.question}` };
 }
 
 function digitalYarrowLine(random, lineIndex) {
@@ -533,7 +534,7 @@ export function buildModels(snapshot, history = [], options = {}) {
   const profiles = options.profiles || (options.evolve === false ? {} : evolveProfiles(history));
   const castingAt = options.castingAt || snapshot.castingAt || snapshot.drawAt || new Date().toISOString();
   const methods = [
-    { name: '梅花易數', kind: 'meihua', status: '正統時間起卦核心＋目標玩法適配', seedOffset: 11 },
+    { name: '梅花易數', kind: 'meihua', status: '經典時間起卦公式＋各目標獨立研究排序', seedOffset: 11 },
     { name: '六爻八卦', kind: 'sixyao', status: '正統大衍筮法結構＋數位蓍草適配', seedOffset: 37 },
     { name: '河圖洛書', kind: 'luoshu', status: '洛書九宮核心＋目標玩法適配', seedOffset: 61 },
     { name: '數字卦（楚簡研究版）', kind: 'numeral-gua', status: '文獻數字結構＋目標玩法研究適配，非完整復原', seedOffset: 73 },

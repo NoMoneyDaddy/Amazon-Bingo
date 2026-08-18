@@ -153,50 +153,6 @@ function formatCountdown(ms: number) {
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
-function recentNumberStats(draws: DrawSnapshot[]) {
-  const sample = draws.slice(0, 30);
-  const normalizedDraws = sample.map((draw) => draw.numbers.map(normalizeNumber));
-  const stats = Array.from({ length: 80 }, (_, index) => ({
-    number: String(index + 1).padStart(2, "0"),
-    count: 0,
-    currentOpen: 0,
-  }));
-  normalizedDraws.forEach((numbers) =>
-    numbers.forEach((number) => {
-      const item = stats[Number(number) - 1];
-      if (item) item.count += 1;
-    }),
-  );
-  stats.forEach((item) => {
-    for (const numbers of normalizedDraws) {
-      if (!numbers.includes(item.number)) break;
-      item.currentOpen += 1;
-    }
-  });
-  const hot = new Set(
-    [...stats]
-      .sort((a, b) => b.count - a.count || Number(a.number) - Number(b.number))
-      .slice(0, 10)
-      .map((item) => item.number),
-  );
-  const cold = new Set(
-    [...stats]
-      .sort((a, b) => a.count - b.count || Number(a.number) - Number(b.number))
-      .filter((item) => !hot.has(item.number))
-      .slice(0, 10)
-      .map((item) => item.number),
-  );
-  return { sampleSize: sample.length, stats, hot, cold };
-}
-
-function numberCounts(numbers: string[]) {
-  return numbers.reduce((counts, number) => {
-    const normalized = normalizeNumber(number);
-    counts.set(normalized, (counts.get(normalized) || 0) + 1);
-    return counts;
-  }, new Map<string, number>());
-}
-
 function numberSum(numbers: string[]) {
   return numbers.reduce((sum, number) => sum + Number(number), 0);
 }
@@ -428,7 +384,7 @@ function targetLabel(target: string) {
 }
 
 function modelPlainLanguage(name: string) {
-  if (name === "梅花易數") return "用預測當下的年支、農曆月日與時辰取上下卦、動爻；期號與玩法只是所問事項。";
+  if (name === "梅花易數") return "用預測當下的年支、農曆月日與時辰取上下卦、動爻；同一時刻共用起卦核心，各玩法／星級再獨立解讀與回測。";
   if (name === "六爻八卦") return "用數位蓍草執行分二、掛一、揲四、歸奇三變，逐爻得到六、七、八、九；期號與玩法只是所問事項。";
   if (name === "河圖洛書") return "用九宮數字定位，再觀察號碼和九宮位置的關係。";
   if (name === "數字卦（楚簡研究版）") return "採用文獻記載的數字集合，將期號轉成六個可重算數字特徵。";
@@ -461,7 +417,6 @@ export function BingoResearchView() {
     () => bestPlayStats(sorted, latestModels),
     [sorted, latestModels],
   );
-  const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
 
   const sync = useCallback(async () => {
     if (syncing) return;
@@ -663,7 +618,7 @@ export function BingoResearchView() {
                       <p className="mt-2 text-sm leading-6 text-slate-300">{modelPlainLanguage(model.name)}</p>
                       <div className="mt-3 rounded-xl border border-border bg-card p-3 text-xs leading-6 text-muted-foreground">
                         <div className="mb-1 font-semibold text-cyan-200">計算輸入</div>
-                        <span className="text-foreground">起卦依據：</span>每個玩法／星級均以預測當下時間獨立起卦；目標期號與玩法只標記問題，不直接硬編碼成卦象。
+                        <span className="text-foreground">起卦依據：</span>同一預測時刻共用時間起卦核心；各玩法／星級只作問題語境，再獨立套用研究排序與回測，不把期號／星級硬編碼成卦象。
                         <div className="mt-2 space-y-1">
                           {Object.entries(model.calculation?.targetCastings || {}).map(([target, formula]) => (
                             <div key={target} className="break-words"><span className="text-amber-200">{targetLabel(target)}：</span>{formula}{model.calculation?.targetCastingValues?.[target] ? `｜結果：${model.calculation.targetCastingValues[target]}` : ""}</div>
@@ -725,83 +680,40 @@ export function BingoResearchView() {
               </section>
             )}
             {page === "history" && (
-              <section aria-labelledby="history-heading" className="rounded-3xl border border-cyan-300/30 bg-card p-4 shadow-xl shadow-cyan-950/20 backdrop-blur sm:p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200/80">04 · 歷史紀錄</p>
-                <h2 id="history-heading" className="mt-1 text-xl font-bold tracking-tight text-cyan-100">已開獎期回測紀錄</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  每一期先看官方結果，再展開模型查看預測、派彩與單注淨盈虧；數字只代表歷史紀錄，不代表未來結果。
-                </p>
-                <div className="relative mt-5 space-y-3 before:absolute before:bottom-3 before:left-3 before:top-3 before:w-px before:bg-cyan-300/25">
+              <section aria-labelledby="history-heading" className="rounded-2xl border border-cyan-300/30 bg-card p-2.5 shadow-xl shadow-cyan-950/20 backdrop-blur sm:p-4">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-cyan-200/80">04 · 歷史紀錄</p>
+                    <h2 id="history-heading" className="mt-0.5 text-base font-bold tracking-tight text-cyan-100 sm:text-lg">開獎回測</h2>
+                  </div>
+                  <span className="shrink-0 text-[10px] text-muted-foreground">{Math.max(0, sorted.length - 1)} 期</span>
+                </div>
+                <p className="mt-1.5 text-xs leading-5 text-muted-foreground">官方結果只列一次；點開單一期數查看模型預測、派彩與正盈利結果。</p>
+                <div className="mt-3 space-y-1.5">
                   {sorted.slice(1, 51).map((draw) => (
-                    <article
-                      key={draw.period}
-                      className="relative ml-7 rounded-2xl border border-border bg-background/70 p-3 transition-colors duration-300 hover:border-cyan-300/50 sm:p-4"
-                    >
-                      <span aria-hidden="true" className="absolute -left-[1.65rem] top-5 h-3 w-3 rounded-full border-2 border-slate-950 bg-cyan-300 shadow-[0_0_0_4px_rgba(103,232,249,0.15)]" />
-                      <div className="flex flex-wrap items-baseline justify-between gap-2">
-                        <h3 className="text-base font-bold text-white">第 {draw.period} 期</h3>
-                        <span className="rounded-full border border-border bg-card px-2 py-1 text-[10px] font-semibold text-muted-foreground">已結算</span>
-                      </div>
-                      <div className="mt-1 text-xs leading-6 text-slate-300">
-                          開獎時間 {draw.drawAt || "未知"} · 資料來源{" "}
-                          {draw.sourceLabel || "未知"}
+                    <article key={draw.period} className="rounded-xl border border-border bg-background/70 p-2 transition-colors hover:border-cyan-300/50 sm:p-2.5">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <div className="w-[4.5rem] shrink-0">
+                          <h3 className="text-xs font-bold tabular-nums text-white">第 {draw.period} 期</h3>
+                          <div className="mt-0.5 truncate text-[9px] text-muted-foreground">{draw.drawAt || "時間未知"}</div>
                         </div>
-                      <div className="mt-2 flex flex-wrap gap-1 text-[10px]" aria-label={`第 ${draw.period} 期摘要`}>
-                        <span className="rounded-full border border-violet-300/30 bg-violet-300/10 px-2 py-0.5 tabular-nums text-violet-100">總和 {numberSum(draw.numbers)}</span>
-                        <span className="rounded-full border border-orange-300/30 bg-orange-300/10 px-2 py-0.5 text-orange-100">大小 {draw.size || "—"}</span>
-                        <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 text-cyan-100">單雙 {draw.oddEven || "—"}</span>
-                        <span className="rounded-full border border-red-300/30 bg-red-400/10 px-2 py-0.5 tabular-nums text-red-100">超級 {draw.superNumber || "—"}</span>
+                        <div className="min-w-0 flex-1">
+                          <div className="overflow-x-auto whitespace-nowrap font-mono text-[10px] tracking-tight text-orange-50 sm:text-[11px]">{draw.numbers.map((number) => normalizeNumber(number)).join(" ")}</div>
+                          <div className="mt-0.5 truncate text-[9px] text-muted-foreground">總和 {numberSum(draw.numbers)} · 大小 {draw.size || "—"} · 單雙 {draw.oddEven || "—"} · 超 {draw.superNumber || "—"}</div>
+                        </div>
+                        <button
+                          type="button"
+                          className="min-h-8 shrink-0 rounded-md border border-cyan-300/25 bg-cyan-300/5 px-2 text-[10px] font-semibold text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+                          aria-expanded={expandedHistory === draw.period}
+                          aria-controls={`history-detail-${draw.period}`}
+                          onClick={() => setExpandedHistory((current) => current === draw.period ? null : draw.period)}
+                        >
+                          {expandedHistory === draw.period ? "收合" : "詳情"}
+                        </button>
                       </div>
-                      <div className="mt-1 truncate text-[10px] text-muted-foreground">號碼：{draw.numbers.join("、")}</div>
-                      <button
-                        type="button"
-                        className="mt-2 min-h-9 w-full rounded-lg border border-cyan-300/25 bg-cyan-300/5 px-3 py-1.5 text-left text-xs font-semibold text-cyan-100 transition-colors hover:bg-cyan-300/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
-                        aria-expanded={expandedHistory === draw.period}
-                        aria-controls={`history-detail-${draw.period}`}
-                        onClick={() => setExpandedHistory((current) => current === draw.period ? null : draw.period)}
-                      >
-                        {expandedHistory === draw.period ? "收合完整紀錄 ↑" : "展開完整紀錄 ↓"}
-                      </button>
                       {expandedHistory === draw.period && (
-                        <div id={`history-detail-${draw.period}`} className="mt-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3 text-sm leading-6 text-slate-200">
-                        <div className="mb-3 flex flex-wrap gap-1.5" aria-label={`第 ${draw.period} 期總和、大小、單雙結果`}>
-                          <span className="rounded-full border border-violet-300/30 bg-violet-300/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-violet-100">
-                            總和：{numberSum(draw.numbers)}
-                          </span>
-                          <span className="rounded-full border border-orange-300/30 bg-orange-300/10 px-2 py-0.5 text-[11px] font-semibold text-orange-100">
-                            大小：{draw.size || "—"}
-                          </span>
-                          <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 text-[11px] font-semibold text-cyan-100">
-                            單雙：{draw.oddEven || "—"}
-                          </span>
-                        </div>
-                        <div className="grid grid-cols-5 gap-x-1.5 gap-y-3 sm:grid-cols-10" role="list" aria-label={`第 ${draw.period} 期的開獎號碼`}>
-                          {draw.numbers.map((number, index) => {
-                            const normalized = normalizeNumber(number);
-                            const isSuperNumber = normalizeNumber(draw.superNumber) === normalized;
-                            const repeatCount = numberCounts(draw.numbers).get(normalized) || 1;
-                            const isRepeated = repeatCount > 1;
-                            const isHot = recentStats.hot.has(normalized);
-                            const isCold = recentStats.cold.has(normalized);
-                            return (
-                              <div key={`${draw.period}-${number}-${index}`} role="listitem" aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : ""}`} className="flex min-w-0 flex-col items-center gap-1">
-                                <span className={`relative flex aspect-square w-full max-w-9 items-center justify-center rounded-full border text-xs font-bold tabular-nums text-white ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_10px_rgba(239,68,68,0.55)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800 shadow-[0_2px_12px_rgba(236,72,153,0.62)]" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800 shadow-[0_2px_12px_rgba(59,130,246,0.55)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600 shadow-[0_2px_8px_rgba(249,115,22,0.42)]"}`}>
-                                  {normalized}
-                                  {isRepeated && !isSuperNumber && (
-                                    <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-white/80 bg-pink-600 px-1 text-[9px] font-bold leading-none text-white shadow-[0_1px_5px_rgba(236,72,153,0.65)]">
-                                      {repeatCount}
-                                    </span>
-                                  )}
-                                </span>
-                              </div>
-                            );
-                          })}
-                        </div>
-                        <div className="mt-3 border-t border-border pt-2 text-[11px] text-muted-foreground">模型紀錄：
-                        {parseModels(draw)
-                          .map((model) => model.name)
-                          .join("、") || "—"}
-                        </div>
+                        <div id={`history-detail-${draw.period}`} className="mt-2 border-t border-slate-800 pt-2">
+                          <div className="mb-1 text-[10px] font-semibold text-cyan-100">模型結算</div>
                           {parseModels(draw).map((model) => (
                             <HistoricalModelDetails key={model.name} model={model} draw={draw} />
                           ))}
@@ -810,7 +722,7 @@ export function BingoResearchView() {
                     </article>
                   ))}
                   {sorted.length <= 1 && (
-                    <p className="rounded-2xl border border-dashed border-slate-700 p-5 text-center text-sm text-slate-300">至少需要兩期資料，才能進行歷史回測。</p>
+                    <p className="rounded-xl border border-dashed border-slate-700 p-4 text-center text-xs text-slate-300">至少需要兩期資料，才能進行歷史回測。</p>
                   )}
                 </div>
               </section>

@@ -2568,7 +2568,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         } else if (isNextPrediction && options.deferLatestModel) {
           // 優先同步只延後新模型計算；同期期號仍沿用已保存模型，避免首頁短暫變成空白。
           // 新期號也沿用上一期正式模型作暫時預測，背景完成後再替換為新模型。
-          models = previous?.models || item.models || existingHistory[0]?.models || [];
+          models = previous?.models || item.models || existingHistory.find((candidate) => candidate.models?.length)?.models || [];
         }
         history.push({
           ...enrichedItem,
@@ -2815,9 +2815,10 @@ const server = http.createServer(async (req, res) => {
       const responseCacheKey = daysOverride === 1 ? 'latest-1' : '';
       if (priorityRefresh && daysOverride === 1) {
         const persistedForPriority = await readPersistedCached(persistedHistoryLimit);
+        const hasAnySavedModels = persistedForPriority.some((item) => item.models?.length);
         const prioritySnapshot = await latest(1, persistedForPriority, castingAt, {
-          // 冷啟動沒有任何保存模型時，優先請求直接建立一次；已有模型則沿用以保持快速。
-          deferLatestModel: Boolean(persistedForPriority[0]?.models?.length),
+          // 冷啟動只在整個保存集都沒有模型時建立；有歷史模型就先沿用，避免首頁等待數十秒。
+          deferLatestModel: hasAnySavedModels,
           deferEvaluationModels: true,
         });
         void readPersistedCached(persistedHistoryLimit)

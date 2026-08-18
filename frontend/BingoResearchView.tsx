@@ -1029,9 +1029,16 @@ export function BingoResearchView() {
                       {predictionStatus === "current" ? "預測最新" : "預測非最新期"}
                     </span>
                   </div>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 以下是「淨盈利大於 0」的回測統計，不是實際中獎機率；可切換固定連買或連續跟買。
-                  </p>
+                  <div className="mt-3 border-l-2 border-cyan-300/60 bg-cyan-300/5 px-2.5 py-2 text-xs leading-5 text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span><span className="text-cyan-200/80">最新開獎</span> {latest?.period ? `第 ${latest.period} 期` : "同步中"}</span>
+                      <span><span className="text-cyan-200/80">預測目標</span> {latest?.predictionTargetPeriod ? `第 ${latest.predictionTargetPeriod} 期` : "同步中"}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+                      <span>盈利定義：淨盈利大於 0</span>
+                      <span>可切換：固定連買／連續跟買</span>
+                    </div>
+                  </div>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
                     <div className="grid grid-cols-[5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)]">
                       <span className="text-center">玩法</span>

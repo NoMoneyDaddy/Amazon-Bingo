@@ -2334,6 +2334,39 @@ function compactHistoryForResponse(history) {
   });
 }
 
+function hydrateStoredPeriodMatches(profitability, history) {
+  if (!Array.isArray(profitability) || !profitability.length) return profitability || [];
+  const byPeriod = new Map((history || []).map((draw) => [String(draw.period || ''), draw]));
+  return profitability.map((play) => {
+    const best = play?.best;
+    if (!best || !Array.isArray(best.periodResults)) return play;
+    const periodResults = best.periodResults.map((item) => {
+      if (Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))) return item;
+      const actual = byPeriod.get(String(item.period || ''));
+      if (!actual) return item;
+      const prediction = String(item.prediction || '').trim();
+      let matches = 0;
+      let targetCount = 1;
+      if (play.key === 'size' || play.key === 'oddEven') {
+        const field = play.key === 'size' ? 'size' : 'oddEven';
+        matches = prediction === String(actual[field] || '') ? 1 : 0;
+      } else if (play.key === 'superNumber') {
+        const selected = normalizeNumberValue(prediction);
+        const drawn = new Set((actual.numbers || []).map(normalizeNumberValue));
+        targetCount = 1;
+        matches = selected && (selected === normalizeNumberValue(actual.superNumber) || drawn.has(selected)) ? 1 : 0;
+      } else {
+        const predicted = prediction.split('、').map(normalizeNumberValue).filter(Boolean);
+        const drawn = new Set((actual.numbers || []).map(normalizeNumberValue));
+        targetCount = predicted.length;
+        matches = predicted.filter((number) => drawn.has(number)).length;
+      }
+      return { ...item, matches, targetCount };
+    });
+    return { ...play, best: { ...best, periodResults } };
+  });
+}
+
 function requestedCastingTime(value) {
   const parsed = new Date(String(value || ''));
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : '';
@@ -2483,10 +2516,11 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   const evaluationHistory = [{ ...current, models }, ...visible.slice(1)];
   const storedForecast = current.forecastEvaluation?.length ? current.forecastEvaluation : forecastEvaluation(evaluationHistory);
   const storedCalibrated = current.calibratedProbabilityEvaluation?.length ? current.calibratedProbabilityEvaluation : calibratedProbabilityEvaluation(evaluationHistory);
-  const storedProfitabilityReady = Array.isArray(current.profitabilityEvaluation) && current.profitabilityEvaluation.length > 0
-    && current.profitabilityEvaluation.every((play) => Array.isArray(play.best?.periodResults)
+  const hydratedProfitability = hydrateStoredPeriodMatches(current.profitabilityEvaluation, visible);
+  const storedProfitabilityReady = Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
+    && hydratedProfitability.every((play) => Array.isArray(play.best?.periodResults)
       && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
-  const storedProfitability = storedProfitabilityReady ? current.profitabilityEvaluation : profitabilityEvaluation(evaluationHistory);
+  const storedProfitability = storedProfitabilityReady ? hydratedProfitability : profitabilityEvaluation(evaluationHistory);
   const storedZone = current.zoneProfitabilityEvaluation?.length ? current.zoneProfitabilityEvaluation : zoneProfitabilityEvaluation(evaluationHistory);
   const storedTechnical = Object.keys(current.technicalAnalysis || {}).length ? current.technicalAnalysis : technicalAnalysis(evaluationHistory);
   return {
@@ -2514,17 +2548,18 @@ function refreshInBackground(persisted, days = 1) {
   if (refreshInFlight) return;
   refreshInFlight = true;
   // 已有正式模型但缺少回測時，只補寫評估快照；不要為了回測再次重跑模型。
-  const storedProfitabilityReady = Array.isArray(persisted[0]?.profitabilityEvaluation) && persisted[0].profitabilityEvaluation.length > 0
-    && persisted[0].profitabilityEvaluation.every((play) => Array.isArray(play.best?.periodResults)
+  const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);
+  const hydratedProfitability = hydrateStoredPeriodMatches(persisted[0]?.profitabilityEvaluation, history);
+  const storedProfitabilityReady = Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
+    && hydratedProfitability.every((play) => Array.isArray(play.best?.periodResults)
       && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
   if (days === 1 && persisted[0]?.models?.length && !storedProfitabilityReady) {
     setImmediate(() => void (async () => {
       try {
-        const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);
         const evaluation = {
           forecastEvaluation: forecastEvaluation(history),
           calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history),
-          profitabilityEvaluation: profitabilityEvaluation(history),
+          profitabilityEvaluation: hydratedProfitability.length ? hydratedProfitability : profitabilityEvaluation(history),
           zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history),
           technicalAnalysis: technicalAnalysis(history),
         };

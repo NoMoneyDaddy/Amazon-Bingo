@@ -316,6 +316,13 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
   };
 }
 
+function hasBacktestEvaluation(value: Partial<DrawSnapshot> | DrawSnapshot | undefined) {
+  const plays = value?.profitabilityEvaluation;
+  return Array.isArray(plays)
+    && plays.length > 0
+    && plays.some((play) => Number(play?.best?.samples || 0) > 0 || (play?.best?.periodResults?.length || 0) > 0);
+}
+
 const LOCAL_FALLBACK_VERSION = "bingo-local-fallback-v1";
 
 function sanitizeBingoNumber(value: unknown): string | null {
@@ -1185,6 +1192,7 @@ export function BingoResearchView() {
     };
   }, [sorted]);
   const technicalAnalysis: TechnicalAnalysisData = latest?.technicalAnalysis || technicalAnalysisFallback;
+  const backtestReady = hasBacktestEvaluation(latest);
 
   const sync = useCallback(async (forceHistory = false) => {
     if (syncingRef.current) return;
@@ -1225,11 +1233,11 @@ export function BingoResearchView() {
             const latestRuntime = useBingoRuntimeStore.getState();
             latestRuntime.setDraws(mergeDrawSnapshots(latestRuntime.draws, computedRecords));
             const isCurrentPeriod = String(computedSnapshot.period || '') === String(latestRecord.period || '');
-            if (isCurrentPeriod && computedSnapshot.modelStatus === "formal" && computedSnapshot.profitabilityEvaluation?.length) return;
+            if (isCurrentPeriod && computedSnapshot.modelStatus === "formal" && hasBacktestEvaluation(computedSnapshot)) return;
           } catch {
-            if (attempt >= 2) return;
+            if (attempt >= 5) return;
           }
-          if (attempt >= 2) return;
+          if (attempt >= 5) return;
           await new Promise((resolve) => window.setTimeout(resolve, 5_000));
           return refreshComputedLatest(attempt + 1);
         };
@@ -1496,7 +1504,7 @@ export function BingoResearchView() {
                             <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">點擊看回測</span>
                           </div>
                           <span className="min-w-0 text-right text-[10px] font-semibold leading-4 text-amber-200 sm:text-right sm:text-xs">
-                            {best.samples ? <><span className="block">盈利機率 {(best.wins / best.samples * 100).toFixed(1)}%</span><span className="block font-normal tabular-nums text-slate-300">正盈利 {best.wins} 期／共 {best.samples} 期</span><span className={`block font-normal tabular-nums ${best.profit > 0 ? "text-emerald-300" : "text-rose-300"}`}>累計賺賠 {formatNetProfit(best.profit)}</span></> : "尚無回測資料"}
+                            {best.samples ? <><span className="block">盈利機率 {(best.wins / best.samples * 100).toFixed(1)}%</span><span className="block font-normal tabular-nums text-slate-300">正盈利 {best.wins} 期／共 {best.samples} 期</span><span className={`block font-normal tabular-nums ${best.profit > 0 ? "text-emerald-300" : "text-rose-300"}`}>累計賺賠 {formatNetProfit(best.profit)}</span></> : backtestReady ? "尚無回測資料" : "後端正在計算回測"}
                           </span>
                           </>; })()}
                         </summary>

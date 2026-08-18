@@ -92,11 +92,11 @@ function normalizeCategory(value: string) {
 
 async function fetchLatest(days = 1): Promise<DrawSnapshot> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 3; attempt += 1) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
     const timeout = window.setTimeout(
       () => controller.abort("資料服務逾時"),
-      45_000,
+      12_000,
     );
     try {
       const response = await fetch(`${API_URL}?days=${days}`, {

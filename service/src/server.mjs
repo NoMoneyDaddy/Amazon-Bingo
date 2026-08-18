@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createHash } from 'node:crypto';
+import { gzipSync } from 'node:zlib';
 import pg from 'pg';
 
 const { Pool } = pg;
@@ -14,15 +15,19 @@ const fallbackSources = [
   { name: 'Auzo 奧索樂透網', url: 'https://lotto.auzo.tw/bingobingo.php' },
 ];
 const databaseUrl = process.env.DATABASE_URL || '';
-const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 4, idleTimeoutMillis: 30_000 }) : null;
+const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 8, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 3_000, query_timeout: 8_000, statement_timeout: 8_000 }) : null;
 const githubToken = process.env.GITHUB_TOKEN || '';
 const githubRepo = process.env.GITHUB_BACKUP_REPO || 'NoMoneyDaddy/Amazon-Bingo';
 const githubBackupPath = process.env.GITHUB_BACKUP_PATH || 'backups/bingo-model-profile.json';
 const upstreamTimeoutMs = 15_000;
+const persistedCacheTtlMs = 5_000;
 let databaseReady = false;
 let lastPersistedPeriod = '';
 let scheduledTimer;
 let refreshInFlight = false;
+const persistedCache = new Map();
+const persistedReadInFlight = new Map();
+const compressedPayloadCache = new Map();
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = upstreamTimeoutMs) {
   const controller = new AbortController();
@@ -125,6 +130,7 @@ async function persistSnapshots(snapshots) {
     }
     await client.query('COMMIT');
     lastPersistedPeriod = snapshots[0]?.period || lastPersistedPeriod;
+    persistedCache.set(maxModelHistory, { rows: snapshots, storedAt: Date.now() });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -138,6 +144,22 @@ async function readPersisted(limit = 6000) {
     size, odd_even AS "oddEven", source, source_label AS "sourceLabel", source_health AS "sourceHealth",
     models, prediction_target_period AS "predictionTargetPeriod", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
   return result.rows.map((row) => ({ ...row, numbers: Array.isArray(row.numbers) ? row.numbers : [], sourceHealth: row.sourceHealth || [], models: row.models || [] }));
+}
+
+async function readPersistedCached(limit = maxModelHistory) {
+  const cacheKey = limit <= maxModelHistory ? maxModelHistory : limit;
+  const cached = persistedCache.get(cacheKey);
+  if (cached && Date.now() - cached.storedAt < persistedCacheTtlMs) return cached.rows;
+  const inFlight = persistedReadInFlight.get(cacheKey);
+  if (inFlight) return inFlight;
+  const read = readPersisted(limit)
+    .then((rows) => {
+      if (cacheKey === maxModelHistory) persistedCache.set(cacheKey, { rows, storedAt: Date.now() });
+      return rows;
+    })
+    .finally(() => persistedReadInFlight.delete(cacheKey));
+  persistedReadInFlight.set(cacheKey, read);
+  return read;
 }
 
 function cleanHtml(html) {
@@ -636,19 +658,25 @@ async function latest(daysOverride = null, existingHistory = []) {
       });
       const rawHistory = [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period));
       const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);
-      const history = rawHistory.map((item, index) => {
+      const history = [];
+      for (let index = 0; index < rawHistory.length; index += 1) {
+        await new Promise((resolve) => setImmediate(resolve));
+        const item = rawHistory[index];
         const drawAt = formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000));
         const isNextPrediction = index === 0;
         const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt } : item;
-        return {
+        const models = index > 0 && item.models?.length
+          ? item.models
+          : buildModels(modelSnapshot, rawHistory.slice(index + 1, index + maxModelHistory + 1), { evolve: isNextPrediction, castingAt: new Date(syncedAt - index * 5 * 60 * 1000).toISOString() });
+        history.push({
           ...item,
           drawAt,
           predictionTargetPeriod: isNextPrediction ? nextPeriod : item.period,
-          models: index < maxModelHistory ? buildModels(modelSnapshot, rawHistory.slice(index + 1, index + maxModelHistory + 1), { evolve: isNextPrediction, castingAt: new Date(syncedAt - index * 5 * 60 * 1000).toISOString() }) : [],
+          models: index < maxModelHistory ? models : [],
           fetchedAt: syncedAt,
           sourceHealth: health,
-        };
-      });
+        });
+      }
       await persistSnapshots(history);
       const backup = await backupModelProfile(history[0]);
       return { ...history[0], history, historyDays: Math.max(result.historyDays || 1, existingHistory.length ? 30 : 1), sourceHealth: health, backup };
@@ -690,7 +718,7 @@ function nextDrawAt(now = new Date()) {
 
 async function scheduledSync(forceRepair = false) {
   try {
-    const persisted = await readPersisted(maxModelHistory);
+    const persisted = await readPersistedCached(maxModelHistory);
     const requestedDays = forceRepair || !persisted.length ? 30 : 1;
     const refreshDays = requestedDays === 1 && persisted.length < maxModelHistory ? 30 : requestedDays;
     const result = await latest(refreshDays, persisted);
@@ -703,9 +731,35 @@ async function scheduledSync(forceRepair = false) {
   }
 }
 
-function send(res, status, body) {
-  res.writeHead(status, { 'content-type': 'application/json; charset=utf-8', 'access-control-allow-origin': process.env.CORS_ORIGIN || '*' });
-  res.end(JSON.stringify(body));
+function send(res, status, body, req = null) {
+  const json = JSON.stringify(body);
+  const etag = `"${createHash('sha1').update(json).digest('hex')}"`;
+  if (req?.headers['if-none-match'] === etag) {
+    res.writeHead(304, { etag, 'access-control-allow-origin': process.env.CORS_ORIGIN || '*' });
+    res.end();
+    return;
+  }
+  const headers = {
+    'content-type': 'application/json; charset=utf-8',
+    'access-control-allow-origin': process.env.CORS_ORIGIN || '*',
+    etag,
+    vary: 'Accept-Encoding',
+    'cache-control': req?.url?.startsWith('/api/latest') ? 'public, max-age=2, stale-while-revalidate=10' : 'no-store',
+  };
+  if (json.length > 512 && /gzip/i.test(String(req?.headers['accept-encoding'] || ''))) {
+    let compressed = compressedPayloadCache.get(etag);
+    if (!compressed) {
+      compressed = gzipSync(json);
+      compressedPayloadCache.set(etag, compressed);
+      if (compressedPayloadCache.size > 8) compressedPayloadCache.delete(compressedPayloadCache.keys().next().value);
+    }
+    headers['content-encoding'] = 'gzip';
+    res.writeHead(status, headers);
+    res.end(compressed);
+    return;
+  }
+  res.writeHead(status, headers);
+  res.end(json);
 }
 
 const server = http.createServer(async (req, res) => {
@@ -716,27 +770,24 @@ const server = http.createServer(async (req, res) => {
       const requestUrl = new URL(req.url, 'http://localhost');
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
-      const persisted = await readPersisted(daysOverride && daysOverride > 1 ? 10000 : maxModelHistory);
+      const persisted = await readPersistedCached(daysOverride && daysOverride > 1 ? 10000 : maxModelHistory);
       // 非開獎時段不應被官方 API 的空回應或逾時清空畫面；先回傳最近一筆已確認開獎資料，更新在背景完成。
       if (persisted.length && daysOverride === 1) {
         const cached = persistedResponse(persisted);
         refreshInBackground(persisted);
-        return send(res, 200, cached);
+        return send(res, 200, cached, req);
       }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
       const hasUsableHistory = persisted.length >= maxModelHistory;
-      if (persisted.length && daysOverride === 1 && !hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: persisted.length, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
-      const hasTargetAwareModels = persisted.length && persisted[0].models?.length && persisted[0].models.every((model) => Object.keys(model.calculation?.targetCastings || {}).length === predictionTargets.length);
-      if (persisted.length && daysOverride === 1 && hasTargetAwareModels && hasNextPrediction && hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
-      return send(res, 200, await latest(refreshDays, persisted));
-    } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }); }
+      return send(res, 200, await latest(refreshDays, persisted), req);
+    } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }
   }
   send(res, 404, { error: 'Not found' });
 });
 
 server.listen(port, '0.0.0.0', () => {
   console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
-  void scheduledSync(true);
+  setTimeout(() => void scheduledSync(true), 10_000);
 });

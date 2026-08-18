@@ -2755,12 +2755,18 @@ const server = http.createServer(async (req, res) => {
         if (cachedResponse) return send(res, 200, cachedResponse, req);
       }
       const persisted = await readPersistedCached(daysOverride && daysOverride > 1 ? 10000 : persistedHistoryLimit);
+      const evaluationIncomplete = persisted.length > 0
+        && !hasCompleteProfitabilityEvaluation(persisted[0]?.profitabilityEvaluation);
       const cachedForecast = persisted[0]?.forecastCastingAt
         ? reproducibleCastingAt(persisted[0].forecastCastingAt, persisted[0].predictionTargetPeriod || '')
         : '';
       const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
       // days=1 是最新開獎讀取，必須即時確認官方期號；歷史查詢才可使用保存快取。
       if (persisted.length && daysOverride === 1) {
+        if (evaluationIncomplete && requestUrl.searchParams.get('recover') === '1') {
+          const recovered = await latest(1, persisted, castingAt, { deferEvaluationModels: false });
+          return send(res, 200, writeLatestResponseCache(responseCacheKey, recovered), req);
+        }
         // 先回傳最近一次已保存的結果，官方期號確認與模型重算在背景執行；
         // 避免官方來源短暫逾時時，前端完全拿不到正式預測。
         const cached = {

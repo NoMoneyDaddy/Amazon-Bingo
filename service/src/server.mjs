@@ -1031,9 +1031,8 @@ function profitabilityEvaluation(history = []) {
       });
       const selectionModel = selectionModels.find((item) => item.name === currentModel.name) || currentModel;
       const evolution = selectionModel.calculation?.evolution?.[play.key];
-      const predictionSource = mode === 'fixed'
-        ? history[profitabilityBacktestWindow]?.models?.find((item) => item.name === currentModel.name) || currentModel
-        : currentModel;
+      // 回測統計使用歷史模型；畫面「預測號碼」必須使用目前最新模型，不能顯示回測錨點的舊號碼。
+      const predictionSource = currentModels.find((item) => item.name === currentModel.name) || currentModel;
       const prediction = play.key === 'size'
         ? predictionSource.official?.size
         : play.key === 'oddEven'

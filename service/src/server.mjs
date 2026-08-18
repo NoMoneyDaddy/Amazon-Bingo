@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v44-sequential-calibration';
+const reproducibilityVersion = 'bingo-research-v45-ml-negative-control';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -586,6 +586,7 @@ const modelSources = {
   '貝葉斯平滑基線': [{ name: 'Predicting Winning Lottery Numbers（統計模型研究）', url: 'https://arxiv.org/abs/2403.12836' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '超幾何集合基線': [{ name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '多窗口穩定性基線': [{ name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
+  '機器學習負對照': [{ name: '序列式機率預測與評估', url: 'https://arxiv.org/abs/0905.1673' }, { name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }],
 };
 const researchEvidenceRegistry = [
   { name: '西洋占星（負對照）', status: '不納入號碼預測；以雙盲研究作為反向驗證與限制說明', source: 'Nature 318（Carlson, 1985）', url: 'https://www.nature.com/articles/318419a0.pdf' },
@@ -964,14 +965,104 @@ function summarizePick(numbers) {
   };
 }
 
+function featureVectorFromPrior(prior = []) {
+  const summarize = (windowSize) => {
+    const window = prior.slice(0, Math.min(windowSize, prior.length));
+    if (!window.length) return [0.5, 0.5, 0.5];
+    const big = window.reduce((sum, draw) => sum + draw.numbers.filter((number) => Number(number) >= 41).length / 20, 0) / window.length;
+    const odd = window.reduce((sum, draw) => sum + draw.numbers.filter((number) => Number(number) % 2 === 1).length / 20, 0) / window.length;
+    const total = window.reduce((sum, draw) => sum + draw.numbers.reduce((inner, number) => inner + Number(number), 0) / 1600, 0) / window.length;
+    return [big, odd, total];
+  };
+  const recent = summarize(12);
+  const medium = summarize(60);
+  return [...recent, ...medium, prior[0] ? Number(prior[0].numbers.filter((number) => Number(number) >= 41).length) / 20 : 0.5, prior[0] ? Number(prior[0].numbers.filter((number) => Number(number) % 2 === 1).length) / 20 : 0.5];
+}
+
+function trainLogistic(samples, labels, iterations = 80, learningRate = 0.08, l2 = 0.35) {
+  if (!samples.length || samples.length !== labels.length) return { weights: [], bias: 0 };
+  const weights = Array(samples[0].length).fill(0);
+  let bias = 0;
+  const sigmoid = (value) => 1 / (1 + Math.exp(-clamp(value, -30, 30)));
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    const gradients = Array(weights.length).fill(0);
+    let biasGradient = 0;
+    samples.forEach((sample, index) => {
+      const probability = sigmoid(bias + sample.reduce((sum, value, featureIndex) => sum + value * weights[featureIndex], 0));
+      const error = probability - labels[index];
+      biasGradient += error;
+      sample.forEach((value, featureIndex) => { gradients[featureIndex] += error * value; });
+    });
+    const scale = 1 / samples.length;
+    weights.forEach((_, featureIndex) => { weights[featureIndex] -= learningRate * (gradients[featureIndex] * scale + l2 * weights[featureIndex]); });
+    bias -= learningRate * biasGradient * scale;
+  }
+  return { weights, bias };
+}
+
+function logisticProbability(model, sample) {
+  if (!model.weights.length) return 0.5;
+  return 1 / (1 + Math.exp(-clamp(model.bias + sample.reduce((sum, value, index) => sum + value * model.weights[index], 0), -30, 30)));
+}
+
+function buildMlNegativeControl(snapshot, history, castingAt) {
+  const samples = []; const sizeLabels = []; const oddEvenLabels = [];
+  const trainingLimit = Math.min(48, Math.max(0, history.length - 1));
+  for (let index = 0; index < trainingLimit; index += 1) {
+    const actual = history[index];
+    const prior = history.slice(index + 1, index + 61);
+    const size = normalizeDrawCategory(actual.size, 'size');
+    const oddEven = normalizeDrawCategory(actual.oddEven, 'oddEven');
+    if (!prior.length || !['大', '小'].includes(size) || !['單', '雙'].includes(oddEven)) continue;
+    samples.push(featureVectorFromPrior(prior));
+    sizeLabels.push(size === '大' ? 1 : 0);
+    oddEvenLabels.push(oddEven === '單' ? 1 : 0);
+  }
+  const currentFeatures = featureVectorFromPrior(history);
+  const sizeModel = trainLogistic(samples, sizeLabels);
+  const oddEvenModel = trainLogistic(samples, oddEvenLabels);
+  const sizeProbability = logisticProbability(sizeModel, currentFeatures);
+  const oddEvenProbability = logisticProbability(oddEvenModel, currentFeatures);
+  const scores = Array.from({ length: 80 }, (_, index) => {
+    const number = index + 1;
+    const numberSamples = []; const numberLabels = [];
+    for (let sampleIndex = 0; sampleIndex < trainingLimit; sampleIndex += 1) {
+      const prior = history.slice(sampleIndex + 1, sampleIndex + 61);
+      if (!prior.length) continue;
+      numberSamples.push(featureVectorFromPrior(prior));
+      numberLabels.push(history[sampleIndex].numbers.some((value) => Number(value) === number) ? 1 : 0);
+    }
+    return { number, score: logisticProbability(trainLogistic(numberSamples, numberLabels, 40, 0.06, 0.5), currentFeatures) };
+  }).sort((a, b) => b.score - a.score || a.number - b.number);
+  const picks = (count) => scores.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
+  const basic = Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`${index + 1}星`, picks(index + 1)]));
+  const superNumber = picks(1)[0] || '';
+  return {
+    name: '機器學習負對照',
+    status: '正則化 Logistic 特徵模型；只作負對照，不納入多模型聚合',
+    rule: '以近 12／60 期大小、單雙、和值窗口特徵訓練簡單 Logistic；每個號碼使用獨立包含率模型，禁止使用目標期資料。',
+    sources: modelSources['機器學習負對照'] || [],
+    calculation: {
+      algorithmVersion: algorithmVersion(), method: 'logistic-negative-control', evidenceTier: '可重現機器學習負對照', predictionEligible: false,
+      castingSource: 'prequential-history-only', castingAt, historySamples: history.length,
+      featureNames: ['近12期大號率', '近12期單數率', '近12期和值率', '近60期大號率', '近60期單數率', '近60期和值率', '最新大號率', '最新單數率'],
+      probabilities: { size: sizeProbability, oddEven: oddEvenProbability },
+      trainingSamples: samples.length, regularization: 0.35,
+    },
+    official: { size: sizeProbability >= 0.5 ? '大' : '小', oddEven: oddEvenProbability >= 0.5 ? '單' : '雙', superNumber, basic },
+    research: { numberPicks: basic['10星'], numberPicks20: scores.slice(0, 20).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0')), sumBand: '由模型候選另行統計', oddEvenCount: '由模型候選另行統計', highLowCount: '由模型候選另行統計', zones: ['機器學習負對照'], targetResearch: {} },
+  };
+}
+
 function aggregateModel(models, history) {
+  const eligibleModels = models.filter((model) => model.calculation?.predictionEligible !== false);
   const weightFor = (model, target) => {
     const score = model.calculation?.evolution?.[target]?.score;
     return score == null ? 1 : Math.max(0.25, 0.5 + score);
   };
   const weightedCategory = (target) => {
     const totals = new Map();
-    models.forEach((model) => {
+    eligibleModels.forEach((model) => {
       const value = target === 'size' ? model.official.size : model.official.oddEven;
       if (value) totals.set(value, (totals.get(value) || 0) + weightFor(model, target));
     });
@@ -980,14 +1071,14 @@ function aggregateModel(models, history) {
   const weightedNumbers = (target) => {
     const size = Number(String(target).replace('星', ''));
     const totals = new Map();
-    models.forEach((model) => {
+    eligibleModels.forEach((model) => {
       const weight = weightFor(model, target);
       (model.official.basic[target] || []).forEach((number) => totals.set(number, (totals.get(number) || 0) + weight));
     });
     return [...totals.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, size).map(([number]) => number);
   };
   const superVotes = new Map();
-  models.forEach((model) => {
+  eligibleModels.forEach((model) => {
     const number = model.official.superNumber;
     if (number) superVotes.set(number, (superVotes.get(number) || 0) + weightFor(model, 'superNumber'));
   });
@@ -1106,7 +1197,11 @@ export function buildModels(snapshot, history = [], options = {}) {
       },
     };
   });
-  return [...baseModels, aggregateModel(baseModels, history)];
+  const negativeControl = options.onlyMethod && options.onlyMethod !== '機器學習負對照'
+    ? []
+    : [buildMlNegativeControl(snapshot, history, castingAt)];
+  const allModels = [...baseModels, ...negativeControl];
+  return [...allModels, aggregateModel(allModels, history)];
 }
 
 function buildModelsInWorker(snapshot, history = [], options = {}) {

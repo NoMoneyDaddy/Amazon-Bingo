@@ -1257,7 +1257,7 @@ export function BingoResearchView() {
               : [fullSnapshot];
             const latestRuntime = useBingoRuntimeStore.getState();
             latestRuntime.setDraws(mergeDrawSnapshots(latestRuntime.draws, fullRecords));
-            if (fullSnapshot.modelStatus === "formal" || attempt >= 2) {
+            if ((fullSnapshot.modelStatus === "formal" && hasBacktestEvaluation(fullSnapshot)) || attempt >= 2) {
               latestRuntime.markHistorySynced(Date.now());
               return;
             }

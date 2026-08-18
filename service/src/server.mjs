@@ -2885,7 +2885,7 @@ const server = http.createServer(async (req, res) => {
       // 月份查詢優先使用已保存的近期資料；官方補同步在背景執行，避免 6000 筆保存集阻塞首屏。
       if (persisted.length && daysOverride && daysOverride > 1) {
         const recent = selectRecentHistory(persisted, retentionDays);
-        if (recent.length > fastResponseHistoryLimit) {
+        if (recent.length) {
           const cached = {
             ...recent[0],
             history: compactHistoryForResponse(recent.slice(0, responseHistoryLimit)),

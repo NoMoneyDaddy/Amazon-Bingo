@@ -51,6 +51,8 @@ type Model = {
     historySamples?: number;
     empiricalWeight?: number;
     empiricalWeights?: Record<string, number>;
+    weightedModelCount?: number;
+    aggregation?: string;
     evolution?: Evolution;
     exclusionFilters?: Record<string, unknown>;
     recentGate?: Record<string, unknown>;
@@ -933,6 +935,10 @@ export function BingoResearchView() {
     () => (latest ? parseModels(latest) : []),
     [latest],
   );
+  const consensusModel = latestModels.find((model) => model.name === "多模型聚合");
+  const hasConsensusWeight = Number(consensusModel?.calculation?.weightedModelCount || 0) > 0
+    || Boolean(consensusModel?.official.basic && Object.values(consensusModel.official.basic).some((numbers) => numbers.length))
+    || Boolean(consensusModel?.official.size || consensusModel?.official.oddEven || consensusModel?.official.superNumber);
   const bestPlays: ProfitabilityPlay[] = useMemo(
     () => {
       const plays = latest?.profitabilityEvaluation?.length ? latest.profitabilityEvaluation : emptyProfitabilityPlayStats();
@@ -1194,7 +1200,7 @@ export function BingoResearchView() {
                     </span>
                   </div>
                   <div className="mt-3 border-l-2 border-cyan-300/60 bg-cyan-300/5 px-2.5 py-2 text-xs leading-5 text-muted-foreground">
-                    {!latestModels.find((model) => model.name === "多模型聚合")?.official.basic["10星"]?.length && latestModels.length ? (
+                    {!hasConsensusWeight && latestModels.length ? (
                       <div className="mb-2 rounded border border-amber-300/25 bg-amber-300/10 px-2 py-1.5 text-amber-100">
                         目前沒有模型近期明顯超過基準；下方顯示個別研究候選，僅供比較，未取得共識加權。
                       </div>

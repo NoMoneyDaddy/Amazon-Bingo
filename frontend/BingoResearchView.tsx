@@ -136,7 +136,7 @@ async function fetchLatest(days = 1): Promise<DrawSnapshot> {
 
 async function fetchSpecified(query: string): Promise<DrawSnapshot> {
   const response = await fetchExternal(`https://bingo-api.zeabur.app/api/calculate?${query}`);
-  if (!response.ok) throw new Error("指定期數計算失敗，請確認期號或日期格式");
+  if (!response.ok) throw new Error("指定時間計算失敗，請確認日期時間格式");
   return (await response.json()) as DrawSnapshot;
 }
 
@@ -621,8 +621,8 @@ export function BingoResearchView() {
                   <section aria-labelledby="specified-heading" className="mb-4 rounded-2xl border border-cyan-300/25 bg-slate-950/40 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200/80">指定計算</p>
-                        <h2 id="specified-heading" className="mt-1 text-base font-bold text-cyan-100">回算指定期數／時間</h2>
+                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200/80">指定時間研究</p>
+                        <h2 id="specified-heading" className="mt-1 text-base font-bold text-cyan-100">依開獎時間重現計算</h2>
                       </div>
                       <span className="text-[10px] text-muted-foreground">固定時間、可重現計算</span>
                     </div>

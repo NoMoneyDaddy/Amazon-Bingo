@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v6-specified-time';
+const reproducibilityVersion = 'bingo-research-v7-draw-time-casting';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -831,17 +831,18 @@ async function latest(daysOverride = null, existingHistory = []) {
       });
       const rawHistory = [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period));
       const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);
-      const previousCastingAt = reproducibleCastingAt(rawHistory[0]?.castingAt || rawHistory[0]?.drawAt, rawHistory[0]?.period);
+      // 歷史模型的起卦輸入以實際開獎時間為準；舊資料若曾保存錯誤 castingAt，不再優先採用。
+      const previousCastingAt = reproducibleCastingAt(rawHistory[0]?.drawAt || rawHistory[0]?.castingAt, rawHistory[0]?.period);
       const storedForecastCastingAt = rawHistory[0]?.forecastCastingAt;
       const predictionCastingAt = storedForecastCastingAt
         ? reproducibleCastingAt(storedForecastCastingAt, nextPeriod)
-        : new Date(new Date(previousCastingAt).getTime() + 5 * 60_000).toISOString();
+        : nextDrawAt(new Date()).toISOString();
       const history = [];
       for (let index = 0; index < rawHistory.length; index += 1) {
         await new Promise((resolve) => setImmediate(resolve));
         const item = rawHistory[index];
-        const castingAt = isFinite(index) ? reproducibleCastingAt(item.castingAt || item.drawAt, item.period) : previousCastingAt;
         const drawAt = item.drawAt || formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000));
+        const castingAt = isFinite(index) ? reproducibleCastingAt(drawAt, item.period) : previousCastingAt;
         const isNextPrediction = index === 0;
         const modelCastingAt = isNextPrediction ? predictionCastingAt : castingAt;
         const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt, castingAt: modelCastingAt } : { ...item, castingAt };
@@ -978,7 +979,7 @@ const server = http.createServer(async (req, res) => {
         persisted = await readPersistedCached(10000);
       }
       return send(res, 200, calculateSpecifiedTime(persisted, at), req);
-    } catch (error) { return send(res, 422, { error: error instanceof Error ? error.message : '指定期數計算失敗' }, req); }
+    } catch (error) { return send(res, 422, { error: error instanceof Error ? error.message : '指定時間計算失敗' }, req); }
   }
   send(res, 404, { error: 'Not found' });
 });

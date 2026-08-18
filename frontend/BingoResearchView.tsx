@@ -88,6 +88,64 @@ type DrawSnapshot = {
 };
 type Page = "overview" | "process" | "history";
 
+function normalizeModel(value: Partial<Model> | null | undefined): Model {
+  const official = (value?.official || {}) as Partial<Model["official"]>;
+  const research = (value?.research || {}) as Partial<Model["research"]>;
+  const targetResearch = value?.research?.targetResearch && typeof value.research.targetResearch === "object"
+    ? Object.fromEntries(Object.entries(value.research.targetResearch).map(([key, rawItem]) => {
+      const item = rawItem as Partial<NonNullable<Model["research"]["targetResearch"]>[string]>;
+      return [key, {
+      numberPicks: Array.isArray(item?.numberPicks) ? item.numberPicks : [],
+      sumBand: item?.sumBand || "—",
+      oddEvenCount: item?.oddEvenCount || "—",
+      highLowCount: item?.highLowCount || "—",
+      zones: Array.isArray(item?.zones) ? item.zones : [],
+      }];
+    }))
+    : undefined;
+  return {
+    name: value?.name || "未命名模型",
+    status: value?.status || "資料已載入",
+    rule: value?.rule || "—",
+    sources: Array.isArray(value?.sources) ? value.sources : [],
+    calculation: value?.calculation || {},
+    official: {
+      size: official.size || "",
+      oddEven: official.oddEven || "",
+      superNumber: official.superNumber || "",
+      basic: official.basic && typeof official.basic === "object" ? official.basic : {},
+    },
+    research: {
+      numberPicks: Array.isArray(research.numberPicks) ? research.numberPicks : [],
+      sumBand: research.sumBand || "—",
+      oddEvenCount: research.oddEvenCount || "—",
+      highLowCount: research.highLowCount || "—",
+      zones: Array.isArray(research.zones) ? research.zones : [],
+      targetResearch,
+    },
+  };
+}
+
+function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
+  const history = Array.isArray(value.history) ? value.history : [];
+  return {
+    period: String(value.period || ""),
+    drawAt: value.drawAt || "",
+    numbers: Array.isArray(value.numbers) ? value.numbers : [],
+    superNumber: value.superNumber || "",
+    size: value.size || "",
+    oddEven: value.oddEven || "",
+    source: value.source || "",
+    sourceLabel: value.sourceLabel || "",
+    sourceHealth: Array.isArray(value.sourceHealth) ? value.sourceHealth : [],
+    models: Array.isArray(value.models) ? value.models.map(normalizeModel) : [],
+    fetchedAt: value.fetchedAt || 0,
+    historyDays: value.historyDays,
+    predictionTargetPeriod: value.predictionTargetPeriod || "",
+    backup: value.backup,
+  };
+}
+
 function normalizeNumber(value: string | number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? String(parsed).padStart(2, "0") : String(value);
@@ -111,7 +169,13 @@ async function fetchLatest(days = 1): Promise<DrawSnapshot> {
         signal: controller.signal,
       });
       if (!response.ok) throw new Error("資料暫時無法更新");
-      return (await response.json()) as DrawSnapshot;
+      const payload = await response.json() as Partial<DrawSnapshot>;
+      if (!payload || typeof payload !== "object") throw new Error("資料格式不完整");
+      const history = Array.isArray(payload.history) && payload.history.length
+        ? payload.history.map((item) => normalizeSnapshot(item))
+        : [normalizeSnapshot(payload)];
+      const latest = normalizeSnapshot({ ...payload, history });
+      return { ...latest, history };
     } catch (error) {
       lastError = new Error(
         error instanceof Error && /abort|signal/i.test(error.message)
@@ -500,6 +564,9 @@ export function BingoResearchView() {
     try {
       const snapshot = await fetchLatest(1);
       const records = snapshot.history?.length ? snapshot.history : [snapshot];
+      if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
+        throw new Error("目前沒有可顯示的開獎資料");
+      }
       setDraws(records);
       setLastSync(Date.now());
     } catch (err) {
@@ -562,7 +629,7 @@ export function BingoResearchView() {
         ]}
       />
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-x-hidden" aria-busy={syncing}>
-        <CustomScrollbar orientation="vertical">
+        <CustomScrollbar className="min-h-0 flex-1" offsetRight={4} orientation="vertical">
           <div className="mx-auto min-w-0 max-w-xl space-y-2 overflow-x-hidden p-2 pb-[calc(7rem+env(safe-area-inset-bottom))] sm:space-y-4 sm:p-5 sm:pb-6">
             <header className="overflow-hidden border border-primary/45 bg-card px-3 py-2 shadow-none sm:px-4">
               <div className="flex min-w-0 items-center justify-between gap-2">
@@ -612,6 +679,12 @@ export function BingoResearchView() {
                     <p id="latest-draw-heading" className="text-xs text-slate-400">最新開獎：等待首次同步</p>
                   )}
                 </section>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border border-border bg-background/70 px-3 py-2 text-[10px] leading-5 text-muted-foreground" role="status">
+                  <span>已載入 {sorted.length} 期</span>
+                  <span>最新資料 {latest?.numbers.length || 0}/20 個號碼</span>
+                  <span>模型 {latestModels.length}/9 個</span>
+                  <span>{latest?.sourceHealth?.some((item) => item.ok) ? "官方來源正常" : "來源狀態未知"}</span>
+                </div>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full border border-primary/40 bg-card p-3 shadow-none sm:p-4">
                   <div className="flex items-end justify-between gap-2">
                     <div>
@@ -679,7 +752,7 @@ export function BingoResearchView() {
                   <p className="mt-1">權重是模型採用歷史訊號的比例；回測率是過往預測帶來正盈利的比例，打平不算勝利。兩者都不是下一期的機率或保證。</p>
                 </div>
                 <div className="mt-3 space-y-3">
-                  {latestModels.map((model) => (
+                  {latestModels.length ? latestModels.map((model) => (
                     <article key={model.name} className="min-w-0 rounded-2xl border border-border bg-background/70 p-4 shadow-lg shadow-black/10 transition-transform duration-300 hover:-translate-y-0.5">
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="truncate font-semibold text-foreground">{model.name}</div>
@@ -740,7 +813,11 @@ export function BingoResearchView() {
                         </div>
                       )}
                     </article>
-                  ))}
+                  )) : (
+                    <div className="rounded-xl border border-dashed border-amber-300/40 bg-amber-300/5 p-4 text-sm leading-6 text-amber-100">
+                      目前開獎資料已載入，但模型預測尚未回傳；請按右上角重新讀取，或等待背景同步完成。
+                    </div>
+                  )}
                 </div>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
                   勝率計算：淨盈利大於 0 的期數 ÷ 有效預測期數 × 100%；打平不算勝利。樣本不足或舊資料沒有保存細節時，畫面會顯示「—」，不把未知資料當成 0%。

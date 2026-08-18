@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v7-draw-time-casting';
+const reproducibilityVersion = 'bingo-research-v8-draw-time-only';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -580,22 +580,6 @@ function summarizePick(numbers) {
   };
 }
 
-function calculateSpecifiedTime(history, at = '') {
-  const training = history.slice(0, maxModelHistory);
-  const targetPeriod = `custom-${String(at || '').replace(/[^0-9]/g, '').slice(0, 14) || 'time'}`;
-  const castingAt = reproducibleCastingAt(at, targetPeriod);
-  const snapshot = { period: targetPeriod, drawAt: at, castingAt, numbers: [], superNumber: '', size: '', oddEven: '' };
-  const models = buildModels(snapshot, training, { evolve: true, castingAt });
-  return {
-    ...snapshot,
-    models,
-    historySamples: training.length,
-    calculationMode: 'specified-time-forward',
-    targetPeriod,
-    dataBoundary: `只使用目前已取得的 ${training.length} 期歷史資料；指定時間沒有官方實際開獎結果。`,
-  };
-}
-
 function aggregateModel(models, history) {
   const weightFor = (model, target) => {
     const score = model.calculation?.evolution?.[target]?.score;
@@ -967,19 +951,6 @@ const server = http.createServer(async (req, res) => {
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
       return send(res, 200, await latest(refreshDays, persisted), req);
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }
-  }
-  if (req.method === 'GET' && req.url.startsWith('/api/calculate')) {
-    try {
-      const requestUrl = new URL(req.url, 'http://localhost');
-      const at = requestUrl.searchParams.get('at') || '';
-      if (!at) return send(res, 400, { error: '請提供 at' }, req);
-      let persisted = await readPersistedCached(10000);
-      if (!persisted.length) {
-        await latest(30, []);
-        persisted = await readPersistedCached(10000);
-      }
-      return send(res, 200, calculateSpecifiedTime(persisted, at), req);
-    } catch (error) { return send(res, 422, { error: error instanceof Error ? error.message : '指定時間計算失敗' }, req); }
   }
   send(res, 404, { error: 'Not found' });
 });

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CustomScrollbar, PluginTopbar, Button, fetchExternal } from "@cubelv/sdk";
+import { CustomScrollbar, PluginTopbar, Button } from "@cubelv/sdk";
 
 const API_URL = "https://bingo-api.zeabur.app/api/latest";
 const MODEL_NAMES = [
@@ -85,11 +85,6 @@ type DrawSnapshot = {
     reason?: string;
     error?: string;
   };
-  calculationMode?: string;
-  targetPeriod?: string;
-  historySamples?: number;
-  dataBoundary?: string;
-  actual?: { period: string; drawAt: string; numbers: string[]; superNumber: string; size: string; oddEven: string } | null;
 };
 type Page = "overview" | "process" | "history";
 
@@ -132,12 +127,6 @@ async function fetchLatest(days = 1): Promise<DrawSnapshot> {
     }
   }
   throw lastError instanceof Error ? lastError : new Error("資料暫時無法更新");
-}
-
-async function fetchSpecified(query: string): Promise<DrawSnapshot> {
-  const response = await fetchExternal(`https://bingo-api.zeabur.app/api/calculate?${query}`);
-  if (!response.ok) throw new Error("指定時間計算失敗，請確認日期時間格式");
-  return (await response.json()) as DrawSnapshot;
 }
 
 function getNextDraw(now: Date) {
@@ -467,15 +456,12 @@ export function BingoResearchView() {
   const [now, setNow] = useState(() => new Date());
   const [page, setPage] = useState<Page>("overview");
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
-  const [specifiedInput, setSpecifiedInput] = useState("");
-  const [specified, setSpecified] = useState<DrawSnapshot | null>(null);
   const latest = sorted[0];
   const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
   const latestModels = useMemo(
     () => (latest ? parseModels(latest) : []),
     [latest],
   );
-  const researchModels = specified?.models?.length ? specified.models : latestModels;
   const bestPlays = useMemo(
     () => bestPlayStats(sorted, latestModels),
     [sorted, latestModels],
@@ -496,19 +482,6 @@ export function BingoResearchView() {
       setSyncing(false);
     }
   }, [syncing]);
-
-  const calculateSpecified = useCallback(async () => {
-    const value = specifiedInput.trim();
-    if (!value) { setError("請輸入台北日期時間"); return; }
-    setSyncing(true);
-    setError("");
-    try {
-      const result = await fetchSpecified(`at=${encodeURIComponent(value)}`);
-      setSpecified(result);
-      setPage("process");
-    } catch (err) { setError(err instanceof Error ? err.message : "指定計算失敗"); }
-    finally { setSyncing(false); }
-  }, [specifiedInput]);
 
   useEffect(() => {
     void sync();
@@ -618,33 +591,6 @@ export function BingoResearchView() {
                   )}
                 </section>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full rounded-3xl border border-amber-300/30 bg-card p-4 shadow-lg shadow-amber-950/20 backdrop-blur sm:p-5">
-                  <section aria-labelledby="specified-heading" className="mb-4 rounded-2xl border border-cyan-300/25 bg-slate-950/40 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200/80">指定時間研究</p>
-                        <h2 id="specified-heading" className="mt-1 text-base font-bold text-cyan-100">依開獎時間重現計算</h2>
-                      </div>
-                      <span className="text-[10px] text-muted-foreground">固定時間、可重現計算</span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      <input
-                        value={specifiedInput}
-                        onChange={(event) => setSpecifiedInput(event.target.value)}
-                        onKeyDown={(event) => { if (event.key === "Enter") void calculateSpecified(); }}
-                        placeholder="例如 2026-08-18 12:35"
-                        aria-label="指定日期時間"
-                        className="min-w-0 flex-1 rounded-md border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs text-foreground outline-none focus:border-cyan-300"
-                      />
-                      <Button size="sm" onClick={() => void calculateSpecified()} disabled={syncing}>計算</Button>
-                    </div>
-                    {specified && (
-                      <div className="mt-2 rounded-lg border border-cyan-300/20 bg-cyan-300/5 px-2.5 py-2 text-[11px] leading-5 text-cyan-100">
-                        <div>模式：指定時間前推計算 · 樣本 {specified.historySamples ?? 0} 期</div>
-                        <div className="text-muted-foreground">{specified.dataBoundary}</div>
-                        {specified.actual && <div className="mt-1">實際結果：{specified.actual.numbers.join("、")} · 超 {specified.actual.superNumber} · {specified.actual.size}／{specified.actual.oddEven}</div>}
-                      </div>
-                    )}
-                  </section>
                   <div className="flex items-end justify-between gap-2">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
@@ -711,7 +657,7 @@ export function BingoResearchView() {
                   <p className="mt-1">權重是模型採用歷史訊號的比例；回測率是過往預測帶來正盈利的比例，打平不算勝利。兩者都不是下一期的機率或保證。</p>
                 </div>
                 <div className="mt-3 space-y-3">
-                  {researchModels.map((model) => (
+                  {latestModels.map((model) => (
                     <article key={model.name} className="min-w-0 rounded-2xl border border-border bg-background/70 p-4 shadow-lg shadow-black/10 transition-transform duration-300 hover:-translate-y-0.5">
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="truncate font-semibold text-foreground">{model.name}</div>

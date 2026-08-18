@@ -927,8 +927,18 @@ export function BingoResearchView() {
     [latest],
   );
   const bestPlays: ProfitabilityPlay[] = useMemo(
-    () => latest?.profitabilityEvaluation?.length ? latest.profitabilityEvaluation : emptyProfitabilityPlayStats(),
-    [latest],
+    () => {
+      const plays = latest?.profitabilityEvaluation?.length ? latest.profitabilityEvaluation : emptyProfitabilityPlayStats();
+      const fallbackModel = latestModels.find((model) => model.name !== "多模型聚合" && predictionForPlay(model, "10星") !== "—");
+      if (!fallbackModel) return plays;
+      return plays.map((play) => {
+        const fallbackPrediction = predictionForPlay(fallbackModel, play.key);
+        if (!fallbackPrediction || fallbackPrediction === "—") return play;
+        const patch = (best: ProfitabilityPlay["best"] | undefined) => best ? { ...best, model: best.model === "—" ? fallbackModel.name : best.model, prediction: best.prediction === "—" ? fallbackPrediction : best.prediction } : best;
+        return { ...play, best: patch(play.best)!, fixed: patch(play.fixed), follow: patch(play.follow) };
+      });
+    },
+    [latest, latestModels],
   );
   const technicalAnalysisFallback = useMemo(() => {
     const draws = sorted.slice(0, 30);
@@ -1177,6 +1187,11 @@ export function BingoResearchView() {
                     </span>
                   </div>
                   <div className="mt-3 border-l-2 border-cyan-300/60 bg-cyan-300/5 px-2.5 py-2 text-xs leading-5 text-muted-foreground">
+                    {!latestModels.find((model) => model.name === "多模型聚合")?.official.basic["10星"]?.length && latestModels.length ? (
+                      <div className="mb-2 rounded border border-amber-300/25 bg-amber-300/10 px-2 py-1.5 text-amber-100">
+                        目前沒有模型近期明顯超過基準；下方顯示個別研究候選，僅供比較，未取得共識加權。
+                      </div>
+                    ) : null}
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                       <span><span className="text-cyan-200/80">最新開獎</span> {latest?.period ? `第 ${latest.period} 期` : "同步中"}</span>
                       <span><span className="text-cyan-200/80">預測目標</span> {latest?.predictionTargetPeriod ? `第 ${latest.predictionTargetPeriod} 期` : "同步中"}</span>

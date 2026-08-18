@@ -10,7 +10,7 @@ const port = Number(process.env.PORT || 8080);
 const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
-const maxModelHistory = 60;
+const maxModelHistory = 300;
 const profitabilityBacktestWindow = 10;
 const minimumValidationSamples = 30;
 const profileValidationWindow = 30;
@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v62-forward-bet-strategies';
+const reproducibilityVersion = 'bingo-research-v63-audited-settlement';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -156,6 +156,8 @@ function theoreticalRiskBaseline() {
   return {
     betCost: singleBetCost,
     model: '80 選 20 超幾何分布／官方派彩表',
+    settlementMode: 'nominal',
+    settlementNote: '此處使用名目單注派彩；官方各獎項有單期總獎金上限，均分後實領額需要同一期中獎注數，現有開獎資料無法推算。',
     rows,
     caveat: '這是玩法理論基線，不是個人化下注建議；歷史模型若看似優於基線，仍須以無洩漏樣本與信賴區間核驗。',
   };
@@ -164,9 +166,8 @@ function theoreticalRiskBaseline() {
 function positiveProfitBaseline(target, actuals = []) {
   if (!actuals.length) return null;
   if (target === 'size' || target === 'oddEven') {
-    const field = target === 'size' ? 'size' : 'oddEven';
-    const valid = actuals.filter((item) => ['大', '小', '單', '雙'].includes(normalizeDrawCategory(item[field], field)));
-    return valid.length ? valid.length / (actuals.length * 2) : 0;
+    return Array.from({ length: 21 }, (_, count) => hypergeometricProbability(80, 40, 20, count))
+      .slice(13).reduce((sum, value) => sum + value, 0);
   }
   if (target === 'superNumber') return actuals.filter((item) => item.superNumber && Number(item.superNumber) >= 1 && Number(item.superNumber) <= 80).length / (actuals.length * 80);
   const star = Number(String(target).replace('星', ''));
@@ -294,7 +295,11 @@ async function readPersisted(limit = 6000) {
   const result = await pool.query(`SELECT period, draw_at AS "drawAt", numbers, super_number AS "superNumber",
     size, odd_even AS "oddEven", source, source_label AS "sourceLabel", source_health AS "sourceHealth",
     models, prediction_target_period AS "predictionTargetPeriod", casting_at AS "castingAt", forecast_casting_at AS "forecastCastingAt", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
-  return result.rows.map((row) => ({ ...row, numbers: Array.isArray(row.numbers) ? row.numbers : [], sourceHealth: row.sourceHealth || [], models: row.models || [] }));
+  return result.rows.map((row) => {
+    const numbers = Array.isArray(row.numbers) ? row.numbers : [];
+    const derived = numbers.length === 20 ? deriveSnapshot(row.period, numbers, row.source || '', row.drawAt || '') : null;
+    return { ...row, numbers, size: derived?.size || row.size || '', oddEven: derived?.oddEven || row.oddEven || '', sourceHealth: row.sourceHealth || [], models: row.models || [] };
+  });
 }
 
 async function readPersistedCached(limit = persistedHistoryLimit) {
@@ -690,10 +695,11 @@ function deriveSnapshot(period, numbers, source, drawAt = '') {
   if (!period || parsed.length !== 20 || parsed.some((number) => number < 1 || number > 80)) throw new Error('來源未回傳完整 20 個 1–80 號碼');
   const bigCount = parsed.filter((number) => number >= 41).length;
   const oddCount = parsed.filter((number) => number % 2 === 1).length;
+  const size = bigCount >= 13 ? '大' : bigCount <= 7 ? '小' : '和';
+  const oddEven = oddCount >= 13 ? '單' : oddCount <= 7 ? '雙' : '和';
   return {
     period: String(period), drawAt, numbers: parsed.map((number) => String(number).padStart(2, '0')),
-    superNumber: '', size: bigCount > 10 ? '大' : bigCount < 10 ? '小' : '和',
-    oddEven: oddCount > 10 ? '單' : oddCount < 10 ? '雙' : '和', source, sourceLabel: source,
+    superNumber: '', size, oddEven, source, sourceLabel: source,
   };
 }
 
@@ -721,8 +727,8 @@ function parse168WinPage(html, sourceName) {
   return {
     ...snapshot,
     superNumber: superNumber.padStart(2, '0'),
-    size: normalizeDrawCategory(summary.match(/猜大小：([^|<]+)/)?.[1] || snapshot.size, 'size'),
-    oddEven: normalizeDrawCategory(summary.match(/猜單雙：([^|<]+)/)?.[1] || snapshot.oddEven, 'oddEven'),
+    size: snapshot.size,
+    oddEven: snapshot.oddEven,
   };
 }
 
@@ -743,8 +749,6 @@ function parseWinwinData(payload, sourceName) {
     if (!item?.No || numbers.length !== 20) return null;
     const snapshot = deriveSnapshot(item.No, numbers, sourceName, String(item.OpenDate || '').replace('T', ' '));
     snapshot.superNumber = String(item.BullEyeTop || '').padStart(2, '0');
-    snapshot.size = normalizeDrawCategory(item.HighLowTop || snapshot.size, 'size');
-    snapshot.oddEven = normalizeDrawCategory(item.OddEvenTop || snapshot.oddEven, 'oddEven');
     return snapshot;
   }).filter(Boolean).sort((a, b) => Number(b.period) - Number(a.period));
   if (!history.length) throw new Error('WINWIN 未回傳完整開獎資料');
@@ -810,13 +814,18 @@ function hasPositiveProfit(target, predicted, actual) {
   let payout = 0;
   if (target === 'size') payout = normalizeDrawCategory(predicted, 'size') === normalizeDrawCategory(actual.size, 'size') ? 150 : 0;
   else if (target === 'oddEven') payout = normalizeDrawCategory(predicted, 'oddEven') === normalizeDrawCategory(actual.oddEven, 'oddEven') ? 150 : 0;
-  else if (target === 'superNumber') payout = predicted === actual.superNumber ? 1200 : 0;
+  else if (target === 'superNumber') payout = normalizeNumberValue(predicted) === normalizeNumberValue(actual.superNumber) ? 1200 : 0;
   else {
-    const actualNumbers = new Set(actual.numbers);
-    const matches = (predicted || []).filter((number) => actualNumbers.has(number)).length;
+    const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
+    const matches = (predicted || []).filter((number) => actualNumbers.has(normalizeNumberValue(number))).length;
     payout = basicPayouts[target]?.[matches] || 0;
   }
   return payout - singleBetCost > 0;
+}
+
+function normalizeNumberValue(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? String(number).padStart(2, '0') : '';
 }
 
 function randomPrediction(target, seed) {
@@ -838,6 +847,21 @@ function evaluationModelFor(actual, name, prior, includeNumbers = true) {
   if (saved || name !== '機器學習負對照') return saved;
   // 舊保存期數可能沒有新模型；只用該目標期以前的資料即時補算。
   return buildMlNegativeControl(actual, prior, reproducibleCastingAt(actual.drawAt, actual.period), { includeNumbers });
+}
+
+function prequentialCategoryProbability(target, modelName, prior = []) {
+  let wins = 0;
+  let trials = 0;
+  for (let index = 0; index < prior.length; index += 1) {
+    const past = prior[index];
+    const pastModel = evaluationModelFor(past, modelName, prior.slice(index + 1), false);
+    if (!pastModel) continue;
+    const predicted = target === 'size' ? pastModel.official?.size : pastModel.official?.oddEven;
+    const actualValue = target === 'size' ? past.size : past.oddEven;
+    wins += normalizeDrawCategory(predicted, target) === normalizeDrawCategory(actualValue, target) ? 1 : 0;
+    trials += 1;
+  }
+  return { probability: (wins + 1) / (trials + 2), trials };
 }
 
 function forecastEvaluation(history = []) {
@@ -862,7 +886,7 @@ function forecastEvaluation(history = []) {
       const predicted = target === 'size' ? model.official.size : model.official.oddEven;
       const actualValue = target === 'size' ? actual.size : actual.oddEven;
       const correct = normalizeDrawCategory(predicted, target) === normalizeDrawCategory(actualValue, target);
-      const probability = correct ? 0.999 : 0.001;
+      const probability = prequentialCategoryProbability(target, model.name, prior).probability;
       result[target].brier += (probability - 1) ** 2;
       result[target].logLoss += -Math.log(probability);
       result[target].wins += correct ? 1 : 0;
@@ -888,7 +912,7 @@ function forecastEvaluation(history = []) {
       size: { brier: result.size.brier / samples, logLoss: result.size.logLoss / samples, randomBrier: result.size.randomBrier, randomLogLoss: result.size.randomLogLoss, winRate: result.size.wins / samples, randomWinRate: result.size.randomWins / samples },
       oddEven: { brier: result.oddEven.brier / samples, logLoss: result.oddEven.logLoss / samples, randomBrier: result.oddEven.randomBrier, randomLogLoss: result.oddEven.randomLogLoss, winRate: result.oddEven.wins / samples, randomWinRate: result.oddEven.randomWins / samples },
       tenStar: { meanMatches: result.tenStar.meanMatches / samples, randomMeanMatches: result.tenStar.randomMeanMatches / samples, positiveProfitRate: result.tenStar.wins / samples, randomPositiveProfitRate: result.tenStar.randomWins / samples },
-      caveat: '目前是硬分類預測的 proper-score 診斷：模型尚未提供校準機率，因此 Brier／Log Loss 會揭露過度自信，不等於模型已具備可信機率輸出。',
+      caveat: '機率由目標期以前的 prequential 命中率以 Beta(1,1) 平滑估計；不使用當期結果倒推信心，仍不代表下一期具有可預測性。',
     };
   });
 }
@@ -954,9 +978,9 @@ function calibratedProbabilityEvaluation(history = []) {
 function backtestPayout(target, predicted, actual) {
   if (target === 'size') return normalizeDrawCategory(predicted, 'size') === normalizeDrawCategory(actual.size, 'size') ? 150 : 0;
   if (target === 'oddEven') return normalizeDrawCategory(predicted, 'oddEven') === normalizeDrawCategory(actual.oddEven, 'oddEven') ? 150 : 0;
-  if (target === 'superNumber') return String(predicted || '') === String(actual.superNumber || '') ? 1200 : 0;
-  const actualNumbers = new Set(actual.numbers || []);
-  const matches = (Array.isArray(predicted) ? predicted : []).filter((number) => actualNumbers.has(String(number).padStart(2, '0'))).length;
+  if (target === 'superNumber') return normalizeNumberValue(predicted) === normalizeNumberValue(actual.superNumber) ? 1200 : 0;
+  const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
+  const matches = (Array.isArray(predicted) ? predicted : []).filter((number) => actualNumbers.has(normalizeNumberValue(number))).length;
   return basicPayouts[target]?.[matches] || 0;
 }
 
@@ -967,6 +991,8 @@ function profitabilityEvaluation(history = []) {
     { key: 'superNumber', label: '超級獎號' },
     ...Array.from({ length: 10 }, (_, index) => ({ key: `${index + 1}星`, label: `${index + 1} 星` })),
   ];
+  const anchor = history[profitabilityBacktestWindow];
+  const selectionModels = anchor?.models || [];
   const currentModels = history[0]?.models || [];
   return plays.map((play) => {
     const evaluate = (currentModel, mode) => {
@@ -1003,8 +1029,8 @@ function profitabilityEvaluation(history = []) {
         } else { matches += payout > 0 ? 1 : 0; targetCount += 1; }
         trials += 1;
       });
-      const evolution = currentModel.calculation?.evolution?.[play.key];
-      if (!trials && evolution) { trials = evolution.trials || evolution.validationSamples || 0; wins = evolution.wins || 0; }
+      const selectionModel = selectionModels.find((item) => item.name === currentModel.name) || currentModel;
+      const evolution = selectionModel.calculation?.evolution?.[play.key];
       const predictionSource = mode === 'fixed'
         ? history[profitabilityBacktestWindow]?.models?.find((item) => item.name === currentModel.name) || currentModel
         : currentModel;
@@ -1020,18 +1046,36 @@ function profitabilityEvaluation(history = []) {
       return {
         mode, model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal: trials * singleBetCost,
         matches, targetCount, averageProfit, positiveExpected: averageProfit != null && averageProfit > 0,
-        profitRate, estimatedRate: trials ? (evolution?.estimatedRate ?? (wins + 1) / (trials + 2)) : null,
-        confidence: evolution?.confidence ?? (profitRate == null ? -1 : profitRate), prediction: prediction || '—', periodResults,
+        profitRate, estimatedRate: evolution?.estimatedRate ?? null,
+        confidence: evolution?.confidence ?? -1, prediction: prediction || '—', periodResults,
       };
     };
-    const rank = (a, b) => Number(b.positiveExpected) - Number(a.positiveExpected)
-      || (b.confidence ?? -1) - (a.confidence ?? -1)
-      || (b.profitRate ?? -1) - (a.profitRate ?? -1);
+    // 模型必須在回測視窗開始前決定；不能看完這 10 期結果再挑最高盈利者。
+    const rank = (a, b) => (b.confidence ?? -1) - (a.confidence ?? -1)
+      || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1)
+      || String(a.model).localeCompare(String(b.model));
     const empty = (mode) => ({ mode, model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, prediction: '—', periodResults: [] });
-    const fixed = currentModels.map((model) => evaluate(model, 'fixed')).sort(rank)[0] || empty('fixed');
-    const follow = currentModels.map((model) => evaluate(model, 'follow')).sort(rank)[0] || empty('follow');
+    const candidateModels = selectionModels.length ? selectionModels : currentModels;
+    const fixed = candidateModels.map((model) => evaluate(model, 'fixed')).sort(rank)[0] || empty('fixed');
+    const follow = candidateModels.map((model) => evaluate(model, 'follow')).sort(rank)[0] || empty('follow');
     return { ...play, best: fixed, fixed, follow, metricLabel: '盈利機率' };
   });
+}
+
+async function hydrateEvaluationModels(history = []) {
+  const lastIndex = Math.min(history.length - 1, profitabilityBacktestWindow + 1);
+  for (let index = 1; index <= lastIndex; index += 1) {
+    if (Array.isArray(history[index]?.models) && history[index].models.length) continue;
+    const item = history[index];
+    if (!item) continue;
+    const modelHistory = history.slice(index + 1, index + maxModelHistory + 1)
+      .map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
+    history[index].models = await buildModelsInWorker(item, modelHistory, {
+      evolve: false,
+      castingAt: reproducibleCastingAt(item.castingAt || item.drawAt, item.period),
+    });
+  }
+  return history;
 }
 
 function technicalAnalysis(history = []) {
@@ -1616,8 +1660,6 @@ async function fetchOfficial(daysOverride = null) {
     const snapshot = deriveSnapshot(record.drawTerm, record.openShowOrder, apiBaseUrl, drawAt);
     snapshot.sourceLabel = '台灣彩券官方 API';
     snapshot.superNumber = String(record.bullEyeTop || '').padStart(2, '0');
-    snapshot.size = record.highLowTop && record.highLowTop !== '－' ? normalizeDrawCategory(record.highLowTop, 'size') : snapshot.size;
-    snapshot.oddEven = record.oddEvenTop && record.oddEvenTop !== '－' ? normalizeDrawCategory(record.oddEvenTop, 'oddEven') : snapshot.oddEven;
     return snapshot;
   };
   const history = records.map(parseItem);
@@ -1755,6 +1797,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           sourceHealth: health,
         });
       }
+      await hydrateEvaluationModels(history);
       await persistSnapshots(history);
       const backup = await backupModelProfile(history[0]);
       const responseHistory = daysOverride && daysOverride > 1
@@ -1798,6 +1841,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     forecastCastingAt: predictionCastingAt,
     predictionTargetPeriod: targetPeriod,
   }, ...visible.slice(1)];
+  await hydrateEvaluationModels(history);
   return {
     ...history[0],
     history: compactHistoryForResponse(history),

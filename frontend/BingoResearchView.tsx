@@ -150,6 +150,8 @@ type DrawSnapshot = {
   theoreticalRiskBaseline?: {
     betCost: number;
     model: string;
+    settlementMode?: string;
+    settlementNote?: string;
     rows: Array<{ playtype: string; expectedGrossMultiple: number; expectedNetPerBet: number; houseEdgePct: number; recommendation: string }>;
     caveat: string;
   };
@@ -491,77 +493,19 @@ function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
   return { payout, profit, won: profit > 0, matches, targetCount };
 }
 
-function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
-  const backtestDraws = draws.slice(1, 11);
+function emptyProfitabilityPlayStats(): ProfitabilityPlay[] {
   const plays = [
     { key: "size", label: "猜大小" },
     { key: "oddEven", label: "猜單雙" },
     { key: "superNumber", label: "超級獎號" },
-    ...Array.from({ length: 10 }, (_, i) => ({
-      key: `${i + 1}星`,
-      label: `${i + 1} 星`,
-    })),
+    ...Array.from({ length: 10 }, (_, index) => ({ key: `${index + 1}星`, label: `${index + 1} 星` })),
   ];
-  return plays.map((play) => {
-    const candidates = MODEL_NAMES.map((model) => {
-      const rows = backtestDraws.flatMap((draw) =>
-        parseModels(draw)
-          .filter((item) => item.name === model)
-          .map((item) => ({ item, draw })),
-      );
-      let wins = 0;
-      let trials = 0;
-      let profit = 0;
-      let payoutTotal = 0;
-      let matches = 0;
-      let targetCount = 0;
-      rows.forEach(({ item, draw }) => {
-        const result = settleSingleBet(play.key, item, draw);
-        wins += result.won ? 1 : 0;
-        payoutTotal += result.payout;
-        profit += result.profit;
-        matches += result.matches;
-        targetCount += result.targetCount || 1;
-        trials += 1;
-      });
-      const latest = latestModels.find((item) => item.name === model);
-      const evolution = latest?.calculation?.evolution?.[play.key];
-      // 歷史期的完整模型為了同步效能不隨回應傳送；改用最新模型保存的 walk-forward 樣本。
-      if (!trials && evolution) {
-        trials = evolution.trials || evolution.validationSamples || 0;
-        wins = evolution.wins || 0;
-      }
-      const prediction =
-        play.key === "size"
-          ? latest?.official.size
-          : play.key === "oddEven"
-            ? latest?.official.oddEven
-            : play.key === "superNumber"
-              ? latest?.official.superNumber
-              : latest?.official.basic[play.key]?.join("、");
-      const rate = trials ? (evolution?.score ?? wins / trials) : null;
-      return {
-        model,
-        samples: trials,
-        wins,
-        matches,
-        targetCount,
-        profit,
-        payoutTotal,
-        costTotal: trials * SINGLE_BET_COST,
-        averageMatches: trials ? matches / trials : null,
-        averageTargetCount: trials ? targetCount / trials : null,
-        averageProfit: trials ? profit / trials : null,
-        positiveExpected: trials > 0 && profit / trials > 0,
-        rate,
-        profitRate: rate,
-        estimatedRate: trials ? (evolution?.estimatedRate ?? (wins + 1) / (trials + 2)) : null,
-        confidence: trials ? (evolution?.confidence ?? (rate == null || trials < 8 ? -1 : wilsonLowerBound(rate, trials))) : -1,
-        prediction: prediction || "—",
-      };
-    }).sort((a, b) => b.confidence - a.confidence || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1));
-    return { ...play, best: candidates[0], metricLabel: "盈利機率" };
+  const empty = (): ProfitabilityPlay["best"] => ({
+    model: "—", samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0,
+    matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false,
+    profitRate: null, estimatedRate: null, confidence: -1, prediction: "—", periodResults: [],
   });
+  return plays.map((play) => ({ ...play, metricLabel: "盈利機率", best: empty(), fixed: empty(), follow: empty() }));
 }
 
 function Rate({ value, label = "勝率" }: { value: number | null; label?: string }) {
@@ -782,8 +726,8 @@ export function BingoResearchView() {
     [latest],
   );
   const bestPlays: ProfitabilityPlay[] = useMemo(
-    () => latest?.profitabilityEvaluation?.length ? latest.profitabilityEvaluation : bestPlayStats(sorted, latestModels),
-    [latest, sorted, latestModels],
+    () => latest?.profitabilityEvaluation?.length ? latest.profitabilityEvaluation : emptyProfitabilityPlayStats(),
+    [latest],
   );
   const technicalAnalysisFallback = useMemo(() => {
     const draws = sorted.slice(0, 30);
@@ -1141,7 +1085,7 @@ export function BingoResearchView() {
                       <strong className="text-rose-100">玩法理論風險基線</strong>
                       <span className="rounded-full bg-rose-300/15 px-2 py-1 text-xs text-rose-100">每注 {latest.theoreticalRiskBaseline.betCost} 元</span>
                     </div>
-                    <p className="mt-1 text-xs text-muted-foreground">{latest.theoreticalRiskBaseline.model}；抽水率越低只代表「理論損失較小」，不代表具有正期望。</p>
+                    <p className="mt-1 text-xs text-muted-foreground">{latest.theoreticalRiskBaseline.model}；目前為名目單注派彩研究值，不是均分後保證實領金額。</p>
                     <div className="mt-2 grid gap-2 sm:grid-cols-3">
                       {latest.theoreticalRiskBaseline.rows.slice(0, 6).map((row) => (
                         <div key={row.playtype} className="rounded-xl border border-rose-200/15 bg-background/35 p-3 text-xs">
@@ -1150,7 +1094,7 @@ export function BingoResearchView() {
                         </div>
                       ))}
                     </div>
-                    <p className="mt-2 text-[11px] text-muted-foreground">{latest.theoreticalRiskBaseline.caveat}</p>
+                    <p className="mt-2 text-[11px] text-muted-foreground">{latest.theoreticalRiskBaseline.settlementNote || latest.theoreticalRiskBaseline.caveat}</p>
                   </div>
                 ) : null}
                 {latest?.audit && (
@@ -1326,7 +1270,7 @@ export function BingoResearchView() {
                   )}
                 </div>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
-                  盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。賺賠金額以每期 25 元成本、實際派彩計算；樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
+                  盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。模型在回測視窗開始前決定，不看完 10 期結果才挑選。賺賠金額以每期 25 元成本、名目單注派彩計算；官方均分制需要同期期中獎注數，故不把研究值當成保證實領額。樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
                 </div>
                   </div>
                 </details>

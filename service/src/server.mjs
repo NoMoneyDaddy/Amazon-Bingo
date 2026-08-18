@@ -343,7 +343,13 @@ async function persistSnapshots(snapshots) {
     }
     await client.query('COMMIT');
     lastPersistedPeriod = snapshots[0]?.period || lastPersistedPeriod;
-    persistedCache.set(persistedHistoryLimit, { rows: snapshots, storedAt: Date.now() });
+    // days=1 可能只寫入最新一筆；合併既有快取，不能讓一次增量寫入把歷史窗口截成 1 筆。
+    const cachedRows = persistedCache.get(persistedHistoryLimit)?.rows || [];
+    const rowsByPeriod = new Map([...cachedRows, ...snapshots].map((item) => [String(item.period), item]));
+    persistedCache.set(persistedHistoryLimit, {
+      rows: [...rowsByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period)).slice(0, persistedHistoryLimit),
+      storedAt: Date.now(),
+    });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -1318,29 +1324,39 @@ function profitabilityEvaluation(history = []) {
   const anchor = history[profitabilityBacktestWindow];
   const selectionModels = anchor?.models || [];
   const currentModels = history[0]?.models || [];
+  // 同一個模型／模式／目標期的模型列與玩法無關；先建立一次，所有玩法共用。
+  // 舊版在每個玩法內重建模型，13 個玩法會把相同的 walk-forward 工作重複數十次。
+  const evaluationRowsCache = new Map();
+  const buildEvaluationRows = (currentModel, mode) => {
+    const cacheKey = `${mode}:${currentModel?.name || 'unknown'}`;
+    const cached = evaluationRowsCache.get(cacheKey);
+    if (cached) return cached;
+    const rows = [];
+    for (let index = 0; index < profitabilityBacktestWindow; index += 1) {
+      const actual = history[index];
+      const training = history.slice(index + 1);
+      if (!actual || !training.length) continue;
+      // fixed：凍結錨點模型；follow：採用目標期前一棒已保存模型。
+      const followModels = history[index + 1]?.models || [];
+      const source = mode === 'fixed'
+        ? currentModel
+        : followModels.find((item) => item.name === currentModel.name)
+          || followModels.find((item) => item.name && item.name !== '多模型聚合')
+          || currentModel;
+      let model = mode === 'follow' && source?.official
+        ? source
+        : rebuildEvaluationModel(source, actual, training);
+      if (!model && mode === 'follow' && source !== currentModel) {
+        model = rebuildEvaluationModel(currentModel, actual, training);
+      }
+      if (model) rows.push({ actual, model });
+    }
+    evaluationRowsCache.set(cacheKey, rows);
+    return rows;
+  };
   return plays.map((play) => {
     const evaluate = (currentModel, mode) => {
-      const rows = [];
-      for (let index = 0; index < profitabilityBacktestWindow; index += 1) {
-        const actual = history[index];
-        const training = history.slice(index + 1);
-        if (!actual || !training.length) continue;
-        // fixed：凍結錨點時已選定的模型與權重，但每個目標期都重新計算預測；
-        // follow：採用該目標期前一棒的模型權重，同樣只看更早資料。
-        const followModels = history[index + 1]?.models || [];
-        const source = mode === 'fixed'
-          ? currentModel
-          : followModels.find((item) => item.name === currentModel.name)
-            || followModels.find((item) => item.name && item.name !== '多模型聚合')
-            || currentModel;
-        let model = mode === 'follow' && source?.official
-          ? source
-          : rebuildEvaluationModel(source, actual, training);
-        if (!model && mode === 'follow' && source !== currentModel) {
-          model = rebuildEvaluationModel(currentModel, actual, training);
-        }
-        if (model) rows.push({ actual, model });
-      }
+      const rows = buildEvaluationRows(currentModel, mode);
       let wins = 0; let trials = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;
       const periodResults = [];
       rows.forEach(({ actual, model }) => {
@@ -2496,11 +2512,21 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         const castingAt = isFinite(index) ? reproducibleCastingAt(drawAt, item.period) : previousCastingAt;
         const isNextPrediction = index === 0;
         const modelCastingAt = isNextPrediction ? predictionCastingAt : castingAt;
-        const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt, castingAt: modelCastingAt } : { ...item, castingAt };
+        const previous = historyByPeriod.get(String(item.period));
+        // 官方增量資料通常只帶開獎欄位；保留同期期號已保存的模型／回測，
+        // 否則 deferEvaluationModels 會把完整快照誤降級成空白評估。
+        const enrichedItem = previous
+          ? { ...previous, ...item, models: previous.models?.length ? previous.models : item.models,
+            forecastEvaluation: previous.forecastEvaluation?.length ? previous.forecastEvaluation : item.forecastEvaluation,
+            calibratedProbabilityEvaluation: previous.calibratedProbabilityEvaluation?.length ? previous.calibratedProbabilityEvaluation : item.calibratedProbabilityEvaluation,
+            profitabilityEvaluation: previous.profitabilityEvaluation?.length ? previous.profitabilityEvaluation : item.profitabilityEvaluation,
+            zoneProfitabilityEvaluation: previous.zoneProfitabilityEvaluation?.length ? previous.zoneProfitabilityEvaluation : item.zoneProfitabilityEvaluation,
+            technicalAnalysis: Object.keys(previous.technicalAnalysis || {}).length ? previous.technicalAnalysis : item.technicalAnalysis }
+          : item;
+        const modelSnapshot = isNextPrediction ? { ...enrichedItem, period: nextPeriod, drawAt, castingAt: modelCastingAt } : { ...enrichedItem, castingAt };
         const modelHistory = rawHistory.slice(index + 1, index + liveModelHistoryLimit + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
         // 同步只重新計算最新一期的「當期 → 下一期」模型。
         // 舊歷史模型若已存在就保留；同步歷史資料不應逐期重新啟動 worker，否則 31 日查詢會阻塞首屏。
-        const previous = historyByPeriod.get(String(item.period));
         let models = previous?.models || item.models || [];
         let modelError = '';
         if (isNextPrediction && !options.deferLatestModel) {
@@ -2515,7 +2541,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           models = [];
         }
         history.push({
-          ...item,
+          ...enrichedItem,
           drawAt,
           castingAt: modelCastingAt,
           forecastCastingAt: isNextPrediction ? predictionCastingAt : item.forecastCastingAt,
@@ -2529,9 +2555,10 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       }
       // 首屏快速路徑只確認最新開獎資料；模型補建與 GitHub 備份交給背景同步，
       // 不得因慢來源、worker 或備份服務讓 /api/latest?days=1 長時間沒有回應。
+      // deferEvaluationModels 是即時同步的硬邊界：新期號也不能在 HTTP／排程路徑同步等待回測。
+      // 回測由 refreshInBackground 統一補寫，避免同一批資料被多個路徑重算。
       const shouldComputeEvaluation = !options.deferEvaluationModels
-        || latestDrawChanged
-        || !hasCompleteProfitabilityEvaluation(existingHistory[0]?.profitabilityEvaluation);
+        && (latestDrawChanged || !hasCompleteProfitabilityEvaluation(existingHistory[0]?.profitabilityEvaluation));
       if (shouldComputeEvaluation && history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
         await hydrateEvaluationModels(history);
       }
@@ -2546,7 +2573,10 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         : await evaluateInWorker(history);
       // 模型、預測、回測與技術摘要必須同一批寫入，避免重開後只剩開獎資料或號碼。
       history[0] = { ...history[0], ...evaluation };
-      await persistSnapshots(history);
+      // days=1 只需要保存最新快照；整個歷史窗口由 days>1 的同步路徑定期補齊。
+      // 這可避免每次即時輪詢都把數百筆模型 JSON 重寫進 PostgreSQL。
+      const snapshotsToPersist = daysOverride === 1 ? history.slice(0, 1) : history;
+      await persistSnapshots(snapshotsToPersist);
       const backup = options.deferLatestModel
         ? { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath, deferred: true }
         : await backupModelProfile(history[0]);

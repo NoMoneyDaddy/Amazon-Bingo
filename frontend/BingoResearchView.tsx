@@ -1221,7 +1221,7 @@ export function BingoResearchView() {
       useBingoRuntimeStore.getState().setDraws(mergeDrawSnapshots(runtime.draws, records));
       useBingoRuntimeStore.getState().markLatestSynced(Date.now());
       setLastSync(Date.now());
-      if (drawInformationChanged) {
+      if (drawInformationChanged || !hasBacktestEvaluation(snapshot)) {
         // 新期號由後端背景同步負責模型／回測計算；插件只重新讀取最新快照，
         // 不再因開獎更新自行要求 31 日資料，避免重複觸發重型計算。
         const refreshComputedLatest = async (attempt = 0): Promise<void> => {
@@ -1235,13 +1235,13 @@ export function BingoResearchView() {
             const isCurrentPeriod = String(computedSnapshot.period || '') === String(latestRecord.period || '');
             if (isCurrentPeriod && computedSnapshot.modelStatus === "formal" && hasBacktestEvaluation(computedSnapshot)) return;
           } catch {
-            if (attempt >= 5) return;
+            if (attempt >= 2) return;
           }
-          if (attempt >= 5) return;
-          await new Promise((resolve) => window.setTimeout(resolve, 5_000));
+          if (attempt >= 2) return;
+          await new Promise((resolve) => window.setTimeout(resolve, 2_000 + attempt * 3_000));
           return refreshComputedLatest(attempt + 1);
         };
-        void new Promise((resolve) => window.setTimeout(resolve, 2_000))
+        void new Promise((resolve) => window.setTimeout(resolve, drawInformationChanged ? 1_500 : 500))
           .then(() => refreshComputedLatest())
           .catch(() => undefined);
       }

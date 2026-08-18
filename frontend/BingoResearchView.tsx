@@ -1217,24 +1217,20 @@ export function BingoResearchView() {
                       <div><span className="font-semibold text-cyan-200">固定連買：</span>使用 10 期前的預測號碼，固定套用到後續 10 期。</div>
                       <div><span className="font-semibold text-cyan-200">連續跟買：</span>每一期採用上一期產生的新預測，逐期跟買 10 期。</div>
                     </div>
+                    <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-cyan-300/15 pt-2">
+                      <span className="text-[10px] font-semibold text-cyan-200">目前回測模式</span>
+                      <div className="flex min-h-10 w-full rounded-lg border border-cyan-300/25 bg-background/40 p-1 sm:w-auto" role="group" aria-label="回測模式">
+                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "fixed" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => setProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定連買 10 期</button>
+                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "follow" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => setProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>連續跟買 10 期</button>
+                      </div>
+                    </div>
                   </div>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
                     <div className="hidden gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid sm:grid-cols-[6rem_8.5rem_7rem_minmax(0,1fr)]">
                       <span className="text-center">玩法</span>
                       <span className="text-center">使用算法</span>
                       <span className="text-center sm:hidden">推薦</span>
-                      <span className="hidden items-center justify-center gap-1 text-center sm:flex">
-                        <span>盈利回測：</span>
-                        <button type="button" className={profitStrategy === "fixed" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定連買10期</button>
-                        <span>/</span>
-                        <button type="button" className={profitStrategy === "follow" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>連續跟買10期</button>
-                      </span>
-                      <span className="flex items-center justify-center gap-1 text-center sm:hidden">
-                        <span>盈利：</span>
-                        <button type="button" className={profitStrategy === "fixed" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定</button>
-                        <span>/</span>
-                        <button type="button" className={profitStrategy === "follow" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>跟買</button>
-                      </span>
+                      <span className="text-center">盈利回測</span>
                       <span className="hidden text-center sm:inline">預測號碼</span>
                     </div>
                     <div className="border-b border-slate-700 px-3 py-2 text-[10px] leading-4 text-muted-foreground sm:hidden">

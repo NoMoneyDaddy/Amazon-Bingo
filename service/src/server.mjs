@@ -12,13 +12,13 @@ const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult'
 const defaultHistoryDays = 30;
 const maxModelHistory = 300;
 const profitabilityBacktestWindow = 10;
-const minimumValidationSamples = 30;
-const profileValidationWindow = 30;
+const minimumValidationSamples = 10;
+const profileValidationWindow = 10;
 // 資料保存至少涵蓋一個月；最新基準之外，模型回測仍維持 60 期。
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v73-consensus-gate-coverage';
+const reproducibilityVersion = 'bingo-research-v74-ten-period-consensus';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1801,8 +1801,8 @@ function buildWeightedRegressionModel(snapshot, history, castingAt, options = {}
 }
 
 function recentTargetGate(modelName, target, history = []) {
-  const rows = history.slice(0, 30).filter((item) => item?.models?.some((model) => model.name === modelName));
-  if (rows.length < 20) return { eligible: false, samples: rows.length, reason: '近期樣本不足' };
+  const rows = history.slice(0, profileValidationWindow).filter((item) => item?.models?.some((model) => model.name === modelName));
+  if (rows.length < minimumValidationSamples) return { eligible: false, samples: rows.length, reason: `近期樣本不足（至少 ${minimumValidationSamples} 期）` };
   if (target === 'size' || target === 'oddEven') {
     const field = target === 'size' ? 'size' : 'oddEven';
     const valid = rows.filter((item) => ['大', '小', '單', '雙'].includes(normalizeDrawCategory(item[field], field)));
@@ -1811,7 +1811,7 @@ function recentTargetGate(modelName, target, history = []) {
       return validPredictionCategory(model?.official?.[field], field) === normalizeDrawCategory(item[field], field);
     }).length;
     const rate = valid.length ? wins / valid.length : 0;
-    return { eligible: valid.length >= 20 && rate >= 0.55, samples: valid.length, rate, baseline: 0.5 };
+    return { eligible: valid.length >= minimumValidationSamples && rate >= 0.55, samples: valid.length, rate, baseline: 0.5 };
   }
   if (target === 'superNumber') {
     // 超級獎號是單一號碼，不是「星級」號碼集合；不能讀 official.basic["superNumber"]。
@@ -1823,7 +1823,7 @@ function recentTargetGate(modelName, target, history = []) {
     }).length;
     const rate = valid.length ? wins / valid.length : 0;
     const baseline = 1 / 80;
-    return { eligible: valid.length >= 20 && rate > baseline, samples: valid.length, wins, rate, baseline };
+    return { eligible: valid.length >= minimumValidationSamples && rate > baseline, samples: valid.length, wins, rate, baseline };
   }
   const count = Number(String(target).replace('星', '')) || 10;
   const matches = rows.map((item) => {
@@ -1843,6 +1843,10 @@ function aggregateModel(models, history) {
     const evolution = model.calculation?.evolution?.[target];
     return evolution?.eligible === true && Number(evolution?.empiricalWeight) > 0;
   }));
+  const hasFallbackEvidence = (target) => eligibleModels.some((model) => {
+    const evolution = model.calculation?.evolution?.[target];
+    return Number(evolution?.trials || evolution?.validationSamples || 0) >= minimumValidationSamples;
+  });
   const weightFor = (model, target) => {
     const evolution = model.calculation?.evolution?.[target];
     const score = evolution?.score;
@@ -1850,12 +1854,14 @@ function aggregateModel(models, history) {
     const confidence = evolution?.confidence;
     const roi = evolution?.roi;
     const baselineRoi = evolution?.baselineRoi;
-    // 沒有任何模型通過近期驗證時，所有模型權重都維持 0；不把中性基準冒充有效預測。
-    if (!hasValidatedWeight) return 0;
+    // 十期回測不足以證明超越基準；若沒有模型通過嚴格超額閘門，仍以完成十期無洩漏回測的模型建立「有限樣本共識」，並在狀態中明確揭露。
+    if (!hasValidatedWeight) {
+      return hasFallbackEvidence(target) && Number(evolution?.trials || evolution?.validationSamples || 0) >= minimumValidationSamples ? 1 : 0;
+    }
     const recentGate = recentTargetGate(model.name, target, history);
     // walk-forward 演化已是主要證據；只有歷史模型列完整到足以驗證時，才讓近期閘門否決。
     // 快取或部分同步可能只有開獎資料，未知的近期閘門不能被誤判成「未通過」而把共識權重全歸零。
-    const hasRecentGateEvidence = Number(recentGate.samples || 0) >= 20;
+    const hasRecentGateEvidence = Number(recentGate.samples || 0) >= minimumValidationSamples;
     if (evolution?.eligible !== true || (hasRecentGateEvidence && !recentGate.eligible) || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
     // 聚合權重以 ROI 超額為主，再用命中率信賴下限與樣本量收縮，避免短樣本高派彩偶然主導共識。
     const roiUplift = Math.max(0, Math.min(1, roi - baselineRoi));
@@ -1909,8 +1915,8 @@ function aggregateModel(models, history) {
   const weightedModelCount = eligibleModels.filter((model) => predictionTargets.some((target) => weightFor(model, target) > 0)).length;
   return {
     name: '多模型聚合',
-    status: '依各模型 walk-forward 表現加權的共識模型',
-    rule: '多模型聚合；依各模型歷史回測表現加權投票，不保證提升下一期命中。',
+    status: hasValidatedWeight ? '依各模型 walk-forward 表現加權的共識模型' : '十期有限樣本共識；尚未證明超越基準',
+    rule: hasValidatedWeight ? '多模型聚合；依各模型歷史回測表現加權投票，不保證提升下一期命中。' : '各模型均完成最近十期無洩漏回測後，以等權方式形成研究共識；十期樣本不足以證明優於隨機基準。',
     sources: [],
     calculation: {
       algorithmVersion: algorithmVersion(),
@@ -1918,7 +1924,7 @@ function aggregateModel(models, history) {
       castingSource: 'weighted-model-consensus',
       castingAt: models[0]?.calculation?.castingAt || '',
       historySamples: history.length,
-      aggregation: '只有 walk-forward 勝率嚴格高於同玩法隨機基線的模型才有權重；其餘模型權重為 0',
+      aggregation: hasValidatedWeight ? '只有 walk-forward 勝率嚴格高於同玩法隨機基線的模型才有權重；其餘模型權重為 0' : '沒有模型通過嚴格超額閘門；已完成十期無洩漏回測的模型採等權研究共識，不代表超越基準',
       weightedModelCount,
       commonCasting: '多模型聚合不另起卦；它整合各子模型在同一固定輸入下的結果。',
       commonCastingValue: '多模型加權整合',

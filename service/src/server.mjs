@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v72-consensus-super-number-gate';
+const reproducibilityVersion = 'bingo-research-v73-consensus-gate-coverage';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1853,7 +1853,10 @@ function aggregateModel(models, history) {
     // 沒有任何模型通過近期驗證時，所有模型權重都維持 0；不把中性基準冒充有效預測。
     if (!hasValidatedWeight) return 0;
     const recentGate = recentTargetGate(model.name, target, history);
-    if (evolution?.eligible !== true || !recentGate.eligible || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
+    // walk-forward 演化已是主要證據；只有歷史模型列完整到足以驗證時，才讓近期閘門否決。
+    // 快取或部分同步可能只有開獎資料，未知的近期閘門不能被誤判成「未通過」而把共識權重全歸零。
+    const hasRecentGateEvidence = Number(recentGate.samples || 0) >= 20;
+    if (evolution?.eligible !== true || (hasRecentGateEvidence && !recentGate.eligible) || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
     // 聚合權重以 ROI 超額為主，再用命中率信賴下限與樣本量收縮，避免短樣本高派彩偶然主導共識。
     const roiUplift = Math.max(0, Math.min(1, roi - baselineRoi));
     const confidenceUplift = Math.max(0, Math.min(1, confidence - baselineRate));

@@ -2526,8 +2526,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   const storedForecast = current.forecastEvaluation?.length ? current.forecastEvaluation : forecastEvaluation(evaluationHistory);
   const storedCalibrated = current.calibratedProbabilityEvaluation?.length ? current.calibratedProbabilityEvaluation : calibratedProbabilityEvaluation(evaluationHistory);
   const hydratedProfitability = hydrateStoredPeriodMatches(current.profitabilityEvaluation, visible);
-  const storedProfitabilityReady = current.profitabilityAlgorithmVersion === reproducibilityVersion
-    && Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
+  const storedProfitabilityReady = Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
     && hydratedProfitability.every((play) => Array.isArray(play.best?.periodResults)
       && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
   const storedProfitability = storedProfitabilityReady ? hydratedProfitability : profitabilityEvaluation(evaluationHistory);
@@ -2544,7 +2543,6 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     forecastEvaluation: storedForecast,
     calibratedProbabilityEvaluation: storedCalibrated,
     profitabilityEvaluation: storedProfitability,
-    profitabilityAlgorithmVersion: reproducibilityVersion,
     zoneProfitabilityEvaluation: storedZone,
     technicalAnalysis: storedTechnical,
     theoreticalRiskBaseline: theoreticalRiskBaseline(),
@@ -2561,8 +2559,7 @@ function refreshInBackground(persisted, days = 1) {
   // 已有正式模型但缺少回測時，只補寫評估快照；不要為了回測再次重跑模型。
   const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);
   const hydratedProfitability = hydrateStoredPeriodMatches(persisted[0]?.profitabilityEvaluation, history);
-  const storedProfitabilityReady = persisted[0]?.profitabilityAlgorithmVersion === reproducibilityVersion
-    && Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
+  const storedProfitabilityReady = Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
     && hydratedProfitability.every((play) => Array.isArray(play.best?.periodResults)
       && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
   if (days === 1 && persisted[0]?.models?.length && !storedProfitabilityReady) {
@@ -2572,7 +2569,6 @@ function refreshInBackground(persisted, days = 1) {
           forecastEvaluation: forecastEvaluation(history),
           calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history),
           profitabilityEvaluation: hydratedProfitability.length ? hydratedProfitability : profitabilityEvaluation(history),
-          profitabilityAlgorithmVersion: reproducibilityVersion,
           zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history),
           technicalAnalysis: technicalAnalysis(history),
         };

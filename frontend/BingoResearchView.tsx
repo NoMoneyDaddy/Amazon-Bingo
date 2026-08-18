@@ -424,6 +424,10 @@ function mergeDrawSnapshots(current: DrawSnapshot[], incoming: DrawSnapshot[]) {
 
 function hasDrawInformationChanged(previous: DrawSnapshot | undefined, next: DrawSnapshot) {
   if (!previous) return true;
+  const previousPeriod = Number(previous.period);
+  const nextPeriod = Number(next.period);
+  // 後端計算期間，插件可能暫時讀到較舊快照；舊快照不能再次觸發完整同步。
+  if (Number.isFinite(previousPeriod) && Number.isFinite(nextPeriod) && nextPeriod < previousPeriod) return false;
   return String(previous.period || '') !== String(next.period || '')
     || (previous.numbers || []).map(normalizeNumber).join(',') !== (next.numbers || []).map(normalizeNumber).join(',')
     || normalizeNumber(previous.superNumber) !== normalizeNumber(next.superNumber)
@@ -1205,10 +1209,34 @@ export function BingoResearchView() {
       }
       const latestRecord = records[0];
       const drawInformationChanged = hasDrawInformationChanged(runtime.draws[0], latestRecord);
-      const shouldRefreshHistory = shouldRefreshHistoryByAge || drawInformationChanged;
+      const shouldRefreshHistory = shouldRefreshHistoryByAge && !drawInformationChanged;
       useBingoRuntimeStore.getState().setDraws(mergeDrawSnapshots(runtime.draws, records));
       useBingoRuntimeStore.getState().markLatestSynced(Date.now());
       setLastSync(Date.now());
+      if (drawInformationChanged) {
+        // 新期號由後端背景同步負責模型／回測計算；插件只重新讀取最新快照，
+        // 不再因開獎更新自行要求 31 日資料，避免重複觸發重型計算。
+        const refreshComputedLatest = async (attempt = 0): Promise<void> => {
+          try {
+            const computedSnapshot = await fetchLatest(1, castingAt);
+            const computedRecords = computedSnapshot.history?.length
+              ? [{ ...computedSnapshot, history: undefined }, ...computedSnapshot.history.slice(1)]
+              : [computedSnapshot];
+            const latestRuntime = useBingoRuntimeStore.getState();
+            latestRuntime.setDraws(mergeDrawSnapshots(latestRuntime.draws, computedRecords));
+            const isCurrentPeriod = String(computedSnapshot.period || '') === String(latestRecord.period || '');
+            if (isCurrentPeriod && computedSnapshot.modelStatus === "formal" && computedSnapshot.profitabilityEvaluation?.length) return;
+          } catch {
+            if (attempt >= 2) return;
+          }
+          if (attempt >= 2) return;
+          await new Promise((resolve) => window.setTimeout(resolve, 5_000));
+          return refreshComputedLatest(attempt + 1);
+        };
+        void new Promise((resolve) => window.setTimeout(resolve, 2_000))
+          .then(() => refreshComputedLatest())
+          .catch(() => undefined);
+      }
       if (shouldRefreshHistory) {
         const refreshFormalHistory = async (attempt = 0): Promise<void> => {
           try {

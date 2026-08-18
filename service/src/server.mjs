@@ -2427,6 +2427,13 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
     try {
       const result = await attempt.run();
       const snapshot = result.snapshot || result;
+      const previousLatest = existingHistory[0];
+      const latestDrawChanged = !previousLatest
+        || String(previousLatest.period || '') !== String(snapshot.period || '')
+        || (previousLatest.numbers || []).map(normalizeNumberValue).join(',') !== (snapshot.numbers || []).map(normalizeNumberValue).join(',')
+        || normalizeNumberValue(previousLatest.superNumber) !== normalizeNumberValue(snapshot.superNumber)
+        || normalizeDrawCategory(previousLatest.size, 'size') !== normalizeDrawCategory(snapshot.size, 'size')
+        || normalizeDrawCategory(previousLatest.oddEven, 'oddEven') !== normalizeDrawCategory(snapshot.oddEven, 'oddEven');
       const latencyMs = Date.now() - startedAt;
       const stat = updateSourceStat(attempt.name, true, latencyMs, snapshot.period);
       health.push({ name: attempt.name, ok: true, latencyMs, records: (result.history || [snapshot]).length, latestPeriod: snapshot.period, stability: stat.success / (stat.success + stat.failure) });
@@ -2496,7 +2503,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       // 首屏快速路徑只確認最新開獎資料；模型補建與 GitHub 備份交給背景同步，
       // 不得因慢來源、worker 或備份服務讓 /api/latest?days=1 長時間沒有回應。
       if (!options.deferLatestModel && !options.deferEvaluationModels) await hydrateEvaluationModels(history);
-      const evaluation = options.deferEvaluationModels
+      const evaluation = options.deferEvaluationModels && !latestDrawChanged
         ? {
           forecastEvaluation: history[0]?.forecastEvaluation || [],
           calibratedProbabilityEvaluation: history[0]?.calibratedProbabilityEvaluation || [],

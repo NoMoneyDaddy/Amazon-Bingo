@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v4-reproducible';
+const reproducibilityVersion = 'bingo-research-v5-specified-period';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -325,6 +325,26 @@ function taiyiCasting(snapshot, target) {
   return { input, palace, cycle, formula: `預測時間=${input.castingAt}、玩法序號=${input.targetNo}；依太乙行九宮結構建立時間索引=${palace}／${cycle}。完整太乙仍需積年、局數等排局資料，期號僅作所問事項：${input.question}` };
 }
 
+function statisticalCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
+  const time = parseTaipeiParts(input.castingAt);
+  return {
+    input,
+    window: 60,
+    timeKey: `${time.year}-${time.month}-${time.day}-${time.hour}`,
+    formula: `固定輸入=${input.castingAt}；僅使用目標期之前的歷史資料，計算熱度、遺漏、和值、奇偶與高低區特徵；窗口上限 60 期。這是統計基線，不是玄學因果。`,
+  };
+}
+
+function zodiacElementCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
+  const lunar = parseChineseCalendarParts(input.castingAt);
+  const stem = ((lunar.year - 4) % 10 + 10) % 10;
+  const branch = ((lunar.year - 4) % 12 + 12) % 12;
+  const elements = ['木', '木', '火', '火', '土', '土', '金', '金', '水', '水'];
+  return { input, stem, branch, element: elements[stem], digits: [], formula: `固定輸入=${input.castingAt}；以農曆年干支取年元素=${elements[stem]}、生肖支序=${branch + 1}；號碼只做固定五行映射與統計排序，屬研究適配，不宣稱命理因果。` };
+}
+
 function historicalFrequencies(history) {
   const counts = Array(81).fill(0);
   history.forEach((draw, index) => draw.numbers.forEach((number) => { counts[Number(number)] += 1 / (index + 1); }));
@@ -360,7 +380,23 @@ function targetAdapterSignal(number, target, tradition) {
 function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, target = '') {
   const frequencies = historicalFrequencies(history);
   const values = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
-    const traditional = tradition.kind === 'luoshu'
+    const traditional = tradition.kind === 'bazi'
+      ? ((['木', '火', '土', '金', '水'][(number - 1) % 5] === tradition.element ? 0.38 : 0.06) + (number % 12 === tradition.branch + 1 ? 0.18 : 0))
+      : tradition.kind === 'statistics'
+      ? (() => {
+        const recent = history.slice(0, 60);
+        const seen = new Map();
+        recent.forEach((draw, drawIndex) => draw.numbers.forEach((value) => {
+          const numberValue = Number(value);
+          seen.set(numberValue, (seen.get(numberValue) || 0) + (1 / (drawIndex + 1)));
+        }));
+        const frequency = seen.get(number) || 0;
+        const latestGap = recent.findIndex((draw) => draw.numbers.map(Number).includes(number));
+        const omission = latestGap < 0 ? 1 : Math.min(latestGap + 1, 20) / 20;
+        const parity = target === 'oddEven' ? (number % 2 ? 0.08 : 0.04) : 0;
+        return clamp(frequency / Math.max(1, recent.length * 0.2), 0, 1) * 0.35 + omission * 0.25 + parity;
+      })()
+      : tradition.kind === 'luoshu'
       ? (1 - Math.abs((tradition.center + Math.floor((number - 1) / 10) + (number - 1) % 10) % 9 - 4) / 4) * 0.55 + (number % tradition.center === 0 ? 0.2 : 0)
       : tradition.kind === 'sixyao'
         ? ((tradition.bits[(number + tradition.moving) % 6] === '1' ? 1 : -1) * (number % 2 ? 1 : -1) * 0.12) + (number % 8 === tradition.lower ? 0.18 : 0)
@@ -428,6 +464,8 @@ const modelSources = {
   '數字卦（楚簡研究版）': [{ name: '深圳大學學報：楚卜筮簡中的數字卦', url: 'https://xb.szu.edu.cn/article/2016/1000-260X-33-3-58.html' }, { name: '濟南大學學報：清華簡《筮法》研究', url: 'https://journal.ujn.edu.cn/zh/article/31373565/' }],
   '奇門遁甲（九宮研究版）': [{ name: '北海道大學：奇門遁甲的基礎研究', url: 'https://eprints.lib.hokudai.ac.jp/repo/huscap/all/44606/' }, { name: 'EASTM：中國軍事占卜史研究', url: 'https://core.ac.uk/download/pdf/228877365.pdf' }],
   '太乙九宮（研究版）': [{ name: 'Extrême-Orient：太乙、奇門遁甲與六壬研究', url: 'https://journals.openedition.org/extremeorient/pdf/270' }, { name: '柏林自由大學：中國帝制時期的認知占卜', url: 'https://refubium.fu-berlin.de/handle/fub188/154' }],
+  '民俗統計基線': [{ name: '台灣彩券官方開獎時間與隨機開獎說明', url: 'https://www.taiwanlottery.com/run_lottery/schedule/' }],
+  '生肖五行研究版': [{ name: '中國哲學書電子化計劃：周易與五行資料', url: 'https://ctext.org/datawiki.pl?if=en&res=484682' }],
 };
 
 function targetProfile(profiles, methodName, target) {
@@ -459,7 +497,7 @@ function hasPositiveProfit(target, predicted, actual) {
 function evolveProfiles(history = []) {
   const candidates = [0.16, 0.24, 0.32, 0.40, 0.48];
   const validationWindow = Math.min(12, Math.max(0, history.length - 1));
-  const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）'];
+  const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線'];
   return Object.fromEntries(methods.map((method) => {
     const targets = Object.fromEntries(predictionTargets.map((target) => {
       if (history.length < 8) return [target, { empiricalWeight: 0.32, validationSamples: validationWindow, score: null, status: '樣本不足，使用預設權重' }];
@@ -497,6 +535,8 @@ function castingFor(kind, snapshot, target, castingAt) {
   if (kind === 'luoshu') return luoshuCasting(snapshot, target);
   if (kind === 'numeral-gua') return numeralGuaCasting(snapshot, target);
   if (kind === 'qimen') return qimenCasting(snapshot, target);
+  if (kind === 'statistics') return statisticalCasting(snapshot, target);
+  if (kind === 'bazi') return zodiacElementCasting(snapshot, target);
   return taiyiCasting(snapshot, target);
 }
 
@@ -505,6 +545,8 @@ function traditionFor(kind, casting) {
   if (kind === 'sixyao') return { kind, bits: casting.binary, moving: casting.lines.filter((line) => line.moving).length, lower: 1 };
   if (kind === 'luoshu') return { kind, center: casting.center };
   if (kind === 'numeral-gua') return { kind, digits: casting.digits };
+  if (kind === 'statistics') return { kind, window: casting.window };
+  if (kind === 'bazi') return { kind, element: casting.element, branch: casting.branch };
   return { kind, palace: casting.palace, star: casting.star, door: casting.door, cycle: casting.cycle };
 }
 
@@ -535,6 +577,30 @@ function summarizePick(numbers) {
     oddEvenCount: odd > parsed.length / 2 ? '單數偏多' : odd < parsed.length / 2 ? '雙數偏多' : '均衡',
     highLowCount: high > parsed.length / 2 ? '大號偏多' : high < parsed.length / 2 ? '小號偏多' : '均衡',
     zones,
+  };
+}
+
+function calculateSpecifiedTarget(history, { period = '', at = '' } = {}) {
+  const normalizedPeriod = String(period || '').trim();
+  const targetIndex = normalizedPeriod ? history.findIndex((item) => String(item.period) === normalizedPeriod) : -1;
+  const actual = targetIndex >= 0 ? history[targetIndex] : null;
+  const training = targetIndex >= 0
+    ? history.slice(targetIndex + 1, targetIndex + maxModelHistory + 1)
+    : history.slice(0, maxModelHistory);
+  const targetPeriod = normalizedPeriod || `custom-${String(at || '').replace(/[^0-9]/g, '').slice(0, 14) || 'time'}`;
+  const castingAt = reproducibleCastingAt(at || actual?.castingAt || actual?.drawAt, targetPeriod);
+  const snapshot = { ...(actual || {}), period: targetPeriod, drawAt: at || actual?.drawAt || '', castingAt };
+  const models = buildModels(snapshot, training, { evolve: true, castingAt });
+  return {
+    ...snapshot,
+    models,
+    historySamples: training.length,
+    calculationMode: actual ? 'specified-period-walk-forward' : 'specified-time-forward',
+    targetPeriod,
+    actual: actual ? { period: actual.period, drawAt: actual.drawAt, numbers: actual.numbers, superNumber: actual.superNumber, size: actual.size, oddEven: actual.oddEven } : null,
+    dataBoundary: actual
+      ? `只使用第 ${training[training.length - 1]?.period || '最早'} 至第 ${training[0]?.period || '無'} 期資料，不使用目標期結果。`
+      : `只使用目前已取得的 ${training.length} 期歷史資料；指定時間沒有官方實際開獎結果。`,
   };
 }
 
@@ -607,6 +673,8 @@ export function buildModels(snapshot, history = [], options = {}) {
     { name: '數字卦（楚簡研究版）', kind: 'numeral-gua', status: '文獻數字結構＋目標玩法研究適配，非完整復原', seedOffset: 73 },
     { name: '奇門遁甲（九宮研究版）', kind: 'qimen', status: '九宮／九星／八門核心＋目標玩法適配，非完整排局', seedOffset: 89 },
     { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心＋目標玩法適配，非完整太乙排局', seedOffset: 97 },
+    { name: '民俗統計基線', kind: 'statistics', status: '熱度／遺漏／和值／奇偶／區間統計基線，非因果預測', seedOffset: 113 },
+    { name: '生肖五行研究版', kind: 'bazi', status: '農曆年干支／五行固定映射＋統計適配，非完整八字排盤', seedOffset: 127 },
   ];
   const baseModels = methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
@@ -640,12 +708,14 @@ export function buildModels(snapshot, history = [], options = {}) {
       status: method.status,
       rule: `${method.status}；歷史頻率只做獨立統計排序，不修改傳統規則，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
-      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
+      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : method.kind === 'statistics' ? '統計基線：熱度／遺漏／和值／奇偶／區間' : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
         const casting = targetCastings[target];
         if (method.kind === 'sixyao') return [target, casting.lines.map((line) => line.value).join('、')];
         if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];
         if (method.kind === 'qimen') return [target, `九宮${casting.palace}／九星${casting.star}／八門${casting.door}`];
         if (method.kind === 'taiyi') return [target, `行宮${casting.palace}／循環${casting.cycle}`];
+        if (method.kind === 'statistics') return [target, '固定統計窗口 60 期／目標期前資料'];
+        if (method.kind === 'bazi') return [target, `年元素${casting.element}／生肖支序${casting.branch + 1}`];
         if (method.kind === 'luoshu') return [target, `宮位${casting.palace}／數${casting.center}`];
         return [target, casting.digits.join('、')];
       })) },
@@ -904,6 +974,20 @@ const server = http.createServer(async (req, res) => {
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
       return send(res, 200, await latest(refreshDays, persisted), req);
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }
+  }
+  if (req.method === 'GET' && req.url.startsWith('/api/calculate')) {
+    try {
+      const requestUrl = new URL(req.url, 'http://localhost');
+      const period = requestUrl.searchParams.get('period') || '';
+      const at = requestUrl.searchParams.get('at') || '';
+      if (!period && !at) return send(res, 400, { error: '請提供 period 或 at' }, req);
+      let persisted = await readPersistedCached(10000);
+      if (!persisted.length) {
+        await latest(30, []);
+        persisted = await readPersistedCached(10000);
+      }
+      return send(res, 200, calculateSpecifiedTarget(persisted, { period, at }), req);
+    } catch (error) { return send(res, 422, { error: error instanceof Error ? error.message : '指定期數計算失敗' }, req); }
   }
   send(res, 404, { error: 'Not found' });
 });

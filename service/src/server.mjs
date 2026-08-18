@@ -1319,9 +1319,12 @@ function profitabilityEvaluation(history = []) {
         if (!actual || !training.length) continue;
         // fixed：凍結錨點時已選定的模型與權重，但每個目標期都重新計算預測；
         // follow：採用該目標期前一棒的模型權重，同樣只看更早資料。
+        const followModels = history[index + 1]?.models || [];
         const source = mode === 'fixed'
           ? currentModel
-          : history[index + 1]?.models?.find((item) => item.name === currentModel.name);
+          : followModels.find((item) => item.name === currentModel.name)
+            || followModels.find((item) => item.name && item.name !== '多模型聚合')
+            || currentModel;
         const model = rebuildEvaluationModel(source, actual, training);
         if (model) rows.push({ actual, model });
       }

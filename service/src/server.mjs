@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v42-randomness-battery';
+const reproducibilityVersion = 'bingo-research-v43-probability-evaluation';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -639,6 +639,67 @@ function hasPositiveProfit(target, predicted, actual) {
   return payout - singleBetCost > 0;
 }
 
+function randomPrediction(target, seed) {
+  const random = seededRandom(seed);
+  if (target === 'size') return random() < 0.5 ? '大' : '小';
+  if (target === 'oddEven') return random() < 0.5 ? '單' : '雙';
+  if (target === 'superNumber') return String(1 + Math.floor(random() * 80)).padStart(2, '0');
+  const count = Number(String(target).replace('星', '')) || 10;
+  const values = Array.from({ length: 80 }, (_, index) => index + 1);
+  for (let index = values.length - 1; index > 0; index -= 1) {
+    const swap = Math.floor(random() * (index + 1));
+    [values[index], values[swap]] = [values[swap], values[index]];
+  }
+  return values.slice(0, count).sort((a, b) => a - b).map((value) => String(value).padStart(2, '0'));
+}
+
+function forecastEvaluation(history = []) {
+  const records = history.slice(1, maxModelHistory + 1).filter((item) => Array.isArray(item.models) && item.models.length);
+  const byModel = new Map();
+  records.forEach((actual, recordIndex) => actual.models.forEach((model) => {
+    if (model.name === '多模型聚合') return;
+    const result = byModel.get(model.name) || {
+      name: model.name,
+      samples: 0,
+      size: { brier: 0, logLoss: 0, randomBrier: 0.25, randomLogLoss: Math.log(2), wins: 0, randomWins: 0 },
+      oddEven: { brier: 0, logLoss: 0, randomBrier: 0.25, randomLogLoss: Math.log(2), wins: 0, randomWins: 0 },
+      tenStar: { meanMatches: 0, randomMeanMatches: 0, positiveProfitRate: 0, randomPositiveProfitRate: 0, wins: 0, randomWins: 0 },
+    };
+    result.samples += 1;
+    ['size', 'oddEven'].forEach((target) => {
+      const predicted = target === 'size' ? model.official.size : model.official.oddEven;
+      const actualValue = target === 'size' ? actual.size : actual.oddEven;
+      const correct = normalizeDrawCategory(predicted, target) === normalizeDrawCategory(actualValue, target);
+      const probability = correct ? 0.999 : 0.001;
+      result[target].brier += (probability - 1) ** 2;
+      result[target].logLoss += -Math.log(probability);
+      result[target].wins += correct ? 1 : 0;
+      const randomValue = randomPrediction(target, `random-baseline|${model.name}|${target}|${actual.period}|${recordIndex}`);
+      const randomCorrect = normalizeDrawCategory(randomValue, target) === normalizeDrawCategory(actualValue, target);
+      result[target].randomWins += randomCorrect ? 1 : 0;
+    });
+    const predictedNumbers = model.official.basic?.['10星'] || [];
+    const actualNumbers = new Set(actual.numbers);
+    const randomNumbers = randomPrediction('10星', `random-baseline|${model.name}|10星|${actual.period}|${recordIndex}`);
+    result.tenStar.meanMatches += predictedNumbers.filter((number) => actualNumbers.has(number)).length;
+    result.tenStar.randomMeanMatches += randomNumbers.filter((number) => actualNumbers.has(number)).length;
+    result.tenStar.wins += hasPositiveProfit('10星', predictedNumbers, actual) ? 1 : 0;
+    result.tenStar.randomWins += hasPositiveProfit('10星', randomNumbers, actual) ? 1 : 0;
+    byModel.set(model.name, result);
+  }));
+  return [...byModel.values()].map((result) => {
+    const samples = Math.max(1, result.samples);
+    return {
+      name: result.name,
+      samples: result.samples,
+      size: { brier: result.size.brier / samples, logLoss: result.size.logLoss / samples, randomBrier: result.size.randomBrier, randomLogLoss: result.size.randomLogLoss, winRate: result.size.wins / samples, randomWinRate: result.size.randomWins / samples },
+      oddEven: { brier: result.oddEven.brier / samples, logLoss: result.oddEven.logLoss / samples, randomBrier: result.oddEven.randomBrier, randomLogLoss: result.oddEven.randomLogLoss, winRate: result.oddEven.wins / samples, randomWinRate: result.oddEven.randomWins / samples },
+      tenStar: { meanMatches: result.tenStar.meanMatches / samples, randomMeanMatches: result.tenStar.randomMeanMatches / samples, positiveProfitRate: result.tenStar.wins / samples, randomPositiveProfitRate: result.tenStar.randomWins / samples },
+      caveat: '目前是硬分類預測的 proper-score 診斷：模型尚未提供校準機率，因此 Brier／Log Loss 會揭露過度自信，不等於模型已具備可信機率輸出。',
+    };
+  });
+}
+
 function lowerConfidenceBound(rate, samples) {
   if (!samples) return 0;
   const z = 1.96;
@@ -1157,7 +1218,7 @@ async function latest(daysOverride = null, existingHistory = []) {
       const responseHistory = daysOverride && daysOverride > 1
         ? selectRecentHistory(history, retentionDays)
         : history.slice(0, fastResponseHistoryLimit);
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }
@@ -1199,6 +1260,7 @@ async function persistedResponse(persisted) {
     audit: researchAudit(visible.slice(1)),
     behaviorAudit: behaviorAudit(visible.slice(1)),
     backtestIntegrity: leakageGuard(visible, targetPeriod),
+    forecastEvaluation: forecastEvaluation([{ ...current, models }, ...visible.slice(1)]),
     researchEvidence: researchEvidenceRegistry,
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
   };

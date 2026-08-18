@@ -123,6 +123,14 @@ type DrawSnapshot = {
     passed: boolean;
     rule: string;
   };
+  forecastEvaluation?: Array<{
+    name: string;
+    samples: number;
+    size: { brier: number; logLoss: number; randomBrier: number; randomLogLoss: number; winRate: number; randomWinRate: number };
+    oddEven: { brier: number; logLoss: number; randomBrier: number; randomLogLoss: number; winRate: number; randomWinRate: number };
+    tenStar: { meanMatches: number; randomMeanMatches: number; positiveProfitRate: number; randomPositiveProfitRate: number };
+    caveat: string;
+  }>;
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
 };
 type Page = "overview" | "process" | "history";
@@ -185,6 +193,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     audit: value.audit,
     behaviorAudit: value.behaviorAudit,
     backtestIntegrity: value.backtestIntegrity,
+    forecastEvaluation: Array.isArray(value.forecastEvaluation) ? value.forecastEvaluation : [],
     researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
   };
 }
@@ -864,6 +873,27 @@ export function BingoResearchView() {
                     <p className="mt-1 text-[11px] text-muted-foreground">{latest.backtestIntegrity.rule}</p>
                   </div>
                 )}
+                {latest?.forecastEvaluation?.length ? (
+                  <div className="mt-3 rounded-2xl border border-sky-300/25 bg-sky-300/10 p-4 text-sm leading-6 text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-sky-100">機率評估與隨機基線</strong>
+                      <span className="rounded-full bg-sky-300/15 px-2 py-1 text-xs text-sky-100">Brier／Log Loss 越低越好</span>
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {latest.forecastEvaluation.map((item) => (
+                        <div key={item.name} className="rounded-xl border border-sky-200/15 bg-background/35 p-3 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-semibold text-sky-100">{item.name}</span><span className="text-muted-foreground">{item.samples} 期</span></div>
+                          <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-3">
+                            <span>大小 Brier {item.size.brier.toFixed(3)}／隨機 {item.size.randomBrier.toFixed(3)}</span>
+                            <span>單雙 Brier {item.oddEven.brier.toFixed(3)}／隨機 {item.oddEven.randomBrier.toFixed(3)}</span>
+                            <span>10 星命中 {item.tenStar.meanMatches.toFixed(2)}／隨機 {item.tenStar.randomMeanMatches.toFixed(2)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-[11px] text-muted-foreground">{latest.forecastEvaluation[0]?.caveat}</p>
+                  </div>
+                ) : null}
                 {latest?.researchEvidence?.length ? (
                   <div className="mt-3 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-4 text-sm leading-6 text-slate-200">
                     <strong className="text-amber-100">中西方方法的證據邊界</strong>

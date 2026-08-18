@@ -11,12 +11,13 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const minimumValidationSamples = 24;
+const minimumValidationSamples = 20;
+const profileValidationWindow = 30;
 // 資料保存至少涵蓋一個月；最新基準之外，模型回測仍維持 60 期。
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v16-walkforward-wilson';
+const reproducibilityVersion = 'bingo-research-v17-60-backtest-30-tuning';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -535,9 +536,9 @@ function lowerConfidenceBound(rate, samples) {
 }
 
 function evolveProfiles(history = []) {
-  const candidates = [0.16, 0.24, 0.32, 0.40, 0.48];
-  // 使用完整可用窗口，並對每個 fold 等權；只看最近幾期會把偶然波動誤當成有效訊號。
-  const validationWindow = Math.min(maxModelHistory, Math.max(0, history.length - 1));
+  const candidates = [0.24, 0.32, 0.40];
+  // 回測仍使用 60 期；參數調校採獨立 30 期窗口，降低計算量與短期噪音。
+  const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - 1));
   const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線'];
   return Object.fromEntries(methods.map((method) => {
     const targets = Object.fromEntries(predictionTargets.map((target) => {

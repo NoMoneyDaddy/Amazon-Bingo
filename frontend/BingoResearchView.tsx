@@ -614,10 +614,21 @@ function ProfitabilityDetail({
       <span>總成本：<strong className="tabular-nums text-slate-200">{formatNetProfit(-best.costTotal)}</strong></span>
       <span>平均命中：<strong className="tabular-nums text-slate-200">{best.samples ? (best.matches / best.samples).toFixed(1) : "—"}{best.targetCount > 1 ? ` / ${(best.targetCount / best.samples).toFixed(0)}` : ""}</strong></span>
       <span className={best.positiveExpected ? "text-emerald-300" : "text-rose-300"}>{best.positiveExpected ? "正期望：平均每期淨盈利" : "未達正期望：僅供比較"}</span>
-      <div className="col-span-full mt-1 border-t border-slate-800 pt-1 text-center">
-        <span className="font-semibold text-slate-200">10期逐期結果：</span>{best.periodResults?.length
-          ? best.periodResults.map((item) => <span key={item.period} className={item.profitable ? "ml-1 text-emerald-300" : "ml-1 text-rose-300"}>{item.period.slice(-4)} {formatNetProfit(item.net)}</span>)
-          : " 尚無資料"}
+      <div className="col-span-full mt-1 border-t border-slate-800 pt-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="font-semibold text-slate-200">最近 10 期逐期結果</span>
+          <span className="text-[9px] text-muted-foreground">綠色＝盈利／紅色＝未盈利</span>
+        </div>
+        {best.periodResults?.length ? (
+          <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+            {best.periodResults.map((item) => (
+              <div key={item.period} className={`rounded-md border px-2 py-1.5 text-center ${item.profitable ? "border-emerald-300/30 bg-emerald-300/5" : "border-rose-300/25 bg-rose-300/5"}`}>
+                <div className="text-[9px] text-muted-foreground">第 {item.period.slice(-4)} 期</div>
+                <div className={`mt-0.5 font-semibold tabular-nums ${item.profitable ? "text-emerald-300" : "text-rose-300"}`}>{formatNetProfit(item.net)}</div>
+              </div>
+            ))}
+          </div>
+        ) : <div className="mt-1 text-center text-[10px]">尚無逐期資料</div>}
       </div>
     </div>
   );

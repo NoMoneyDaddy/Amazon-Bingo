@@ -2765,10 +2765,6 @@ const server = http.createServer(async (req, res) => {
       const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
       // days=1 是最新開獎讀取，必須即時確認官方期號；歷史查詢才可使用保存快取。
       if (persisted.length && daysOverride === 1) {
-        if (evaluationIncomplete) {
-          const recovered = await persistedResponse(persisted, castingAt);
-          return send(res, 200, writeLatestResponseCache(responseCacheKey, recovered), req);
-        }
         // 先回傳最近一次已保存的結果，官方期號確認與模型重算在背景執行；
         // 避免官方來源短暫逾時時，前端完全拿不到正式預測。
         const cached = {

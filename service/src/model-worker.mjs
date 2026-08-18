@@ -1,9 +1,11 @@
-import { parentPort, workerData } from 'node:worker_threads';
+import { parentPort } from 'node:worker_threads';
 import { buildModels } from './server.mjs';
 
-try {
-  const models = buildModels(workerData.snapshot, workerData.history, workerData.options);
-  parentPort.postMessage({ models });
-} catch (error) {
-  parentPort.postMessage({ error: error instanceof Error ? error.message : '模型計算失敗' });
-}
+parentPort.on('message', ({ requestId, snapshot, history, options }) => {
+  try {
+    const models = buildModels(snapshot, history, options);
+    parentPort.postMessage({ requestId, models });
+  } catch (error) {
+    parentPort.postMessage({ requestId, error: error instanceof Error ? error.message : '模型計算失敗' });
+  }
+});

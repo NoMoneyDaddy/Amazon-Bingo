@@ -11,13 +11,15 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const minimumValidationSamples = 20;
-const profileValidationWindow = 20;
+const minimumValidationSamples = 30;
+const profileValidationWindow = 30;
 // 資料保存至少涵蓋一個月；最新基準之外，模型回測仍維持 60 期。
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v54-official-draw-time';
+const reproducibilityVersion = 'bingo-research-v55-conservative-weight-cache';
+const profileCacheTtlMs = 5 * 60 * 1000;
+const profileCache = new Map();
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -964,7 +966,7 @@ function researchAudit(draws = []) {
 
 function evolveProfiles(history = []) {
   const candidates = [0.24, 0.32, 0.40];
-  // 回測仍使用 60 期；參數調校採獨立 20 期窗口，降低計算量與短期噪音。
+  // 回測仍使用 60 期；參數調校採 30 期窗口，降低 20 期短樣本造成的權重抖動。
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - 1));
   // 所有玩法都使用同一套 walk-forward + Wilson 下限規則，不讓 4～10 星退回固定權重。
   const tunableTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
@@ -972,7 +974,7 @@ function evolveProfiles(history = []) {
   if (history.length < minimumValidationSamples + 1) {
     return Object.fromEntries(methods.map((method) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0, validationSamples: validationWindow, score: null, baselineRate: null, eligible: false, status: `樣本不足（至少需要 ${minimumValidationSamples} 期），不納入聚合權重` }])) }]));
   }
-  // 批次化 walk-forward：每個方法／權重／折只建一次模型，從約 7,000 次重複建構降至 11×3×20 次。
+  // 批次化 walk-forward：每個方法／權重／折只建一次模型，並由外層快取避免同一歷史重複計算。
   const scores = Object.fromEntries(methods.map((method) => [method, Object.fromEntries(tunableTargets.map((target) => [target, []]))]));
   methods.forEach((method) => candidates.forEach((empiricalWeight) => {
     const profileTargets = Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight }]));
@@ -982,9 +984,14 @@ function evolveProfiles(history = []) {
       if (!predicted) return;
       tunableTargets.forEach((target) => {
         const prediction = target === 'size' ? predicted.official.size : target === 'oddEven' ? predicted.official.oddEven : target === 'superNumber' ? predicted.official.superNumber : predicted.official.basic[target] || [];
-        const bucket = scores[method][target].find((item) => item.empiricalWeight === empiricalWeight) || { empiricalWeight, wins: 0, trials: 0 };
+        const bucket = scores[method][target].find((item) => item.empiricalWeight === empiricalWeight) || { empiricalWeight, wins: 0, trials: 0, baselineSum: 0, baselineTrials: 0 };
         bucket.wins += hasPositiveProfit(target, prediction, actual) ? 1 : 0;
         bucket.trials += 1;
+        const baselineRate = positiveProfitBaseline(target, training);
+        if (baselineRate != null) {
+          bucket.baselineSum += baselineRate;
+          bucket.baselineTrials += 1;
+        }
         if (!scores[method][target].includes(bucket)) scores[method][target].push(bucket);
       });
     });
@@ -992,13 +999,27 @@ function evolveProfiles(history = []) {
   return Object.fromEntries(methods.map((method) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => {
     const results = scores[method][target].map((item) => {
       const rate = item.trials ? item.wins / item.trials : 0;
-      const baselineRate = positiveProfitBaseline(target, history.slice(0, validationWindow));
+      const baselineRate = item.baselineTrials ? item.baselineSum / item.baselineTrials : null;
       return { ...item, score: rate, estimatedRate: item.trials ? (item.wins + 2) / (item.trials + 4) : 0, confidence: lowerConfidenceBound(rate, item.trials), baselineRate, validationSamples: item.trials };
     });
     const best = results.sort((a, b) => b.confidence - a.confidence || b.estimatedRate - a.estimatedRate || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0] || { empiricalWeight: 0, wins: 0, trials: 0, score: null, baselineRate: null, estimatedRate: 0, confidence: 0, validationSamples: 0 };
-    const eligible = best.score != null && best.baselineRate != null && best.score > best.baselineRate;
-    return [target, { ...best, empiricalWeight: eligible ? best.empiricalWeight : 0, eligible, status: eligible ? `walk-forward ${validationWindow} 期／勝率 ${(best.score * 100).toFixed(1)}% > 基線 ${(best.baselineRate * 100).toFixed(1)}%，納入權重` : `walk-forward ${validationWindow} 期／勝率未超出基線，不納入權重` }];
+    const eligible = best.score != null && best.baselineRate != null && best.score > best.baselineRate && best.confidence > best.baselineRate;
+    return [target, { ...best, empiricalWeight: eligible ? best.empiricalWeight : 0, eligible, status: eligible ? `walk-forward ${validationWindow} 期／勝率 ${(best.score * 100).toFixed(1)}%，信賴下限 ${(best.confidence * 100).toFixed(1)}% > 基線 ${(best.baselineRate * 100).toFixed(1)}%，納入權重` : `walk-forward ${validationWindow} 期／信賴下限未超出基線，不納入權重` }];
   })) }]));
+}
+
+function profileCacheKey(history = []) {
+  return createHash('sha1').update(JSON.stringify(history.slice(0, maxModelHistory).map((item) => ({ period: item.period, numbers: item.numbers, superNumber: item.superNumber, size: item.size, oddEven: item.oddEven })))).digest('hex');
+}
+
+function evolveProfilesCached(history = []) {
+  const key = profileCacheKey(history);
+  const cached = profileCache.get(key);
+  if (cached && Date.now() - cached.createdAt < profileCacheTtlMs) return cached.profiles;
+  const profiles = evolveProfiles(history);
+  profileCache.set(key, { createdAt: Date.now(), profiles });
+  while (profileCache.size > 3) profileCache.delete(profileCache.keys().next().value);
+  return profiles;
 }
 
 function castingFor(kind, snapshot, target, castingAt) {
@@ -1154,8 +1175,13 @@ function aggregateModel(models, history) {
     const evolution = model.calculation?.evolution?.[target];
     const score = evolution?.score;
     const baselineRate = evolution?.baselineRate;
-    if (evolution?.eligible !== true || score == null || baselineRate == null || score <= baselineRate) return 0;
-    return score - baselineRate;
+    const confidence = evolution?.confidence;
+    if (evolution?.eligible !== true || score == null || baselineRate == null || confidence == null || score <= baselineRate || confidence <= baselineRate) return 0;
+    // 聚合權重採「信賴下限超額」並按樣本量收縮，避免短樣本偶然高勝率主導共識。
+    const conservativeUplift = Math.max(0, Math.min(score - baselineRate, confidence - baselineRate));
+    const samples = evolution?.trials || evolution?.validationSamples || 0;
+    const sampleFactor = clamp(samples / 60, 0.25, 1);
+    return conservativeUplift * sampleFactor;
   };
   const weightedCategory = (target) => {
     const totals = new Map();
@@ -1217,7 +1243,7 @@ function aggregateModel(models, history) {
 }
 
 export function buildModels(snapshot, history = [], options = {}) {
-  const profiles = options.profiles || (options.evolve === false ? {} : evolveProfiles(history));
+  const profiles = options.profiles || (options.evolve === false ? {} : evolveProfilesCached(history));
   const castingAt = reproducibleCastingAt(options.castingAt || snapshot.castingAt || snapshot.drawAt, snapshot.period);
   const methods = [
     { name: '梅花易數', kind: 'meihua', status: '經典時間起卦公式＋各目標獨立研究排序', seedOffset: 11 },
@@ -1306,19 +1332,38 @@ export function buildModels(snapshot, history = [], options = {}) {
   return [...allModels, aggregateModel(allModels, history)];
 }
 
+let modelWorker;
+let modelRequestId = 0;
+const pendingModelRequests = new Map();
+
+function ensureModelWorker() {
+  if (modelWorker) return modelWorker;
+  modelWorker = new Worker(new URL('./model-worker.mjs', import.meta.url));
+  modelWorker.on('message', (message) => {
+    const pending = pendingModelRequests.get(message?.requestId);
+    if (!pending) return;
+    pendingModelRequests.delete(message.requestId);
+    if (message.error) pending.reject(new Error(message.error));
+    else pending.resolve(message.models || []);
+  });
+  const failPending = (error) => {
+    for (const pending of pendingModelRequests.values()) pending.reject(error);
+    pendingModelRequests.clear();
+    modelWorker = undefined;
+  };
+  modelWorker.on('error', (error) => failPending(error));
+  modelWorker.on('exit', (code) => {
+    if (code !== 0) failPending(new Error(`模型 Worker 結束碼 ${code}`));
+    else modelWorker = undefined;
+  });
+  return modelWorker;
+}
+
 function buildModelsInWorker(snapshot, history = [], options = {}) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL('./model-worker.mjs', import.meta.url), {
-      workerData: { snapshot, history, options },
-    });
-    worker.once('message', (message) => {
-      if (message?.error) reject(new Error(message.error));
-      else resolve(message.models || []);
-    });
-    worker.once('error', reject);
-    worker.once('exit', (code) => {
-      if (code !== 0) reject(new Error(`模型 Worker 結束碼 ${code}`));
-    });
+    const requestId = ++modelRequestId;
+    pendingModelRequests.set(requestId, { resolve, reject });
+    ensureModelWorker().postMessage({ requestId, snapshot, history, options });
   });
 }
 

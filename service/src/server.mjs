@@ -9,7 +9,7 @@ const { Pool } = pg;
 const port = Number(process.env.PORT || 8080);
 const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
-const defaultHistoryDays = 30;
+const defaultHistoryDays = 7;
 const maxModelHistory = 300;
 const liveModelHistoryLimit = 180;
 const profitabilityBacktestWindow = 10;
@@ -18,8 +18,8 @@ const minimumValidationSamples = 18;
 const profileValidationWindow = 18;
 const profileHoldoutWindow = profitabilityBacktestWindow;
 // 資料保存至少涵蓋一個月；最新基準之外，模型選擇使用較長 walk-forward。
-const retentionDays = 31;
-const persistedHistoryLimit = 6000;
+const retentionDays = 7;
+const persistedHistoryLimit = 2500;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
 const reproducibilityVersion = 'bingo-research-v77-validation-profit-model-selection';
@@ -356,7 +356,7 @@ async function persistSnapshots(snapshots) {
   } finally { client.release(); }
 }
 
-async function readPersisted(limit = 6000) {
+async function readPersisted(limit = persistedHistoryLimit) {
   if (!pool) return [];
   await ensureDatabase();
   const result = await pool.query(`SELECT period, draw_at AS "drawAt", numbers, super_number AS "superNumber",
@@ -370,6 +370,30 @@ async function readPersisted(limit = 6000) {
     const derived = numbers.length === 20 ? deriveSnapshot(row.period, numbers, row.source || '', row.drawAt || '') : null;
     return { ...row, numbers, size: derived?.size || row.size || '', oddEven: derived?.oddEven || row.oddEven || '', sourceHealth: row.sourceHealth || [], models: row.models || [], forecastEvaluation: row.forecastEvaluation || [], calibratedProbabilityEvaluation: row.calibratedProbabilityEvaluation || [], profitabilityEvaluation: row.profitabilityEvaluation || [], zoneProfitabilityEvaluation: row.zoneProfitabilityEvaluation || [], technicalAnalysis: row.technicalAnalysis || {}, audit: row.audit || {}, behaviorAudit: row.behaviorAudit || {}, backtestIntegrity: row.backtestIntegrity || {} };
   });
+}
+
+let pruneInFlight;
+async function prunePersistedHistory() {
+  if (!pool || pruneInFlight) return pruneInFlight;
+  pruneInFlight = (async () => {
+    await ensureDatabase();
+    const cutoff = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const result = await pool.query('SELECT period, draw_at AS "drawAt" FROM bingo_draws');
+    const stalePeriods = result.rows
+      .filter((row) => {
+        const parsed = parseTaipeiDate(row.drawAt);
+        return Number.isFinite(parsed.getTime()) && parsed.getTime() < cutoff;
+      })
+      .map((row) => String(row.period));
+    if (stalePeriods.length) {
+      await pool.query('DELETE FROM bingo_draws WHERE period = ANY($1::text[])', [stalePeriods]);
+      persistedCache.clear();
+      console.log(JSON.stringify({ event: 'history-pruned', retentionDays, deleted: stalePeriods.length }));
+    }
+  })().catch((error) => {
+    console.error(JSON.stringify({ event: 'history-prune-failed', message: error instanceof Error ? error.message : '歷史清理失敗' }));
+  }).finally(() => { pruneInFlight = undefined; });
+  return pruneInFlight;
 }
 
 async function readPersistedCached(limit = persistedHistoryLimit) {
@@ -2320,7 +2344,7 @@ async function fetchOfficial(daysOverride = null) {
   const requestedDays = daysOverride ?? Number(process.env.HISTORY_DAYS || defaultHistoryDays);
   const historyDays = daysOverride != null
     ? Math.min(retentionDays, Math.max(1, daysOverride))
-    : Math.min(retentionDays, Math.max(10, Number.isFinite(requestedDays) ? requestedDays : defaultHistoryDays));
+    : Math.min(retentionDays, Math.max(1, Number.isFinite(requestedDays) ? requestedDays : defaultHistoryDays));
   const openDates = Array.from({ length: historyDays }, (_, index) => taipeiDateKey(index));
   const dailyResults = await Promise.all(openDates.map(async (openDate) => {
     try {
@@ -2760,7 +2784,7 @@ async function scheduledSync(forceRepair = false) {
   try {
     const persisted = await readPersistedCached(persistedHistoryLimit);
     const requestedDays = forceRepair || !persisted.length || !hasRetentionCoverage(persisted, retentionDays) ? retentionDays : 1;
-    const refreshDays = requestedDays === 1 && persisted.length < persistedHistoryLimit ? 30 : requestedDays;
+    const refreshDays = requestedDays === 1 && persisted.length < persistedHistoryLimit ? retentionDays : requestedDays;
     const result = await latest(refreshDays, persisted, '', { deferEvaluationModels: true });
     console.log(JSON.stringify({ event: 'sync-ok', period: result.period, historyDays: result.historyDays, persisted: Boolean(pool) }));
   } catch (error) {
@@ -2830,7 +2854,7 @@ const server = http.createServer(async (req, res) => {
         const cachedResponse = readLatestResponseCache(responseCacheKey);
         if (cachedResponse) return send(res, 200, cachedResponse, req);
       }
-      const persisted = await readPersistedCached(daysOverride && daysOverride > 1 ? 10000 : persistedHistoryLimit);
+      const persisted = await readPersistedCached(persistedHistoryLimit);
       const evaluationIncomplete = persisted.length > 0
         && !hasCompleteProfitabilityEvaluation(persisted[0]?.profitabilityEvaluation);
       const cachedForecast = persisted[0]?.forecastCastingAt
@@ -2889,6 +2913,7 @@ const server = http.createServer(async (req, res) => {
 if (isMainThread) {
   server.listen(port, '0.0.0.0', () => {
     console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
+    void prunePersistedHistory();
     const firstWakeAt = nextDrawAt(new Date()).getTime() - Date.now() - 30_000;
     scheduledTimer = setTimeout(() => void scheduledSync(false), Math.max(60_000, firstWakeAt));
     // 啟動時只先提供健康檢查與既有快取；資料同步延後到下一個排程，

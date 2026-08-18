@@ -1207,7 +1207,7 @@ export function BingoResearchView() {
       const shouldRefreshHistoryByAge = forceHistory
         || !runtime.draws.length
         || nowMs - runtime.historySyncedAt >= HISTORY_REFRESH_MS;
-      // 有快取時先保留舊資料，只確認最新一期；完整 31 日資料按間隔背景更新。
+      // 有快取時先保留舊資料，只確認最新一期；完整 7 日資料按間隔背景更新。
       const castingAt = new Date().toISOString();
       // 插件剛開啟時先要求後端確認最新開獎；預測與回測由後端背景接續補齊。
       const snapshot = await fetchLatest(1, castingAt, true);
@@ -1226,7 +1226,7 @@ export function BingoResearchView() {
       setLastSync(Date.now());
       if (drawInformationChanged || !hasBacktestEvaluation(snapshot)) {
         // 新期號由後端背景同步負責模型／回測計算；插件只重新讀取最新快照，
-        // 不再因開獎更新自行要求 31 日資料，避免重複觸發重型計算。
+        // 不再因開獎更新自行要求 7 日資料，避免重複觸發重型計算。
         const refreshComputedLatest = async (attempt = 0): Promise<void> => {
           try {
             const computedSnapshot = await fetchLatest(1, castingAt);
@@ -1251,7 +1251,7 @@ export function BingoResearchView() {
       if (shouldRefreshHistory) {
         const refreshFormalHistory = async (attempt = 0): Promise<void> => {
           try {
-            const fullSnapshot = await fetchLatest(31, castingAt);
+            const fullSnapshot = await fetchLatest(7, castingAt);
             const fullRecords = fullSnapshot.history?.length
               ? [{ ...fullSnapshot, history: undefined }, ...fullSnapshot.history.slice(1)]
               : [fullSnapshot];

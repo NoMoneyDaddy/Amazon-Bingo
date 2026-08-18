@@ -11,6 +11,7 @@ const MODEL_NAMES = [
   "太乙九宮（研究版）",
   "生肖五行研究版",
   "民俗統計基線",
+  "貝葉斯平滑基線",
   "多模型聚合",
 ];
 type Evolution = Record<
@@ -31,6 +32,8 @@ type Model = {
   calculation?: {
     formula?: string;
     algorithmVersion?: string;
+    evidenceTier?: string;
+    predictionEligible?: boolean;
     castingAt?: string;
     historySamples?: number;
     empiricalWeight?: number;
@@ -89,6 +92,19 @@ type DrawSnapshot = {
     reason?: string;
     error?: string;
   };
+  audit?: {
+    sampleDraws: number;
+    numberUniverse: number;
+    numbersPerDraw: number;
+    expectedFrequencyPerNumber: number | null;
+    frequencyChiSquare: number | null;
+    frequencyPValue: number | null;
+    sumSerialCorrelation: number | null;
+    runs?: { observed: number | null; expected: number | null; z: number | null; pValue: number | null };
+    verdict: string;
+    caveat: string;
+  };
+  researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
 };
 type Page = "overview" | "process" | "history";
 
@@ -147,6 +163,8 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     historyDays: value.historyDays,
     predictionTargetPeriod: value.predictionTargetPeriod || "",
     backup: value.backup,
+    audit: value.audit,
+    researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
   };
 }
 
@@ -550,6 +568,7 @@ function modelPlainLanguage(name: string) {
   if (name === "奇門遁甲（九宮研究版）") return "取九宮、九星、八門三個結構做簡化特徵，不冒充完整奇門排盤。";
   if (name === "多模型聚合") return "依各模型歷史回測表現加權整合，產生共識候選，不把共識當成保證。";
   if (name === "民俗統計基線") return "獨立計算熱度、遺漏、和值、奇偶與區間特徵，作為可比較的統計基線，不宣稱因果。";
+  if (name === "貝葉斯平滑基線") return "用 Beta／Dirichlet 平滑處理稀疏頻率，降低短期熱冷號碼造成的過度反應；它是統計排序基線，不是提高真實機率。";
   if (name === "生肖五行研究版") return "以固定的農曆年干支、生肖支序與五行映射產生研究特徵，再與目標期前統計分開回算。";
   return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
@@ -709,7 +728,7 @@ export function BingoResearchView() {
                   <span>歷史 {Math.max(0, sorted.length - 1)} 期</span>
                   <span>回測樣本 {bestPlays[0]?.best.samples || 0} 期</span>
                   <span>最新資料 {latest?.numbers.length || 0}/20 個號碼</span>
-                  <span>模型 {latestModels.length}/9 個</span>
+                  <span>模型 {latestModels.length} 個</span>
                   <span>{latest?.sourceHealth?.some((item) => item.ok) ? "官方來源正常" : "來源狀態未知"}</span>
                 </div>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full border border-primary/40 bg-card p-3 shadow-none sm:p-4">
@@ -778,6 +797,35 @@ export function BingoResearchView() {
                   <strong className="text-cyan-100">怎麼讀研究證據？</strong>
                   <p className="mt-1">權重是模型採用歷史訊號的比例；回測率是過往預測帶來正盈利的比例，打平不算勝利。兩者都不是下一期的機率或保證。</p>
                 </div>
+                {latest?.audit && (
+                  <div className="mt-3 rounded-2xl border border-violet-300/25 bg-violet-300/10 p-4 text-sm leading-6 text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-violet-100">隨機性審計（研究前置檢查）</strong>
+                      <span className="rounded-full bg-violet-300/15 px-2 py-1 text-xs tabular-nums text-violet-100">{latest.audit.sampleDraws} 期 · {latest.audit.numberUniverse} 號 × 每期 {latest.audit.numbersPerDraw} 號</span>
+                    </div>
+                    <div className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+                      <div className="rounded-lg bg-background/40 p-2"><span className="block text-muted-foreground">頻率卡方 p 值</span><span className="font-semibold tabular-nums text-violet-100">{latest.audit.frequencyPValue == null ? "—" : latest.audit.frequencyPValue.toFixed(3)}</span></div>
+                      <div className="rounded-lg bg-background/40 p-2"><span className="block text-muted-foreground">和值序列相關</span><span className="font-semibold tabular-nums text-violet-100">{latest.audit.sumSerialCorrelation == null ? "—" : latest.audit.sumSerialCorrelation.toFixed(3)}</span></div>
+                      <div className="rounded-lg bg-background/40 p-2"><span className="block text-muted-foreground">游程 p 值</span><span className="font-semibold tabular-nums text-violet-100">{latest.audit.runs?.pValue == null ? "—" : latest.audit.runs.pValue.toFixed(3)}</span></div>
+                    </div>
+                    <p className="mt-2 text-xs text-violet-100">判讀：{latest.audit.verdict}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{latest.audit.caveat}</p>
+                  </div>
+                )}
+                {latest?.researchEvidence?.length ? (
+                  <div className="mt-3 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-4 text-sm leading-6 text-slate-200">
+                    <strong className="text-amber-100">中西方方法的證據邊界</strong>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                      {latest.researchEvidence.map((item) => (
+                        <a key={item.url} href={item.url} target="_blank" rel="noreferrer" className="rounded-lg border border-amber-200/15 bg-background/35 p-2 text-xs transition-colors hover:border-amber-200/50">
+                          <span className="block font-semibold text-amber-100">{item.name}</span>
+                          <span className="mt-1 block text-muted-foreground">{item.status}</span>
+                          <span className="mt-1 block text-[10px] text-cyan-200 underline">{item.source}</span>
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
                 <div className="mt-3 space-y-3">
                   {latestModels.length ? latestModels.map((model) => (
                     <article key={model.name} className="min-w-0 rounded-2xl border border-border bg-background/70 p-4 shadow-lg shadow-black/10 transition-transform duration-300 hover:-translate-y-0.5">
@@ -786,6 +834,7 @@ export function BingoResearchView() {
                         <span className="shrink-0 rounded-full bg-amber-300/15 px-2 py-1 text-xs tabular-nums text-amber-100">樣本 {model.calculation?.historySamples ?? 0} 期</span>
                       </div>
                       <div className="mt-1 text-xs text-amber-100">{model.status || "狀態未提供"}</div>
+                      <div className="mt-1 text-[11px] text-cyan-200">證據層級：{model.calculation?.evidenceTier || "未標註"} · {model.calculation?.predictionEligible === false ? "不納入預測加權" : "可進入回測比較"}</div>
                       <p className="mt-2 text-sm leading-6 text-slate-300">{modelPlainLanguage(model.name)}</p>
                       <div className="mt-3 rounded-xl border border-border bg-card p-3 text-xs leading-6 text-muted-foreground">
                         <div className="mb-1 font-semibold text-cyan-200">共同計算輸入</div>

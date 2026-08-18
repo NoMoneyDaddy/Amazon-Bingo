@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v20-all-star-tuning';
+const reproducibilityVersion = 'bingo-research-v30-evidence-gated-ensemble';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -414,6 +414,18 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, t
   const values = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
     const traditional = tradition.kind === 'bazi'
       ? ((['木', '火', '土', '金', '水'][(number - 1) % 5] === tradition.element ? 0.38 : 0.06) + (number % 12 === tradition.branch + 1 ? 0.18 : 0))
+      : tradition.kind === 'bayesian'
+      ? (() => {
+        const recent = history.slice(0, 60);
+        const seen = new Map();
+        recent.forEach((draw) => draw.numbers.forEach((value) => {
+          const numberValue = Number(value);
+          seen.set(numberValue, (seen.get(numberValue) || 0) + 1);
+        }));
+        const alpha = 1;
+        const denominator = recent.length * 20 + 80 * alpha;
+        return ((seen.get(number) || 0) + alpha) / Math.max(1, denominator);
+      })()
       : tradition.kind === 'statistics'
       ? (() => {
         const recent = history.slice(0, 60);
@@ -498,7 +510,13 @@ const modelSources = {
   '太乙九宮（研究版）': [{ name: 'Extrême-Orient：太乙、奇門遁甲與六壬研究', url: 'https://journals.openedition.org/extremeorient/pdf/270' }, { name: '柏林自由大學：中國帝制時期的認知占卜', url: 'https://refubium.fu-berlin.de/handle/fub188/154' }],
   '民俗統計基線': [{ name: '台灣彩券官方開獎時間與隨機開獎說明', url: 'https://www.taiwanlottery.com/run_lottery/schedule/' }],
   '生肖五行研究版': [{ name: '中國哲學書電子化計劃：周易與五行資料', url: 'https://ctext.org/datawiki.pl?if=en&res=484682' }],
+  '貝葉斯平滑基線': [{ name: 'Predicting Winning Lottery Numbers（統計模型研究）', url: 'https://arxiv.org/abs/2403.12836' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
 };
+const researchEvidenceRegistry = [
+  { name: '西洋占星（負對照）', status: '不納入號碼預測；以雙盲研究作為反向驗證與限制說明', source: 'Nature 318（Carlson, 1985）', url: 'https://www.nature.com/articles/318419a0.pdf' },
+  { name: '賭徒謬誤與熱手效應', status: '只用來檢查熱號／冷號敘事，不當作開獎訊號', source: 'NBER Working Paper 3769', url: 'https://www.nber.org/papers/w3769' },
+  { name: '彩票隨機性審計', status: '頻率、序列相關與游程檢查；低 p 值只代表需複核', source: 'Lottery k/N statistical audit', url: 'https://arxiv.org/abs/0806.4595' },
+];
 
 function targetProfile(profiles, methodName, target) {
   const profile = profiles?.[methodName] || {};
@@ -551,13 +569,73 @@ function lowerConfidenceBound(rate, samples) {
   return (centre - margin) / denominator;
 }
 
+function erf(value) {
+  const sign = value < 0 ? -1 : 1;
+  const x = Math.abs(value);
+  const t = 1 / (1 + 0.3275911 * x);
+  const polynomial = (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t;
+  return sign * (1 - polynomial * Math.exp(-x * x));
+}
+
+function normalCdf(value) { return 0.5 * (1 + erf(value / Math.sqrt(2))); }
+
+// Wilson–Hilferty 近似只用於研究看板的篩查，不把 p 值當成「隨機性證明」。
+function chiSquareUpperTail(statistic, degreesOfFreedom) {
+  if (!Number.isFinite(statistic) || degreesOfFreedom <= 0) return null;
+  const transformed = Math.pow(Math.max(0, statistic / degreesOfFreedom), 1 / 3);
+  const z = (transformed - (1 - 2 / (9 * degreesOfFreedom))) / Math.sqrt(2 / (9 * degreesOfFreedom));
+  return Math.max(0, Math.min(1, 1 - normalCdf(z)));
+}
+
+function researchAudit(draws = []) {
+  const valid = draws.filter((draw) => Array.isArray(draw.numbers) && draw.numbers.length === 20);
+  const counts = Array(81).fill(0);
+  valid.forEach((draw) => draw.numbers.forEach((number) => {
+    const value = Number(number);
+    if (value >= 1 && value <= 80) counts[value] += 1;
+  }));
+  const expected = valid.length * 20 / 80;
+  const chiSquare = expected ? counts.slice(1).reduce((sum, count) => sum + ((count - expected) ** 2) / expected, 0) : null;
+  const frequencyPValue = chiSquare == null ? null : chiSquareUpperTail(chiSquare, 79);
+  const sums = valid.map((draw) => draw.numbers.reduce((sum, number) => sum + Number(number), 0)).reverse();
+  const mean = sums.length ? sums.reduce((sum, value) => sum + value, 0) / sums.length : 0;
+  const variance = sums.length > 1 ? sums.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (sums.length - 1) : 0;
+  const lagPairs = sums.slice(1).map((value, index) => [sums[index], value]);
+  const covariance = lagPairs.length ? lagPairs.reduce((sum, pair) => sum + (pair[0] - mean) * (pair[1] - mean), 0) / lagPairs.length : 0;
+  const serialCorrelation = variance ? covariance / variance : null;
+  const median = sums.length ? [...sums].sort((a, b) => a - b)[Math.floor(sums.length / 2)] : 0;
+  const binary = sums.map((value) => value >= median ? 1 : 0);
+  let runs = binary.length ? 1 : 0;
+  for (let index = 1; index < binary.length; index += 1) if (binary[index] !== binary[index - 1]) runs += 1;
+  const ones = binary.filter(Boolean).length;
+  const zeros = binary.length - ones;
+  const expectedRuns = binary.length && ones && zeros ? 1 + (2 * ones * zeros) / binary.length : null;
+  const runVariance = binary.length && ones && zeros ? (2 * ones * zeros * (2 * ones * zeros - binary.length)) / (binary.length ** 2 * (binary.length - 1)) : null;
+  const runsZ = expectedRuns != null && runVariance > 0 ? (runs - expectedRuns) / Math.sqrt(runVariance) : null;
+  const runsPValue = runsZ == null ? null : Math.max(0, Math.min(1, 2 * (1 - normalCdf(Math.abs(runsZ)))));
+  const pValues = [frequencyPValue, runsPValue].filter((value) => value != null);
+  const suspicious = pValues.some((value) => value < 0.01);
+  return {
+    sampleDraws: valid.length,
+    numberUniverse: 80,
+    numbersPerDraw: 20,
+    expectedFrequencyPerNumber: expected || null,
+    frequencyChiSquare: chiSquare,
+    frequencyPValue,
+    sumSerialCorrelation: serialCorrelation,
+    runs: { observed: runs || null, expected: expectedRuns, z: runsZ, pValue: runsPValue },
+    verdict: valid.length < 30 ? '樣本不足，暫不判定' : suspicious ? '出現需複核的統計偏離' : '目前未見明顯偏離；不等於證明完全隨機',
+    caveat: '檢驗只能辨識樣本與模型的偏離，不能證明下一期可預測，也不能單憑低 p 值指稱開獎不公。',
+  };
+}
+
 function evolveProfiles(history = []) {
   const candidates = [0.24, 0.32, 0.40];
   // 回測仍使用 60 期；參數調校採獨立 20 期窗口，降低計算量與短期噪音。
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - 1));
   // 所有玩法都使用同一套 walk-forward + Wilson 下限規則，不讓 4～10 星退回固定權重。
   const tunableTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
-  const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線'];
+  const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線', '貝葉斯平滑基線'];
   return Object.fromEntries(methods.map((method) => {
     const targets = Object.fromEntries(tunableTargets.map((target) => {
       if (history.length < minimumValidationSamples + 1) return [target, { empiricalWeight: 0.32, validationSamples: validationWindow, score: null, status: `樣本不足（至少需要 ${minimumValidationSamples} 期），使用預設權重` }];
@@ -596,6 +674,7 @@ function castingFor(kind, snapshot, target, castingAt) {
   if (kind === 'numeral-gua') return numeralGuaCasting(snapshot, target);
   if (kind === 'qimen') return qimenCasting(snapshot, target);
   if (kind === 'statistics') return statisticalCasting(snapshot, target);
+  if (kind === 'bayesian') return statisticalCasting(snapshot, target);
   if (kind === 'bazi') return zodiacElementCasting(snapshot, target);
   return taiyiCasting(snapshot, target);
 }
@@ -606,6 +685,7 @@ function traditionFor(kind, casting) {
   if (kind === 'luoshu') return { kind, center: casting.center };
   if (kind === 'numeral-gua') return { kind, digits: casting.digits };
   if (kind === 'statistics') return { kind, window: casting.window };
+  if (kind === 'bayesian') return { kind, window: casting.window };
   if (kind === 'bazi') return { kind, element: casting.element, branch: casting.branch };
   return { kind, palace: casting.palace, star: casting.star, door: casting.door, cycle: casting.cycle };
 }
@@ -711,6 +791,7 @@ export function buildModels(snapshot, history = [], options = {}) {
     { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心＋目標玩法適配，非完整太乙排局', seedOffset: 97 },
     { name: '民俗統計基線', kind: 'statistics', status: '熱度／遺漏／和值／奇偶／區間統計基線，非因果預測', seedOffset: 113 },
     { name: '生肖五行研究版', kind: 'bazi', status: '農曆年干支／五行固定映射＋統計適配，非完整八字排盤', seedOffset: 127 },
+    { name: '貝葉斯平滑基線', kind: 'bayesian', status: 'Beta／Dirichlet 平滑頻率基線；可重算但不主張改變隨機機率', seedOffset: 149 },
   ].filter((method) => !options.onlyMethod || method.name === options.onlyMethod);
   const baseModels = methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
@@ -742,9 +823,9 @@ export function buildModels(snapshot, history = [], options = {}) {
     return {
       name: method.name,
       status: method.status,
-      rule: `${method.status}；歷史頻率只做獨立統計排序，不修改傳統規則，不宣稱因果預測`,
+      rule: `${method.status}；歷史資料只允許用於目標期以前的排序與回測，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
-      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : method.kind === 'statistics' ? '統計基線：熱度／遺漏／和值／奇偶／區間' : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
+      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, evidenceTier: method.kind === 'bayesian' || method.kind === 'statistics' ? '可檢驗統計基線' : '文化／文本特徵適配，非已證實預測法', predictionEligible: true, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : method.kind === 'statistics' ? '統計基線：熱度／遺漏／和值／奇偶／區間' : method.kind === 'bayesian' ? 'Beta／Dirichlet 平滑：避免零頻率與過度追逐短期波動' : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
         const casting = targetCastings[target];
         if (method.kind === 'sixyao') return [target, casting.lines.map((line) => line.value).join('、')];
         if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];
@@ -946,7 +1027,7 @@ async function latest(daysOverride = null, existingHistory = []) {
       const responseHistory = daysOverride && daysOverride > 1
         ? selectRecentHistory(history, retentionDays)
         : history.slice(0, fastResponseHistoryLimit);
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }
@@ -988,6 +1069,8 @@ async function persistedResponse(persisted) {
     history,
     historyDays: retentionDays,
     sourceHealth: current.sourceHealth || [],
+    audit: researchAudit(visible.slice(1)),
+    researchEvidence: researchEvidenceRegistry,
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
   };
 }

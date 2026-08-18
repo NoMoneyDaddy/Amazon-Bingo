@@ -21,6 +21,7 @@ const profileHoldoutWindow = profitabilityBacktestWindow;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
+const responseHistoryLimit = 1200;
 const reproducibilityVersion = 'bingo-research-v76-layered-out-of-sample-engine';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
@@ -2389,7 +2390,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         ? { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath, deferred: true }
         : await backupModelProfile(history[0]);
       const responseHistory = daysOverride && daysOverride > 1
-        ? compactHistoryForResponse(selectRecentHistory(history, retentionDays))
+        ? compactHistoryForResponse(selectRecentHistory(history, retentionDays).slice(0, responseHistoryLimit))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
       return { ...history[0], history: responseHistory, historyDays: retentionDays, modelStatus: history[0].modelStatus, modelError: history[0].modelError, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), ...evaluation, theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
@@ -2434,7 +2435,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   await hydrateEvaluationModels(history);
   return {
     ...history[0],
-    history: compactHistoryForResponse(history),
+    history: compactHistoryForResponse(history.slice(0, responseHistoryLimit)),
     historyDays: retentionDays,
     sourceHealth: current.sourceHealth || [],
     audit: researchAudit(visible.slice(1)),
@@ -2470,7 +2471,7 @@ function refreshInBackground(persisted, days = 1) {
         };
         history[0] = { ...history[0], ...evaluation };
         await persistSnapshots(history);
-        writeLatestResponseCache('latest-1', { ...history[0], history: compactHistoryForResponse(history), historyDays: retentionDays, modelStatus: 'formal', ...evaluation });
+        writeLatestResponseCache('latest-1', { ...history[0], history: compactHistoryForResponse(history.slice(0, responseHistoryLimit)), historyDays: retentionDays, modelStatus: 'formal', ...evaluation });
       } catch (error) {
         console.error(JSON.stringify({ event: 'background-evaluation-failed', message: error instanceof Error ? error.message : '回測補寫失敗' }));
       } finally {
@@ -2584,7 +2585,7 @@ const server = http.createServer(async (req, res) => {
         // 避免官方來源短暫逾時時，前端完全拿不到正式預測。
         const cached = {
           ...persisted[0],
-          history: compactHistoryForResponse(selectRecentHistory(persisted, retentionDays)),
+          history: compactHistoryForResponse(selectRecentHistory(persisted, retentionDays).slice(0, responseHistoryLimit)),
           historyDays: retentionDays,
           modelStatus: persisted[0].models?.length ? 'formal' : 'queued',
         };
@@ -2604,7 +2605,7 @@ const server = http.createServer(async (req, res) => {
         if (recent.length > fastResponseHistoryLimit) {
           const cached = {
             ...recent[0],
-            history: compactHistoryForResponse(recent),
+            history: compactHistoryForResponse(recent.slice(0, responseHistoryLimit)),
             historyDays: retentionDays,
             modelStatus: recent[0].models?.length ? 'formal' : 'queued',
           };

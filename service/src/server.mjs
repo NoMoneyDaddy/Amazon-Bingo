@@ -879,13 +879,30 @@ async function latest(daysOverride = null, existingHistory = []) {
   throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);
 }
 
-function persistedResponse(persisted) {
+async function persistedResponse(persisted) {
   if (!persisted.length) return null;
+  const current = persisted[0];
+  const targetPeriod = nextPredictionPeriod(current.period);
+  const predictionCastingAt = nextDrawAt(new Date()).toISOString();
+  const modelHistory = persisted.slice(1, maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
+  const modelSnapshot = {
+    ...current,
+    period: targetPeriod,
+    drawAt: formatTaipeiDateTime(new Date(predictionCastingAt)),
+    castingAt: predictionCastingAt,
+  };
+  const models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: predictionCastingAt });
+  const history = [{
+    ...current,
+    models,
+    forecastCastingAt: predictionCastingAt,
+    predictionTargetPeriod: targetPeriod,
+  }, ...persisted.slice(1)];
   return {
-    ...persisted[0],
-    history: persisted,
-    historyDays: Math.max(30, persisted.length),
-    sourceHealth: persisted[0].sourceHealth || [],
+    ...history[0],
+    history,
+    historyDays: Math.max(30, history.length),
+    sourceHealth: current.sourceHealth || [],
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
   };
 }
@@ -969,7 +986,7 @@ const server = http.createServer(async (req, res) => {
       const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
       // 非開獎時段不應被官方 API 的空回應或逾時清空畫面；先回傳最近一筆已確認開獎資料，更新在背景完成。
       if (persisted.length && daysOverride === 1) {
-        const cached = persistedResponse(persisted);
+        const cached = await persistedResponse(persisted);
         refreshInBackground(persisted);
         return send(res, 200, cached, req);
       }

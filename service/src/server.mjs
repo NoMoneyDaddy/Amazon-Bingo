@@ -339,6 +339,11 @@ async function persistSnapshots(snapshots) {
         JSON.stringify(item.forecastEvaluation || []), JSON.stringify(item.calibratedProbabilityEvaluation || []), JSON.stringify(item.profitabilityEvaluation || []), JSON.stringify(item.zoneProfitabilityEvaluation || []),
         JSON.stringify(item.technicalAnalysis || {}), JSON.stringify(item.audit || {}), JSON.stringify(item.behaviorAudit || {}), JSON.stringify(item.backtestIntegrity || {}),
         item.predictionTargetPeriod || '', item.castingAt || '', item.forecastCastingAt || '', item.fetchedAt || Date.now(),
+        item.period, item.drawAt || '', JSON.stringify(item.numbers), item.superNumber || '', item.size || '', item.oddEven || '',
+        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []),
+        JSON.stringify(item.forecastEvaluation || []), JSON.stringify(item.calibratedProbabilityEvaluation || []), JSON.stringify(item.profitabilityEvaluation || []), JSON.stringify(item.zoneProfitabilityEvaluation || []),
+        JSON.stringify(item.technicalAnalysis || {}), JSON.stringify(item.audit || {}), JSON.stringify(item.behaviorAudit || {}), JSON.stringify(item.backtestIntegrity || {}),
+        item.predictionTargetPeriod || '', item.castingAt || '', item.forecastCastingAt || '', item.fetchedAt || Date.now(),
       ]);
     }
     await client.query('COMMIT');
@@ -358,6 +363,7 @@ async function readPersisted(limit = 6000) {
     models, forecast_evaluation AS "forecastEvaluation", calibrated_probability_evaluation AS "calibratedProbabilityEvaluation",
     profitability_evaluation AS "profitabilityEvaluation", zone_profitability_evaluation AS "zoneProfitabilityEvaluation",
     technical_analysis AS "technicalAnalysis", audit, behavior_audit AS "behaviorAudit", backtest_integrity AS "backtestIntegrity",
+    prediction_target_period AS "predictionTargetPeriod", casting_at AS "castingAt", forecast_casting_at AS "forecastCastingAt", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
     prediction_target_period AS "predictionTargetPeriod", casting_at AS "castingAt", forecast_casting_at AS "forecastCastingAt", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
   return result.rows.map((row) => {
     const numbers = Array.isArray(row.numbers) ? row.numbers : [];
@@ -2356,8 +2362,11 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const allHistory = normalizeSourceDrawTimes(
         [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period)),
       );
-      // 同步與模型只處理最近 31 日；更早資料已存在資料庫，不必每次重新計算。
-      const rawHistory = selectRecentHistory(allHistory, retentionDays);
+      // days=1 是首屏即時增量：只整理來源本次帶回的最新日資料，
+      // 不把已存在資料庫的整個 31 日窗口再次逐筆寫回；完整窗口由背景同步負責。
+      const rawHistory = daysOverride === 1
+        ? selectRecentHistory(allHistory, 1)
+        : selectRecentHistory(allHistory, retentionDays);
       const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);
       // 歷史模型的起卦輸入以實際開獎時間為準；舊資料若曾保存錯誤 castingAt，不再優先採用。
       const previousCastingAt = reproducibleCastingAt(rawHistory[0]?.drawAt || rawHistory[0]?.castingAt, rawHistory[0]?.period);

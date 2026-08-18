@@ -832,6 +832,7 @@ export function buildModels(snapshot, history = [], options = {}) {
         if (method.kind === 'qimen') return [target, `九宮${casting.palace}／九星${casting.star}／八門${casting.door}`];
         if (method.kind === 'taiyi') return [target, `行宮${casting.palace}／循環${casting.cycle}`];
         if (method.kind === 'statistics') return [target, '固定統計窗口 60 期／目標期前資料'];
+        if (method.kind === 'bayesian') return [target, 'Beta／Dirichlet 平滑窗口 60 期／目標期前資料'];
         if (method.kind === 'bazi') return [target, `年元素${casting.element}／生肖支序${casting.branch + 1}`];
         if (method.kind === 'luoshu') return [target, `宮位${casting.palace}／數${casting.center}`];
         return [target, casting.digits.join('、')];

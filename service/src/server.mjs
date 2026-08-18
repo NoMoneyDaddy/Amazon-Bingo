@@ -1333,7 +1333,9 @@ function profitabilityEvaluation(history = []) {
           : followModels.find((item) => item.name === currentModel.name)
             || followModels.find((item) => item.name && item.name !== '多模型聚合')
             || currentModel;
-        let model = rebuildEvaluationModel(source, actual, training);
+        let model = mode === 'follow' && source?.official
+          ? source
+          : rebuildEvaluationModel(source, actual, training);
         if (!model && mode === 'follow' && source !== currentModel) {
           model = rebuildEvaluationModel(currentModel, actual, training);
         }

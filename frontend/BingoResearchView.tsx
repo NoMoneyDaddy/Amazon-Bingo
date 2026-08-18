@@ -155,7 +155,7 @@ type DrawSnapshot = {
   };
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
 };
-type Page = "overview" | "process" | "history";
+type Page = "overview" | "technical" | "history";
 
 function normalizeModel(value: Partial<Model> | null | undefined): Model {
   const official = (value?.official || {}) as Partial<Model["official"]>;
@@ -766,7 +766,7 @@ export function BingoResearchView() {
               </div>
               <nav aria-label="研究台頁面" className="mt-1.5 hidden flex-wrap gap-2 border-t border-primary/20 pt-1.5 sm:flex">
                 {pageButton("overview", "首頁")}
-                {pageButton("process", "計算過程")}
+                {pageButton("technical", "技術分析")}
                 {pageButton("history", "歷史紀錄")}
               </nav>
             </header>
@@ -878,10 +878,10 @@ export function BingoResearchView() {
                 </section>
               </>
             )}
-            {page === "process" && (
-              <section aria-labelledby="process-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 透明方法</p>
-                <h2 id="process-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>計算過程與模型透明度</h2>
+            {page === "technical" && (
+              <section aria-labelledby="technical-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 技術分析</p>
+                <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>技術分析與研究透明度</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   四個步驟把資料轉成研究結果：讀取、計算、回測、輸出。每個模型都保留規則、輸入與證據，方便重新檢查。
                 </p>
@@ -1160,7 +1160,7 @@ export function BingoResearchView() {
         </CustomScrollbar>
         <nav aria-label="研究台頁面" className="fixed inset-x-0 bottom-0 z-20 flex gap-1 border-t border-primary/30 bg-background/95 p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] backdrop-blur sm:hidden">
           {mobilePageButton("overview", "首頁")}
-          {mobilePageButton("process", "計算過程")}
+          {mobilePageButton("technical", "技術分析")}
           {mobilePageButton("history", "歷史紀錄")}
         </nav>
       </div>

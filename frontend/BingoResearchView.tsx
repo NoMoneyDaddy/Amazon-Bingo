@@ -1021,12 +1021,12 @@ export function BingoResearchView() {
                     {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 以下是「淨盈利大於 0」的回測統計，不是實際中獎機率。
                   </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)]">
-                      <span>玩法</span>
-                      <span className="sm:hidden">推薦</span>
-                      <span className="hidden sm:inline">盈利回測</span>
-                      <span className="text-right sm:hidden">盈利</span>
-                      <span className="hidden text-right sm:inline">預測號碼</span>
+                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)]">
+                      <span className="text-center">玩法</span>
+                      <span className="text-center sm:hidden">推薦</span>
+                      <span className="hidden text-center sm:inline">盈利回測</span>
+                      <span className="text-center sm:hidden">盈利</span>
+                      <span className="hidden text-center sm:inline">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (
                       <details
@@ -1064,16 +1064,16 @@ export function BingoResearchView() {
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
                 <p className="text-sm leading-6 text-muted-foreground">以最近 {technicalAnalysis.sampleSize} 期實際開獎結果，檢查號碼頻率、區間分布、大小單雙、重複球與連號；這些是描述性分析，不代表能改變隨機開獎機率。</p>
                 <div className="mt-4 grid gap-2 sm:grid-cols-4">
-                  <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3"><div className="text-[10px] text-muted-foreground">平均和值</div><div className="mt-1 text-xl font-bold tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</div></div>
-                  <div className="rounded-xl border border-violet-300/25 bg-violet-300/10 p-3"><div className="text-[10px] text-muted-foreground">跨期平均重複球</div><div className="mt-1 text-xl font-bold tabular-nums text-violet-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</div></div>
-                  <div className="rounded-xl border border-amber-300/25 bg-amber-300/10 p-3"><div className="text-[10px] text-muted-foreground">含連號期數</div><div className="mt-1 text-xl font-bold tabular-nums text-amber-100">{technicalAnalysis.consecutiveRate == null ? "—" : `${(technicalAnalysis.consecutiveRate * 100).toFixed(1)}%`}</div></div>
-                  <div className="rounded-xl border border-emerald-300/25 bg-emerald-300/10 p-3"><div className="text-[10px] text-muted-foreground">分析樣本</div><div className="mt-1 text-xl font-bold tabular-nums text-emerald-100">{technicalAnalysis.sampleSize} 期</div></div>
+                  <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">平均和值</div><div className="mt-1 text-xl font-bold tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</div></div>
+                  <div className="rounded-xl border border-violet-300/25 bg-violet-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">跨期平均重複球</div><div className="mt-1 text-xl font-bold tabular-nums text-violet-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</div></div>
+                  <div className="rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">含連號期數</div><div className="mt-1 text-xl font-bold tabular-nums text-amber-100">{technicalAnalysis.consecutiveRate == null ? "—" : `${(technicalAnalysis.consecutiveRate * 100).toFixed(1)}%`}</div></div>
+                  <div className="rounded-xl border border-emerald-300/25 bg-emerald-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">分析樣本</div><div className="mt-1 text-xl font-bold tabular-nums text-emerald-100">{technicalAnalysis.sampleSize} 期</div></div>
                 </div>
                 <div className="mt-3 grid gap-2 sm:grid-cols-4">
-                  <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-3"><div className="text-[10px] text-muted-foreground">和值範圍</div><div className="mt-1 font-bold tabular-nums text-cyan-100">{technicalAnalysis.sumMinimum == null ? "—" : technicalAnalysis.sumMinimum + "–" + technicalAnalysis.sumMaximum}</div><div className="mt-1 text-[10px] text-muted-foreground">標準差 {technicalAnalysis.sumStandardDeviation == null ? "—" : technicalAnalysis.sumStandardDeviation.toFixed(1)}</div></div>
-                  <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3"><div className="text-[10px] text-muted-foreground">平均號碼跨度</div><div className="mt-1 font-bold tabular-nums text-amber-100">{technicalAnalysis.rangeAverage == null ? "—" : technicalAnalysis.rangeAverage.toFixed(1)}</div><div className="mt-1 text-[10px] text-muted-foreground">每期最大號 − 最小號</div></div>
-                  <div className="rounded-xl border border-orange-300/20 bg-orange-300/5 p-3"><div className="text-[10px] text-muted-foreground">大小比例</div><div className="mt-1 font-semibold tabular-nums text-orange-100">大 {technicalAnalysis.sizePercentages["大"] || "—"} · 小 {technicalAnalysis.sizePercentages["小"] || "—"}</div><div className="mt-1 text-[10px] text-muted-foreground">依開獎期數統計</div></div>
-                  <div className="rounded-xl border border-violet-300/20 bg-violet-300/5 p-3"><div className="text-[10px] text-muted-foreground">單雙比例</div><div className="mt-1 font-semibold tabular-nums text-violet-100">單 {technicalAnalysis.oddEvenPercentages["單"] || "—"} · 雙 {technicalAnalysis.oddEvenPercentages["雙"] || "—"}</div><div className="mt-1 text-[10px] text-muted-foreground">和局不列入偏向</div></div>
+                  <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-3 text-center"><div className="text-[10px] text-muted-foreground">和值範圍</div><div className="mt-1 font-bold tabular-nums text-cyan-100">{technicalAnalysis.sumMinimum == null ? "—" : technicalAnalysis.sumMinimum + "–" + technicalAnalysis.sumMaximum}</div><div className="mt-1 text-[10px] text-muted-foreground">標準差 {technicalAnalysis.sumStandardDeviation == null ? "—" : technicalAnalysis.sumStandardDeviation.toFixed(1)}</div></div>
+                  <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-center"><div className="text-[10px] text-muted-foreground">平均號碼跨度</div><div className="mt-1 font-bold tabular-nums text-amber-100">{technicalAnalysis.rangeAverage == null ? "—" : technicalAnalysis.rangeAverage.toFixed(1)}</div><div className="mt-1 text-[10px] text-muted-foreground">每期最大號 − 最小號</div></div>
+                  <div className="rounded-xl border border-orange-300/20 bg-orange-300/5 p-3 text-center"><div className="text-[10px] text-muted-foreground">大小比例</div><div className="mt-1 font-semibold tabular-nums text-orange-100">大 {technicalAnalysis.sizePercentages["大"] || "—"} · 小 {technicalAnalysis.sizePercentages["小"] || "—"}</div><div className="mt-1 text-[10px] text-muted-foreground">依開獎期數統計</div></div>
+                  <div className="rounded-xl border border-violet-300/20 bg-violet-300/5 p-3 text-center"><div className="text-[10px] text-muted-foreground">單雙比例</div><div className="mt-1 font-semibold tabular-nums text-violet-100">單 {technicalAnalysis.oddEvenPercentages["單"] || "—"} · 雙 {technicalAnalysis.oddEvenPercentages["雙"] || "—"}</div><div className="mt-1 text-[10px] text-muted-foreground">和局不列入偏向</div></div>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <div className="rounded-2xl border border-orange-300/25 bg-orange-300/10 p-4">

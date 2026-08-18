@@ -907,14 +907,16 @@ function targetProfile(profiles, methodName, target) {
 }
 
 function categoryPrediction(seed, traditional, history, field, empiricalWeight) {
-  if (!history.length || empiricalWeight < 0.4) return traditional;
+  const allowed = field === 'size' ? new Set(['大', '小']) : new Set(['單', '雙']);
+  const fallback = allowed.has(traditional) ? traditional : [...allowed][seed % allowed.size];
+  if (!history.length || empiricalWeight < 0.4) return fallback;
   const counts = new Map();
   history.forEach((item, index) => {
     const value = normalizeDrawCategory(item[field], field);
-    if (value) counts.set(value, (counts.get(value) || 0) + 1 / (index + 1));
+    if (allowed.has(value)) counts.set(value, (counts.get(value) || 0) + 1 / (index + 1));
   });
   const empirical = [...counts.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0];
-  return empirical || traditional;
+  return empirical || fallback;
 }
 
 function normalizeDrawCategory(value, field = '') {
@@ -930,10 +932,19 @@ function normalizeDrawCategory(value, field = '') {
   return text === '－' || text === '-' || text === '和局' ? '和' : text;
 }
 
+function categoryPayout(target, predicted, actual) {
+  const field = target === 'size' ? 'size' : 'oddEven';
+  const allowed = target === 'size' ? new Set(['大', '小']) : new Set(['單', '雙']);
+  const expected = normalizeDrawCategory(predicted, field);
+  const observed = normalizeDrawCategory(actual?.[field], field);
+  // 「和」是未達任一投注門檻，不是可投注或可派彩的第三種選項。
+  if (!allowed.has(expected) || !allowed.has(observed)) return 0;
+  return expected === observed ? 150 : 0;
+}
+
 function hasPositiveProfit(target, predicted, actual) {
   let payout = 0;
-  if (target === 'size') payout = normalizeDrawCategory(predicted, 'size') === normalizeDrawCategory(actual.size, 'size') ? 150 : 0;
-  else if (target === 'oddEven') payout = normalizeDrawCategory(predicted, 'oddEven') === normalizeDrawCategory(actual.oddEven, 'oddEven') ? 150 : 0;
+  if (target === 'size' || target === 'oddEven') payout = categoryPayout(target, predicted, actual);
   else if (target === 'superNumber') payout = settleSuperNumber(predicted, actual).payout;
   else {
     const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
@@ -1115,12 +1126,26 @@ function calibratedProbabilityEvaluation(history = []) {
 }
 
 function backtestPayout(target, predicted, actual) {
-  if (target === 'size') return normalizeDrawCategory(predicted, 'size') === normalizeDrawCategory(actual.size, 'size') ? 150 : 0;
-  if (target === 'oddEven') return normalizeDrawCategory(predicted, 'oddEven') === normalizeDrawCategory(actual.oddEven, 'oddEven') ? 150 : 0;
+  if (target === 'size' || target === 'oddEven') return categoryPayout(target, predicted, actual);
   if (target === 'superNumber') return settleSuperNumber(predicted, actual).payout;
   const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
   const matches = (Array.isArray(predicted) ? predicted : []).filter((number) => actualNumbers.has(normalizeNumberValue(number))).length;
   return basicPayouts[target]?.[matches] || 0;
+}
+
+function rebuildEvaluationModel(sourceModel, actual, training) {
+  if (!sourceModel?.name || sourceModel.name === '多模型聚合') return null;
+  const weights = sourceModel.calculation?.empiricalWeights || {};
+  const targets = Object.fromEntries(predictionTargets.map((target) => [target, {
+    empiricalWeight: Number.isFinite(Number(weights[target])) ? Number(weights[target]) : 0,
+  }]));
+  const rebuilt = buildModels(actual, training, {
+    evolve: false,
+    onlyMethod: sourceModel.name,
+    profiles: { [sourceModel.name]: { targets } },
+    castingAt: reproducibleCastingAt(actual.drawAt, actual.period),
+  });
+  return rebuilt.find((model) => model.name === sourceModel.name) || null;
 }
 
 function profitabilityEvaluation(history = []) {
@@ -1135,16 +1160,19 @@ function profitabilityEvaluation(history = []) {
   const currentModels = history[0]?.models || [];
   return plays.map((play) => {
     const evaluate = (currentModel, mode) => {
-      const rows = mode === 'fixed'
-        ? (() => {
-          const anchor = history[profitabilityBacktestWindow];
-          const model = anchor?.models?.find((item) => item.name === currentModel.name);
-          return model ? history.slice(0, profitabilityBacktestWindow).map((actual) => ({ actual, model })) : [];
-        })()
-        : history.slice(0, profitabilityBacktestWindow).flatMap((actual, index) => {
-          const model = history[index + 1]?.models?.find((item) => item.name === currentModel.name);
-          return model ? [{ actual, model }] : [];
-        });
+      const rows = [];
+      for (let index = 0; index < profitabilityBacktestWindow; index += 1) {
+        const actual = history[index];
+        const training = history.slice(index + 1);
+        if (!actual || !training.length) continue;
+        // fixed：凍結錨點時已選定的模型與權重，但每個目標期都重新計算預測；
+        // follow：採用該目標期前一棒的模型權重，同樣只看更早資料。
+        const source = mode === 'fixed'
+          ? currentModel
+          : history[index + 1]?.models?.find((item) => item.name === currentModel.name);
+        const model = rebuildEvaluationModel(source, actual, training);
+        if (model) rows.push({ actual, model });
+      }
       let wins = 0; let trials = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;
       const periodResults = [];
       rows.forEach(({ actual, model }) => {
@@ -1194,7 +1222,7 @@ function profitabilityEvaluation(history = []) {
       || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1)
       || String(a.model).localeCompare(String(b.model));
     const empty = (mode) => ({ mode, model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, prediction: '—', periodResults: [] });
-    const candidateModels = selectionModels.length ? selectionModels : currentModels;
+    const candidateModels = (selectionModels.length ? selectionModels : currentModels).filter((model) => model.name !== '多模型聚合');
     const fixed = candidateModels.map((model) => evaluate(model, 'fixed')).sort(rank)[0] || empty('fixed');
     const follow = candidateModels.map((model) => evaluate(model, 'follow')).sort(rank)[0] || empty('follow');
     return { ...play, best: fixed, fixed, follow, metricLabel: '盈利機率' };

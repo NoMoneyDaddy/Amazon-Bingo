@@ -713,7 +713,10 @@ export function BingoResearchView() {
     </Button>
   );
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-background font-mono text-foreground antialiased">
+    <div
+      className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-background font-mono text-foreground antialiased"
+      style={{ textWrap: "pretty", overflowWrap: "break-word" }}
+    >
       <PluginTopbar
         title="賓果玄學研究台"
         rightButtons={[
@@ -759,10 +762,10 @@ export function BingoResearchView() {
                 <section aria-labelledby="latest-draw-heading" className="border border-primary/40 bg-card px-3 py-2 shadow-none">
                   {latest ? (
                     <div className="flex min-w-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:gap-2" aria-label={`第 ${latest.period} 期最新開獎結果`}>
-                      <div className="flex shrink-0 items-center justify-between sm:block">
+                      <div className="flex min-w-0 shrink-0 items-center justify-between sm:block">
                         <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-200/80">最新開獎</p>
-                        <h2 id="latest-draw-heading" className="text-xs font-bold tabular-nums text-orange-100">第 {latest.period} 期</h2>
-                        <time className="mt-0.5 block text-[10px] text-cyan-200/80" dateTime={latest.drawAt || undefined}>
+                        <h2 id="latest-draw-heading" className="text-xs font-bold tabular-nums text-orange-100" style={{ textWrap: "balance" }}>第 {latest.period} 期</h2>
+                        <time className="mt-0.5 block whitespace-nowrap text-[10px] text-cyan-200/80" dateTime={latest.drawAt || undefined}>
                           開獎 {formatDisplayDate(latest.drawAt)}
                         </time>
                       </div>
@@ -780,19 +783,19 @@ export function BingoResearchView() {
                   )}
                 </section>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border border-border bg-background/70 px-3 py-2 text-[10px] leading-5 text-muted-foreground" role="status">
-                  <span>保留至少 {latest?.historyDays || 31} 日</span>
-                  <span>歷史 {Math.max(0, sorted.length - 1)} 期</span>
-                  <span>回測樣本 {bestPlays[0]?.best.samples || 0} 期</span>
-                  <span>最新資料 {latest?.numbers.length || 0}/20 個號碼</span>
-                  <span>模型 {latestModels.length} 個</span>
-                  <span>{latest?.sourceHealth?.some((item) => item.ok) ? "官方來源正常" : "來源狀態未知"}</span>
-                  <span>{latest?.sourceHealth?.find((item) => item.ok)?.latencyMs == null ? "來源延遲—" : `來源延遲 ${latest.sourceHealth.find((item) => item.ok)?.latencyMs}ms`}</span>
+                  <span className="whitespace-nowrap">保留至少 {latest?.historyDays || 31} 日</span>
+                  <span className="whitespace-nowrap">歷史 {Math.max(0, sorted.length - 1)} 期</span>
+                  <span className="whitespace-nowrap">回測樣本 {bestPlays[0]?.best.samples || 0} 期</span>
+                  <span className="whitespace-nowrap">最新資料 {latest?.numbers.length || 0}/20 個號碼</span>
+                  <span className="whitespace-nowrap">模型 {latestModels.length} 個</span>
+                  <span className="whitespace-nowrap">{latest?.sourceHealth?.some((item) => item.ok) ? "官方來源正常" : "來源狀態未知"}</span>
+                  <span className="whitespace-nowrap">{latest?.sourceHealth?.find((item) => item.ok)?.latencyMs == null ? "來源延遲—" : `來源延遲 ${latest.sourceHealth.find((item) => item.ok)?.latencyMs}ms`}</span>
                 </div>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full border border-primary/40 bg-card p-3 shadow-none sm:p-4">
                   <div className="flex items-end justify-between gap-2">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
-                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">下一期各玩法與星級預測</h2>
+                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100" style={{ textWrap: "balance" }}>下一期各玩法與星級預測</h2>
                     </div>
                     <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">資料證據</span>
                   </div>
@@ -800,7 +803,7 @@ export function BingoResearchView() {
                     {latest?.predictionTargetPeriod ? `預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 預估勝率採中性先驗平滑，樣本越多越穩定，不代表實際中獎機率。
                   </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[4.2rem_minmax(0,1fr)_4rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_4.5rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
                       <span>玩法</span>
                       <span className="sm:hidden">推薦</span>
                       <span className="hidden sm:inline">預估勝率</span>
@@ -810,9 +813,9 @@ export function BingoResearchView() {
                     {bestPlays.map((play) => (
                       <div
                         key={play.key}
-                        className="grid min-w-0 max-w-full grid-cols-[4.2rem_minmax(0,1fr)_4rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
+                        className="grid min-w-0 max-w-full grid-cols-[5rem_minmax(0,1fr)_4.5rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
                       >
-                        <span className="shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
+                        <span className="min-w-0 shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
                           {play.label}
                         </span>
                         <div className="order-2 min-w-0 max-w-full sm:order-3">
@@ -832,7 +835,7 @@ export function BingoResearchView() {
             {page === "process" && (
               <section aria-labelledby="process-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 透明方法</p>
-                <h2 id="process-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100">計算過程與模型透明度</h2>
+                <h2 id="process-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>計算過程與模型透明度</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   四個步驟把資料轉成研究結果：讀取、計算、回測、輸出。每個模型都保留規則、輸入與證據，方便重新檢查。
                 </p>

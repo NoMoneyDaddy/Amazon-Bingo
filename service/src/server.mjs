@@ -2447,6 +2447,10 @@ function refreshInBackground(persisted, days = 1) {
   if (refreshInFlight) return;
   refreshInFlight = true;
   void latest(days, persisted)
+    .then((result) => {
+      if (days === 1) writeLatestResponseCache('latest-1', result);
+      return result;
+    })
     .catch((error) => console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' })))
     .finally(() => { refreshInFlight = false; });
 }
@@ -2543,11 +2547,16 @@ const server = http.createServer(async (req, res) => {
       const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
       // days=1 是最新開獎讀取，必須即時確認官方期號；歷史查詢才可使用保存快取。
       if (persisted.length && daysOverride === 1) {
-        // 最新開獎不可先回傳保存快取；否則新一期出現後畫面必然延遲一期。
-        // 只有歷史查詢允許背景更新，days=1 必須先向官方來源確認最新期號。
-        const fresh = await latest(1, persisted, castingAt, { deferLatestModel: true });
+        // 先回傳最近一次已保存的結果，官方期號確認與模型重算在背景執行；
+        // 避免官方來源短暫逾時時，前端完全拿不到正式預測。
+        const cached = {
+          ...persisted[0],
+          history: compactHistoryForResponse(selectRecentHistory(persisted, retentionDays)),
+          historyDays: retentionDays,
+          modelStatus: persisted[0].models?.length ? 'formal' : 'queued',
+        };
         refreshInBackground(persisted, 1);
-        return send(res, 200, writeLatestResponseCache(responseCacheKey, fresh), req);
+        return send(res, 200, writeLatestResponseCache(responseCacheKey, cached), req);
       }
       // 冷啟動先查最新一期，完整 31 日資料與建庫交給背景工作，避免首屏等待歷史同步。
       if (!persisted.length && daysOverride === 1) {

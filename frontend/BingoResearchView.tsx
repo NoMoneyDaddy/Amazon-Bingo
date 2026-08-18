@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CustomScrollbar, PluginTopbar, Button } from "@cubelv/sdk";
 
 const API_URL = "https://bingo-api.zeabur.app/api/latest";
+const OFFICIAL_API_URL = "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult";
 const MODEL_NAMES = [
   "梅花易數",
   "六爻八卦",
@@ -317,11 +318,11 @@ function normalizeCategory(value: string) {
 
 async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Promise<DrawSnapshot> {
   let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 1; attempt += 1) {
     const controller = new AbortController();
     const timeout = window.setTimeout(
       () => controller.abort("資料服務逾時"),
-      30_000,
+      8_000,
     );
     try {
       const response = await fetch(`${API_URL}?days=${days}&castingAt=${encodeURIComponent(castingAt)}`, {
@@ -342,15 +343,42 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
           ? "資料更新逾時，請稍後重試"
           : "資料暫時無法更新，請稍後重試",
       );
-      if (attempt < 2)
-        await new Promise((resolve) =>
-          window.setTimeout(resolve, 800 * (attempt + 1)),
-        );
     } finally {
       window.clearTimeout(timeout);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error("資料暫時無法更新");
+  try {
+    const taipeiDate = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+    const response = await fetch(`${OFFICIAL_API_URL}?openDate=${taipeiDate}&pageNum=1&pageSize=500`, { cache: "no-store" });
+    if (!response.ok) throw new Error("官方資料暫時無法更新");
+    const payload = await response.json() as { content?: { bingoQueryResult?: Array<Record<string, unknown>> } };
+    const rows = (payload.content?.bingoQueryResult || [])
+      .filter((row) => Array.isArray(row.openShowOrder) && row.openShowOrder.length === 20)
+      .map((row) => {
+        const numbers = (row.openShowOrder as Array<string | number>).map(normalizeNumber);
+        const bigCount = numbers.filter((number) => Number(number) >= 41).length;
+        const oddCount = numbers.filter((number) => Number(number) % 2 === 1).length;
+        return normalizeSnapshot({
+          period: String(row.drawTerm || ""),
+          drawAt: String(row.dDate || ""),
+          numbers,
+          superNumber: normalizeNumber(String(row.bullEyeTop || "")),
+          size: bigCount >= 13 ? "大" : bigCount <= 7 ? "小" : "和",
+          oddEven: oddCount >= 13 ? "單" : oddCount <= 7 ? "雙" : "和",
+          source: OFFICIAL_API_URL,
+          sourceLabel: "台灣彩券官方 API（直接備援）",
+          sourceHealth: [{ name: "台灣彩券官方 API（直接備援）", ok: true, records: 1 }],
+          predictionTargetPeriod: String(Number(row.drawTerm || 0) + 1),
+          fetchedAt: Date.now(),
+        });
+      })
+      .filter((row) => row.period)
+      .sort((a, b) => Number(b.period) - Number(a.period));
+    if (!rows.length) throw new Error("官方資料格式不完整");
+    return { ...rows[0], history: rows, historyDays: 1 };
+  } catch {
+    throw lastError instanceof Error ? lastError : new Error("資料暫時無法更新");
+  }
 }
 
 function getNextDraw(now: Date) {

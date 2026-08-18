@@ -758,7 +758,10 @@ export function BingoResearchView() {
       // 首屏先取最新一期；歷史 31 日由後端背景建庫，稍後再補到畫面。
       const castingAt = new Date().toISOString();
       const snapshot = await fetchLatest(1, castingAt);
-      const records = snapshot.history?.length ? snapshot.history : [snapshot];
+      // 最新模型與回測摘要在回應根節點；歷史陣列只保留開獎折，不能直接丟掉根節點。
+      const records = snapshot.history?.length
+        ? [{ ...snapshot, history: undefined }, ...snapshot.history.slice(1)]
+        : [snapshot];
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");
       }
@@ -767,7 +770,9 @@ export function BingoResearchView() {
       void new Promise((resolve) => window.setTimeout(resolve, 2000))
         .then(() => fetchLatest(31, castingAt))
         .then((fullSnapshot) => {
-          const fullRecords = fullSnapshot.history?.length ? fullSnapshot.history : [fullSnapshot];
+          const fullRecords = fullSnapshot.history?.length
+            ? [{ ...fullSnapshot, history: undefined }, ...fullSnapshot.history.slice(1)]
+            : [fullSnapshot];
           if (fullRecords.length > records.length) setDraws(fullRecords);
         })
         .catch(() => undefined);

@@ -131,6 +131,14 @@ type DrawSnapshot = {
     tenStar: { meanMatches: number; randomMeanMatches: number; positiveProfitRate: number; randomPositiveProfitRate: number };
     caveat: string;
   }>;
+  calibratedProbabilityEvaluation?: Array<{
+    name: string;
+    size: { brier: number | null; logLoss: number | null; nextProbability: number; reliability: Array<{ probability: number; observed: number; samples: number }> };
+    oddEven: { brier: number | null; logLoss: number | null; nextProbability: number; reliability: Array<{ probability: number; observed: number; samples: number }> };
+    baselineBrier: number;
+    baselineLogLoss: number;
+    caveat: string;
+  }>;
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
 };
 type Page = "overview" | "process" | "history";
@@ -194,6 +202,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     behaviorAudit: value.behaviorAudit,
     backtestIntegrity: value.backtestIntegrity,
     forecastEvaluation: Array.isArray(value.forecastEvaluation) ? value.forecastEvaluation : [],
+    calibratedProbabilityEvaluation: Array.isArray(value.calibratedProbabilityEvaluation) ? value.calibratedProbabilityEvaluation : [],
     researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
   };
 }
@@ -892,6 +901,26 @@ export function BingoResearchView() {
                       ))}
                     </div>
                     <p className="mt-2 text-[11px] text-muted-foreground">{latest.forecastEvaluation[0]?.caveat}</p>
+                  </div>
+                ) : null}
+                {latest?.calibratedProbabilityEvaluation?.length ? (
+                  <div className="mt-3 rounded-2xl border border-indigo-300/25 bg-indigo-300/10 p-4 text-sm leading-6 text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-indigo-100">序列式校準機率</strong>
+                      <span className="rounded-full bg-indigo-300/15 px-2 py-1 text-xs text-indigo-100">只用更早歷史折</span>
+                    </div>
+                    <div className="mt-2 space-y-2">
+                      {latest.calibratedProbabilityEvaluation.map((item) => (
+                        <div key={item.name} className="rounded-xl border border-indigo-200/15 bg-background/35 p-3 text-xs">
+                          <div className="flex flex-wrap items-center justify-between gap-2"><span className="font-semibold text-indigo-100">{item.name}</span><span className="text-muted-foreground">下一期信心：大小 {(item.size.nextProbability * 100).toFixed(1)}% · 單雙 {(item.oddEven.nextProbability * 100).toFixed(1)}%</span></div>
+                          <div className="mt-1 grid gap-1 text-muted-foreground sm:grid-cols-2">
+                            <span>大小 Brier {item.size.brier == null ? "—" : item.size.brier.toFixed(3)}／基線 {item.baselineBrier.toFixed(3)}</span>
+                            <span>單雙 Brier {item.oddEven.brier == null ? "—" : item.oddEven.brier.toFixed(3)}／基線 {item.baselineBrier.toFixed(3)}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-[11px] text-muted-foreground">{latest.calibratedProbabilityEvaluation[0]?.caveat}</p>
                   </div>
                 ) : null}
                 {latest?.researchEvidence?.length ? (

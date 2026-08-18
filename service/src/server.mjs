@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v43-probability-evaluation';
+const reproducibilityVersion = 'bingo-research-v44-sequential-calibration';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -595,6 +595,7 @@ const researchEvidenceRegistry = [
   { name: '熱手與賭徒謬誤行為', status: '玩家偏誤負對照；不把玩家選號偏好當成開獎訊號', source: 'Management Science, 2018', url: 'https://pubsonline.informs.org/doi/10.1287/mnsc.2018.3233' },
   { name: 'NIST 隨機性測試套件', status: '採用頻率、游程、區塊頻率與近似熵的研究前置檢查；不作預測證明', source: 'NIST SP 800-22 Rev. 1a', url: 'https://csrc.nist.gov/pubs/sp/800/22/r1/upd1/final' },
   { name: '多重假設校正', status: '對同時檢查的 p 值做 Bonferroni 保守校正，降低偶然顯著', source: 'Multiple comparisons control', url: 'https://doi.org/10.1111/j.2517-6161.1995.tb02031.x' },
+  { name: '序列式機率校準', status: '每個目標期只用更早折的結果估計信心，避免時間序列回看未來', source: 'Prequential probability forecasting', url: 'https://arxiv.org/abs/0905.1673' },
 ];
 
 function targetProfile(profiles, methodName, target) {
@@ -697,6 +698,63 @@ function forecastEvaluation(history = []) {
       tenStar: { meanMatches: result.tenStar.meanMatches / samples, randomMeanMatches: result.tenStar.randomMeanMatches / samples, positiveProfitRate: result.tenStar.wins / samples, randomPositiveProfitRate: result.tenStar.randomWins / samples },
       caveat: '目前是硬分類預測的 proper-score 診斷：模型尚未提供校準機率，因此 Brier／Log Loss 會揭露過度自信，不等於模型已具備可信機率輸出。',
     };
+  });
+}
+
+function calibratedProbabilityEvaluation(history = []) {
+  const records = history.slice(1, maxModelHistory + 1).filter((item) => Array.isArray(item.models) && item.models.length);
+  const modelNames = [...new Set(records.flatMap((item) => item.models.map((model) => model.name)).filter((name) => name !== '多模型聚合'))];
+  return modelNames.map((name) => {
+    const metrics = { size: { brier: 0, logLoss: 0, count: 0, nextProbability: 0.5, bins: new Map() }, oddEven: { brier: 0, logLoss: 0, count: 0, nextProbability: 0.5, bins: new Map() } };
+    records.forEach((actual, recordIndex) => {
+      const model = actual.models.find((item) => item.name === name);
+      if (!model) return;
+      const older = records.slice(recordIndex + 1);
+      ['size', 'oddEven'].forEach((target) => {
+        let wins = 0; let trials = 0;
+        older.forEach((past) => {
+          const pastModel = past.models.find((item) => item.name === name);
+          if (!pastModel) return;
+          const predicted = target === 'size' ? pastModel.official.size : pastModel.official.oddEven;
+          const actualValue = target === 'size' ? past.size : past.oddEven;
+          wins += normalizeDrawCategory(predicted, target) === normalizeDrawCategory(actualValue, target) ? 1 : 0;
+          trials += 1;
+        });
+        const probability = (wins + 1) / (trials + 2);
+        const predicted = target === 'size' ? model.official.size : model.official.oddEven;
+        const actualValue = target === 'size' ? actual.size : actual.oddEven;
+        const outcome = normalizeDrawCategory(predicted, target) === normalizeDrawCategory(actualValue, target) ? 1 : 0;
+        const metric = metrics[target];
+        metric.brier += (probability - outcome) ** 2;
+        metric.logLoss += -Math.log(outcome ? probability : 1 - probability);
+        metric.count += 1;
+        const bin = Math.min(9, Math.floor(probability * 10));
+        const bucket = metric.bins.get(bin) || { probability: 0, observed: 0, count: 0 };
+        bucket.probability += probability;
+        bucket.observed += outcome;
+        bucket.count += 1;
+        metric.bins.set(bin, bucket);
+      });
+    });
+    ['size', 'oddEven'].forEach((target) => {
+      let wins = 0; let trials = 0;
+      records.forEach((past) => {
+        const pastModel = past.models.find((item) => item.name === name);
+        if (!pastModel) return;
+        const predicted = target === 'size' ? pastModel.official.size : pastModel.official.oddEven;
+        const actualValue = target === 'size' ? past.size : past.oddEven;
+        wins += normalizeDrawCategory(predicted, target) === normalizeDrawCategory(actualValue, target) ? 1 : 0;
+        trials += 1;
+      });
+      metrics[target].nextProbability = (wins + 1) / (trials + 2);
+    });
+    const summarize = (metric) => ({
+      brier: metric.count ? metric.brier / metric.count : null,
+      logLoss: metric.count ? metric.logLoss / metric.count : null,
+      nextProbability: metric.nextProbability,
+      reliability: [...metric.bins.values()].map((bucket) => ({ probability: bucket.probability / bucket.count, observed: bucket.observed / bucket.count, samples: bucket.count })),
+    });
+    return { name, size: summarize(metrics.size), oddEven: summarize(metrics.oddEven), baselineBrier: 0.25, baselineLogLoss: Math.log(2), caveat: '機率由更早歷史折的 Beta(1,1) 平滑命中率估計；當期結果不參與當期信心估計。' };
   });
 }
 
@@ -1218,7 +1276,7 @@ async function latest(daysOverride = null, existingHistory = []) {
       const responseHistory = daysOverride && daysOverride > 1
         ? selectRecentHistory(history, retentionDays)
         : history.slice(0, fastResponseHistoryLimit);
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }
@@ -1261,6 +1319,7 @@ async function persistedResponse(persisted) {
     behaviorAudit: behaviorAudit(visible.slice(1)),
     backtestIntegrity: leakageGuard(visible, targetPeriod),
     forecastEvaluation: forecastEvaluation([{ ...current, models }, ...visible.slice(1)]),
+    calibratedProbabilityEvaluation: calibratedProbabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
     researchEvidence: researchEvidenceRegistry,
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
   };

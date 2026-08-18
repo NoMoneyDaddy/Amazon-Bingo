@@ -248,7 +248,8 @@ function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
     targetCount = predicted.length;
     payout = BASIC_PAYOUTS[key]?.[matches] || 0;
   }
-  return { payout, profit: payout - SINGLE_BET_COST, won: payout > 0, matches, targetCount };
+  const profit = payout - SINGLE_BET_COST;
+  return { payout, profit, won: profit > 0, matches, targetCount };
 }
 
 function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
@@ -335,7 +336,7 @@ function BacktestEvidence({
 }) {
   return (
     <span className="block text-[10px] font-normal leading-4 text-muted-foreground">
-      {samples ? `樣本 ${samples} 期 · ${wins}/${samples} 達標 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}` : "尚無有效樣本"}
+      {samples ? `樣本 ${samples} 期 · ${wins}/${samples} 正盈利 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}` : "尚無有效樣本"}
       <span className="ml-1">· {formatNetProfit(profit)}</span>
     </span>
   );
@@ -398,8 +399,8 @@ function HistoricalModelDetails({ model, draw }: { model: Model; draw: DrawSnaps
                   <div className="mt-1 min-w-0"><PredictionValue value={predictionForPlay(model, play.key)} /></div>
                 </div>
                 <div className="shrink-0 text-right text-xs leading-6">
-                  <div className={result.won ? "font-semibold text-emerald-300" : "font-semibold text-rose-300"}>
-                    {result.won ? "中獎" : "未中獎"}
+                  <div className={result.won ? "font-semibold text-emerald-300" : result.profit === 0 ? "font-semibold text-amber-300" : "font-semibold text-rose-300"}>
+                    {result.won ? "正盈利" : result.profit === 0 ? "打平" : "虧損"}
                   </div>
                   <div className="text-muted-foreground">
                     {result.targetCount ? `命中 ${result.matches}/${result.targetCount}` : `結果 ${result.matches ? "相符" : "不符"}`}
@@ -718,7 +719,7 @@ export function BingoResearchView() {
                 </div>
                 <div className="mt-4 rounded-2xl border border-cyan-300/25 bg-cyan-300/10 p-4 text-sm leading-6 text-slate-200">
                   <strong className="text-cyan-100">怎麼讀研究證據？</strong>
-                  <p className="mt-1">權重是模型採用歷史訊號的比例；回測率是過往預測與實際結果的命中比例。兩者都不是下一期的機率或保證。</p>
+                  <p className="mt-1">權重是模型採用歷史訊號的比例；回測率是過往預測帶來正盈利的比例，打平不算勝利。兩者都不是下一期的機率或保證。</p>
                 </div>
                 <div className="mt-3 space-y-3">
                   {latestModels.map((model) => (
@@ -804,7 +805,7 @@ export function BingoResearchView() {
                   ))}
                 </div>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
-                  勝率計算：命中期數 ÷ 有效預測期數 × 100%。樣本不足或舊資料沒有保存細節時，畫面會顯示「—」，不把未知資料當成 0%。
+                  勝率計算：淨盈利大於 0 的期數 ÷ 有效預測期數 × 100%；打平不算勝利。樣本不足或舊資料沒有保存細節時，畫面會顯示「—」，不把未知資料當成 0%。
                 </div>
               </section>
             )}

@@ -11,6 +11,19 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
+const singleBetCost = 25;
+const basicPayouts = {
+  "1星": { 1: 50 },
+  "2星": { 2: 75, 1: 25 },
+  "3星": { 3: 500, 2: 50 },
+  "4星": { 4: 1000, 3: 100, 2: 25 },
+  "5星": { 5: 7500, 4: 500, 3: 50 },
+  "6星": { 6: 25000, 5: 1000, 4: 200, 3: 25 },
+  "7星": { 7: 80000, 6: 3000, 5: 300, 4: 50, 3: 25 },
+  "8星": { 8: 500000, 7: 20000, 6: 1000, 5: 200, 4: 25, 0: 25 },
+  "9星": { 9: 1000000, 8: 100000, 7: 3000, 6: 500, 5: 100, 4: 25, 0: 25 },
+  "10星": { 10: 5000000, 9: 250000, 8: 25000, 7: 2500, 6: 250, 5: 25, 0: 25 },
+};
 const fallbackSources = [
   { name: 'Pilio 賓果開獎查詢', url: 'https://www.pilio.idv.tw/bingo/list.asp' },
   { name: 'Auzo 奧索樂透網', url: 'https://lotto.auzo.tw/bingobingo.php' },
@@ -391,6 +404,19 @@ function categoryPrediction(seed, traditional, history, field, empiricalWeight) 
   return empirical || traditional;
 }
 
+function hasPositiveProfit(target, predicted, actual) {
+  let payout = 0;
+  if (target === 'size') payout = predicted === actual.size ? 150 : 0;
+  else if (target === 'oddEven') payout = predicted === actual.oddEven ? 150 : 0;
+  else if (target === 'superNumber') payout = predicted === actual.superNumber ? 1200 : 0;
+  else {
+    const actualNumbers = new Set(actual.numbers);
+    const matches = (predicted || []).filter((number) => actualNumbers.has(number)).length;
+    payout = basicPayouts[target]?.[matches] || 0;
+  }
+  return payout - singleBetCost > 0;
+}
+
 function evolveProfiles(history = []) {
   const candidates = [0.16, 0.24, 0.32, 0.40, 0.48];
   const validationWindow = Math.min(12, Math.max(0, history.length - 1));
@@ -405,15 +431,14 @@ function evolveProfiles(history = []) {
           const predicted = buildModels(actual, training, { evolve: false, profiles: { [method]: { targets: { [target]: { empiricalWeight } } } } }).find((item) => item.name === method);
           if (!predicted) return;
           const foldWeight = 1 / (index + 1);
-          let foldScore = 0;
-          if (target === 'size') foldScore = predicted.official.size === actual.size ? 1 : 0;
-          else if (target === 'oddEven') foldScore = predicted.official.oddEven === actual.oddEven ? 1 : 0;
-          else if (target === 'superNumber') foldScore = predicted.official.superNumber === actual.superNumber ? 1 : 0;
-          else {
-            const picks = predicted.official.basic[target] || [];
-            const actualNumbers = new Set(actual.numbers);
-            foldScore = picks.length ? picks.filter((number) => actualNumbers.has(number)).length / picks.length : 0;
-          }
+          const prediction = target === 'size'
+            ? predicted.official.size
+            : target === 'oddEven'
+              ? predicted.official.oddEven
+              : target === 'superNumber'
+                ? predicted.official.superNumber
+                : predicted.official.basic[target] || [];
+          const foldScore = hasPositiveProfit(target, prediction, actual) ? 1 : 0;
           weightedHits += foldScore * foldWeight;
           totalWeight += foldWeight;
           trials += 1;

@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v64-roi-gated-profiles';
+const reproducibilityVersion = 'bingo-research-v65-zonal-predictions';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -538,6 +538,14 @@ function windowFrequency(number, history, windowSize) {
   return hits / window.length;
 }
 
+function windowFrequencies(history, windowSize) {
+  const window = history.slice(0, Math.min(windowSize, history.length));
+  const counts = Array(81).fill(0);
+  if (!window.length) return counts.map(() => 0.25);
+  window.forEach((draw) => draw.numbers.forEach((value) => { counts[Number(value)] += 1; }));
+  return counts.map((count) => count / window.length);
+}
+
 function hypergeometricInclusion(number, history) {
   // 每期是 80 選 20 的不放回集合；以 Beta(1, 3) 收縮到理論包含率 20/80。
   const draws = history.length;
@@ -619,6 +627,9 @@ function targetAdapterSignal(number, target, tradition) {
 
 function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, target = '') {
   const frequencies = historicalFrequencies(history);
+  const recentFrequencies = windowFrequencies(history, 12);
+  const mediumFrequencies = windowFrequencies(history, 60);
+  const longFrequencies = windowFrequencies(history, 300);
   const values = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
     const traditional = tradition.kind === 'bazi'
       ? ((['木', '火', '土', '金', '水'][(number - 1) % 5] === tradition.element ? 0.38 : 0.06) + (number % 12 === tradition.branch + 1 ? 0.18 : 0))
@@ -670,12 +681,53 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, t
             : tradition.kind === 'taiyi'
               ? (number % 9 === tradition.palace - 1 ? 0.34 : 0) + (number % 9 === tradition.cycle ? 0.18 : 0)
               : ((number % 8 === tradition.upper ? 0.32 : 0) + (number % 6 === tradition.moving ? 0.16 : 0));
-    const empirical = clamp(frequencies[number] / 0.25, 0, 1) * empiricalWeight;
+    // 新增跨窗口穩定性：短期訊號只有在 12／60／300 期方向一致時才提高權重。
+    const stableRate = recentFrequencies[number] * 0.5 + mediumFrequencies[number] * 0.3 + longFrequencies[number] * 0.2;
+    const spread = (Math.abs(recentFrequencies[number] - mediumFrequencies[number]) + Math.abs(mediumFrequencies[number] - longFrequencies[number])) / 2;
+    const stability = clamp((stableRate / 0.25) / (1 + spread * 1.5), 0, 1);
+    const empiricalSignal = clamp((frequencies[number] / 0.25) * 0.35 + stability * 0.65, 0, 1);
+    const empirical = empiricalSignal * empiricalWeight;
     const adapter = targetAdapterSignal(number, target, tradition);
     const targetWeight = target === 'superNumber' ? 0.24 : 0.22;
     return { number, score: traditional * (1 - empiricalWeight) + empirical + adapter * targetWeight + deterministicTie(seed, number) * 0.000001 };
   });
-  return values.sort((a, b) => b.score - a.score || a.number - b.number).slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
+  const ranked = values.sort((a, b) => b.score - a.score || a.number - b.number);
+  return ranked.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
+}
+
+const NUMBER_ZONES = [
+  { key: 'zone-1', label: '01–20', min: 1, max: 20 },
+  { key: 'zone-2', label: '21–40', min: 21, max: 40 },
+  { key: 'zone-3', label: '41–60', min: 41, max: 60 },
+  { key: 'zone-4', label: '61–80', min: 61, max: 80 },
+];
+
+function zonePredictionSet(seed, tradition, history, empiricalWeight, target = '10星', picksPerZone = 5) {
+  const frequencies = historicalFrequencies(history);
+  const recentFrequencies = windowFrequencies(history, 12);
+  const mediumFrequencies = windowFrequencies(history, 60);
+  const longFrequencies = windowFrequencies(history, 300);
+  const ranked = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
+    const recent = recentFrequencies[number];
+    const medium = mediumFrequencies[number];
+    const long = longFrequencies[number];
+    const stableRate = (recent * 0.5 + medium * 0.3 + long * 0.2);
+    const spread = (Math.abs(recent - medium) + Math.abs(medium - long)) / 2;
+    const stability = clamp((stableRate / 0.25) / (1 + spread * 1.5), 0, 1);
+    const traditional = targetAdapterSignal(number, target, tradition);
+    const empirical = clamp((frequencies[number] * 0.35 / 0.25) + stability * 0.65, 0, 1) * empiricalWeight;
+    return { number, score: traditional * (1 - empiricalWeight) + empirical + deterministicTie(`${seed}|zone`, number) * 0.000001 };
+  });
+  return NUMBER_ZONES.map((zone) => ({
+    key: zone.key,
+    label: zone.label,
+    numbers: ranked
+      .filter((item) => item.number >= zone.min && item.number <= zone.max)
+      .sort((a, b) => b.score - a.score || a.number - b.number)
+      .slice(0, picksPerZone)
+      .sort((a, b) => a.number - b.number)
+      .map((item) => String(item.number).padStart(2, '0')),
+  }));
 }
 
 function datePartsTaipei() {
@@ -1501,6 +1553,16 @@ function aggregateModel(models, history) {
     const target = `${index + 1}星`;
     return [target, weightedNumbers(target)];
   }));
+  const zonePredictions = NUMBER_ZONES.map((zone) => {
+    const totals = new Map();
+    eligibleModels.forEach((model) => {
+      const weight = weightFor(model, '10星') || (eligibleModels.length ? 1 / eligibleModels.length : 0);
+      const zoneResult = model.research?.zonePredictions?.find((item) => item.key === zone.key);
+      if (weight <= 0 || !zoneResult) return;
+      (zoneResult.numbers || []).forEach((number) => totals.set(number, (totals.get(number) || 0) + weight));
+    });
+    return { ...zone, numbers: [...totals.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 5).map(([number]) => number) };
+  });
   const weightedModelCount = eligibleModels.filter((model) => predictionTargets.some((target) => weightFor(model, target) > 0)).length;
   return {
     name: '多模型聚合',
@@ -1525,7 +1587,8 @@ function aggregateModel(models, history) {
       sumBand: '由共識號碼另行統計',
       oddEvenCount: '由共識號碼另行統計',
       highLowCount: '由共識號碼另行統計',
-      zones: ['多模型加權共識'],
+      zones: zonePredictions.map((zone) => zone.label),
+      zonePredictions,
     },
   };
 }
@@ -1559,6 +1622,7 @@ export function buildModels(snapshot, history = [], options = {}) {
       return [target, scoreNumbers(seed, targetCount, traditionFor(method.kind, casting), history, weights[target], target)];
     }));
     const picks = picksByTarget['10星'] || scoreNumbers(`${castingAt}|${snapshot.period}|${method.kind}|10星`, 10, traditionFor(method.kind, targetCastings['10星']), history, weights['10星'], '10星');
+    const zonePredictions = zonePredictionSet(`${castingAt}|${snapshot.period}|${method.kind}|10星|${method.seedOffset}`, traditionFor(method.kind, commonCasting), history, weights['10星']);
     const modelSeed = playIndex('10星') + method.seedOffset;
     const pickSummary = summarizePick(picks);
     const { sumBand, oddEvenCount, highLowCount } = pickSummary;
@@ -1608,7 +1672,8 @@ export function buildModels(snapshot, history = [], options = {}) {
         sumBand,
         oddEvenCount,
         highLowCount,
-        zones: [`${(modelSeed % 4) * 20 + 1}-${(modelSeed % 4 + 1) * 20}`],
+        zones: zonePredictions.map((zone) => zone.label),
+        zonePredictions,
         targetResearch,
       },
     };

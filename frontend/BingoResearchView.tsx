@@ -70,12 +70,14 @@ type Model = {
     oddEvenCount: string;
     highLowCount: string;
     zones: string[];
+    zonePredictions?: Array<{ key: string; label: string; min: number; max: number; numbers: string[] }>;
     targetResearch?: Record<string, {
       numberPicks: string[];
       sumBand: string;
       oddEvenCount: string;
       highLowCount: string;
       zones: string[];
+      zonePredictions?: Array<{ key: string; label: string; min: number; max: number; numbers: string[] }>;
     }>;
   };
 };
@@ -219,7 +221,8 @@ function normalizeModel(value: Partial<Model> | null | undefined): Model {
       sumBand: item?.sumBand || "—",
       oddEvenCount: item?.oddEvenCount || "—",
       highLowCount: item?.highLowCount || "—",
-      zones: Array.isArray(item?.zones) ? item.zones : [],
+        zones: Array.isArray(item?.zones) ? item.zones : [],
+        zonePredictions: Array.isArray(item?.zonePredictions) ? item.zonePredictions : undefined,
       }];
     }))
     : undefined;
@@ -241,6 +244,7 @@ function normalizeModel(value: Partial<Model> | null | undefined): Model {
       oddEvenCount: research.oddEvenCount || "—",
       highLowCount: research.highLowCount || "—",
       zones: Array.isArray(research.zones) ? research.zones : [],
+      zonePredictions: Array.isArray(research.zonePredictions) ? research.zonePredictions : undefined,
       targetResearch,
     },
   };
@@ -1217,6 +1221,22 @@ export function BingoResearchView() {
                       <div className="mt-3 border-t border-slate-800 pt-2 text-xs leading-5 text-slate-300">
                         本模型 10 星候選：{model.research.numberPicks.join("、")} · 20 號研究母體：{model.research.numberPicks20?.join("、") || "—"} · 區間：{model.research.zones.join("、")} · 總和：{model.research.sumBand}
                       </div>
+                      {model.name === "多模型聚合" && model.research.zonePredictions?.length ? (
+                        <div className="mt-3 border-t border-cyan-300/20 pt-3">
+                          <div className="mb-2 flex items-center justify-between gap-2">
+                            <span className="text-xs font-semibold text-cyan-100">分區預測：每區 5 個候選</span>
+                            <span className="text-[10px] text-muted-foreground">四區獨立評分後再聚合</span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
+                            {model.research.zonePredictions.map((zone) => (
+                              <div key={zone.key} className="rounded-lg border border-cyan-300/20 bg-cyan-300/5 px-2 py-1.5">
+                                <div className="text-[10px] font-semibold text-cyan-200">{zone.label}</div>
+                                <div className="mt-1 text-xs font-bold tabular-nums text-cyan-50">{zone.numbers.join("、") || "—"}</div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      ) : null}
                       {model.research.targetResearch && (
                         <div className="mt-3 border-t border-border pt-3">
                           <div className="mb-2 text-xs font-semibold text-amber-200">各玩法／星級差異摘要</div>

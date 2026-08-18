@@ -302,6 +302,20 @@ function DrawNumberBalls({ draw, recentStats, compact = false }: { draw: DrawSna
   );
 }
 
+function LatestResultTag({ label, value, tone }: { label: string; value: string; tone: "cyan" | "violet" | "red" }) {
+  const tones = {
+    cyan: "border-cyan-300/35 bg-cyan-300/10 text-cyan-100",
+    violet: "border-violet-300/35 bg-violet-300/10 text-violet-100",
+    red: "border-red-300/35 bg-red-300/10 text-red-100",
+  } as const;
+  return (
+    <div className={`flex min-w-0 flex-1 flex-col items-center justify-center rounded-xl border px-2 py-1.5 ${tones[tone]}`}>
+      <span className="text-[9px] font-semibold tracking-wide opacity-75">{label}</span>
+      <strong className="mt-0.5 max-w-full truncate text-sm font-bold tabular-nums sm:text-base">{value || "—"}</strong>
+    </div>
+  );
+}
+
 function parseModels(draw: DrawSnapshot): Model[] {
   return draw.models || [];
 }
@@ -680,9 +694,10 @@ export function BingoResearchView() {
                       <div className="min-w-0 flex-1 overflow-hidden rounded-md bg-slate-950/45 px-1.5 py-1">
                         <DrawNumberBalls draw={latest} recentStats={recentStats} />
                       </div>
-                      <div className="flex shrink-0 justify-end gap-2 text-right text-[9px] leading-4 text-muted-foreground sm:block">
-                        <div>大小 {normalizeCategory(latest.size) || "—"} · 單雙 {normalizeCategory(latest.oddEven) || "—"}</div>
-                        <div className="font-semibold text-red-200">超級獎號 {normalizeNumber(latest.superNumber) || "—"}</div>
+                      <div className="grid w-full shrink-0 grid-cols-3 gap-1.5 sm:w-[15rem]">
+                        <LatestResultTag label="大小" value={normalizeCategory(latest.size)} tone="cyan" />
+                        <LatestResultTag label="單雙" value={normalizeCategory(latest.oddEven)} tone="violet" />
+                        <LatestResultTag label="超級獎號" value={normalizeNumber(latest.superNumber)} tone="red" />
                       </div>
                     </div>
                   ) : (

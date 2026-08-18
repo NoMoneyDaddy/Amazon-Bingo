@@ -41,6 +41,9 @@ type Model = {
     targetRules?: Record<string, string>;
     targetCastings?: Record<string, string>;
     targetCastingValues?: Record<string, string>;
+    numberPredictionRelation?: string;
+    numberUniverseSize?: number;
+    officialDrawNumberCount?: number;
   };
   official: {
     size: string;
@@ -50,6 +53,7 @@ type Model = {
   };
   research: {
     numberPicks: string[];
+    numberPicks20?: string[];
     sumBand: string;
     oddEvenCount: string;
     highLowCount: string;
@@ -152,7 +156,12 @@ function normalizeNumber(value: string | number) {
 }
 
 function normalizeCategory(value: string) {
-  return value === "－" || value === "-" ? "和" : value;
+  const text = String(value || "").trim().replace(/[\s:：]/g, "");
+  if (/^(大|大號|大數|猜大)$/.test(text)) return "大";
+  if (/^(小|小號|小數|猜小)$/.test(text)) return "小";
+  if (/^(單|單數|猜單)$/.test(text)) return "單";
+  if (/^(雙|雙數|猜雙)$/.test(text)) return "雙";
+  return text === "－" || text === "-" || text === "和局" ? "和" : text;
 }
 
 async function fetchLatest(days = 1): Promise<DrawSnapshot> {
@@ -672,8 +681,8 @@ export function BingoResearchView() {
                         <DrawNumberBalls draw={latest} recentStats={recentStats} />
                       </div>
                       <div className="flex shrink-0 justify-end gap-2 text-right text-[9px] leading-4 text-muted-foreground sm:block">
-                        <div>大{latest.size || "—"} · {latest.oddEven || "—"}</div>
-                        <div className="font-semibold text-red-200">超 {latest.superNumber || "—"}</div>
+                        <div>大小 {normalizeCategory(latest.size) || "—"} · 單雙 {normalizeCategory(latest.oddEven) || "—"}</div>
+                        <div className="font-semibold text-red-200">超級獎號 {normalizeNumber(latest.superNumber) || "—"}</div>
                       </div>
                     </div>
                   ) : (
@@ -769,9 +778,10 @@ export function BingoResearchView() {
                         <div className="mt-1 break-words text-[11px]">{model.calculation?.commonCasting || "共同預測時間未提供"}</div>
                         <div className="mt-2 text-[11px] text-amber-100">固定輸入：{formatDisplayDate(model.calculation?.castingAt || "")} · 版本：{model.calculation?.algorithmVersion || "—"}</div>
                         <div className="mt-1 text-[11px] text-amber-100">這組起卦只計算一次；下方每個玩法顯示的是獨立適配規則與回測，不是重新起卦。</div>
+                        <div className="mt-1 text-[11px] text-cyan-100">號碼鏈路：起卦特徵 → 評分 1–80 號碼 → 各星級取前 1–10 個；每期官方實際開出 20 個號碼，不能把已開結果倒灌到下一期預測。</div>
                       </div>
                       <div className="mt-3 border-t border-slate-800 pt-2 text-xs leading-5 text-slate-300">
-                        本模型候選：{model.research.numberPicks.join("、")} · 區間：{model.research.zones.join("、")} · 總和：{model.research.sumBand}
+                        本模型 10 星候選：{model.research.numberPicks.join("、")} · 20 號研究母體：{model.research.numberPicks20?.join("、") || "—"} · 區間：{model.research.zones.join("、")} · 總和：{model.research.sumBand}
                       </div>
                       {model.research.targetResearch && (
                         <div className="mt-3 border-t border-border pt-3">

@@ -508,15 +508,31 @@ function targetProfile(profiles, methodName, target) {
 function categoryPrediction(seed, traditional, history, field, empiricalWeight) {
   if (!history.length || empiricalWeight < 0.4) return traditional;
   const counts = new Map();
-  history.forEach((item, index) => counts.set(item[field], (counts.get(item[field]) || 0) + 1 / (index + 1)));
+  history.forEach((item, index) => {
+    const value = normalizeDrawCategory(item[field], field);
+    if (value) counts.set(value, (counts.get(value) || 0) + 1 / (index + 1));
+  });
   const empirical = [...counts.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0];
   return empirical || traditional;
 }
 
+function normalizeDrawCategory(value, field = '') {
+  const text = String(value || '').trim().replace(/[\s:：]/g, '');
+  if (field === 'size') {
+    if (/^(大|大號|大數|猜大)$/.test(text)) return '大';
+    if (/^(小|小號|小數|猜小)$/.test(text)) return '小';
+  }
+  if (field === 'oddEven') {
+    if (/^(單|單數|猜單)$/.test(text)) return '單';
+    if (/^(雙|雙數|猜雙)$/.test(text)) return '雙';
+  }
+  return text === '－' || text === '-' || text === '和局' ? '和' : text;
+}
+
 function hasPositiveProfit(target, predicted, actual) {
   let payout = 0;
-  if (target === 'size') payout = predicted === actual.size ? 150 : 0;
-  else if (target === 'oddEven') payout = predicted === actual.oddEven ? 150 : 0;
+  if (target === 'size') payout = normalizeDrawCategory(predicted, 'size') === normalizeDrawCategory(actual.size, 'size') ? 150 : 0;
+  else if (target === 'oddEven') payout = normalizeDrawCategory(predicted, 'oddEven') === normalizeDrawCategory(actual.oddEven, 'oddEven') ? 150 : 0;
   else if (target === 'superNumber') payout = predicted === actual.superNumber ? 1200 : 0;
   else {
     const actualNumbers = new Set(actual.numbers);
@@ -751,6 +767,7 @@ export function buildModels(snapshot, history = [], options = {}) {
       },
       research: {
         numberPicks: picks,
+        numberPicks20: scoreNumbers(`${castingAt}|${snapshot.period}|${method.kind}|20號研究母體|${method.seedOffset}`, 20, traditionFor(method.kind, commonCasting), history, weights['10星'], '10星'),
         sumBand,
         oddEvenCount,
         highLowCount,
@@ -800,8 +817,8 @@ async function fetchOfficial(daysOverride = null) {
     const snapshot = deriveSnapshot(record.drawTerm, record.openShowOrder, apiBaseUrl, openDate);
     snapshot.sourceLabel = '台灣彩券官方 API';
     snapshot.superNumber = String(record.bullEyeTop || '').padStart(2, '0');
-    snapshot.size = record.highLowTop && record.highLowTop !== '－' ? record.highLowTop : snapshot.size;
-    snapshot.oddEven = record.oddEvenTop && record.oddEvenTop !== '－' ? record.oddEvenTop : snapshot.oddEven;
+    snapshot.size = record.highLowTop && record.highLowTop !== '－' ? normalizeDrawCategory(record.highLowTop, 'size') : snapshot.size;
+    snapshot.oddEven = record.oddEvenTop && record.oddEvenTop !== '－' ? normalizeDrawCategory(record.oddEvenTop, 'oddEven') : snapshot.oddEven;
     return snapshot;
   };
   const history = records.map(parseItem);
@@ -824,8 +841,8 @@ function parseMirrorPage(html, sourceName) {
   return {
     ...snapshot,
     superNumber: superNumber ? superNumber.padStart(2, '0') : snapshot.superNumber,
-    size: size || snapshot.size,
-    oddEven: oddEvenRaw === '－' || oddEvenRaw === '-' ? '和' : oddEvenRaw || snapshot.oddEven,
+    size: normalizeDrawCategory(size || snapshot.size, 'size'),
+    oddEven: normalizeDrawCategory(oddEvenRaw || snapshot.oddEven, 'oddEven'),
   };
 }
 

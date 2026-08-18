@@ -2169,6 +2169,9 @@ export function buildModels(snapshot, history = [], options = {}) {
 let modelWorker;
 let modelRequestId = 0;
 const pendingModelRequests = new Map();
+let evaluationWorker;
+let evaluationRequestId = 0;
+const pendingEvaluationRequests = new Map();
 
 function ensureModelWorker() {
   if (modelWorker) return modelWorker;
@@ -2198,6 +2201,37 @@ function buildModelsInWorker(snapshot, history = [], options = {}) {
     const requestId = ++modelRequestId;
     pendingModelRequests.set(requestId, { resolve, reject });
     ensureModelWorker().postMessage({ requestId, snapshot, history, options });
+  });
+}
+
+function ensureEvaluationWorker() {
+  if (evaluationWorker) return evaluationWorker;
+  evaluationWorker = new Worker(new URL('./evaluation-worker.mjs', import.meta.url));
+  evaluationWorker.on('message', (message) => {
+    const pending = pendingEvaluationRequests.get(message?.requestId);
+    if (!pending) return;
+    pendingEvaluationRequests.delete(message.requestId);
+    if (message.error) pending.reject(new Error(message.error));
+    else pending.resolve(message.evaluation || {});
+  });
+  const failPending = (error) => {
+    for (const pending of pendingEvaluationRequests.values()) pending.reject(error);
+    pendingEvaluationRequests.clear();
+    evaluationWorker = undefined;
+  };
+  evaluationWorker.on('error', (error) => failPending(error));
+  evaluationWorker.on('exit', (code) => {
+    if (code !== 0) failPending(new Error(`評估 Worker 結束碼 ${code}`));
+    else evaluationWorker = undefined;
+  });
+  return evaluationWorker;
+}
+
+function evaluateInWorker(history = []) {
+  return new Promise((resolve, reject) => {
+    const requestId = ++evaluationRequestId;
+    pendingEvaluationRequests.set(requestId, { resolve, reject });
+    ensureEvaluationWorker().postMessage({ requestId, history });
   });
 }
 
@@ -2462,13 +2496,15 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       // 首屏快速路徑只確認最新開獎資料；模型補建與 GitHub 備份交給背景同步，
       // 不得因慢來源、worker 或備份服務讓 /api/latest?days=1 長時間沒有回應。
       if (!options.deferLatestModel && !options.deferEvaluationModels) await hydrateEvaluationModels(history);
-      const evaluation = {
-        forecastEvaluation: forecastEvaluation(history),
-        calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history),
-        profitabilityEvaluation: profitabilityEvaluation(history),
-        zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history),
-        technicalAnalysis: technicalAnalysis(history),
-      };
+      const evaluation = options.deferEvaluationModels
+        ? {
+          forecastEvaluation: history[0]?.forecastEvaluation || [],
+          calibratedProbabilityEvaluation: history[0]?.calibratedProbabilityEvaluation || [],
+          profitabilityEvaluation: history[0]?.profitabilityEvaluation || [],
+          zoneProfitabilityEvaluation: history[0]?.zoneProfitabilityEvaluation || [],
+          technicalAnalysis: history[0]?.technicalAnalysis || {},
+        }
+        : await evaluateInWorker(history);
       // 模型、預測、回測與技術摘要必須同一批寫入，避免重開後只剩開獎資料或號碼。
       history[0] = { ...history[0], ...evaluation };
       await persistSnapshots(history);
@@ -2523,15 +2559,21 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   }, ...visible.slice(1)];
   if (!current.forecastEvaluation?.length && history.slice(1).some((item) => !Array.isArray(item.models) || !item.models.length)) await hydrateEvaluationModels(history);
   const evaluationHistory = [{ ...current, models }, ...visible.slice(1)];
-  const storedForecast = current.forecastEvaluation?.length ? current.forecastEvaluation : forecastEvaluation(evaluationHistory);
-  const storedCalibrated = current.calibratedProbabilityEvaluation?.length ? current.calibratedProbabilityEvaluation : calibratedProbabilityEvaluation(evaluationHistory);
+  const hasStoredEvaluation = Boolean(current.forecastEvaluation?.length
+    && current.calibratedProbabilityEvaluation?.length
+    && current.profitabilityEvaluation?.length
+    && current.zoneProfitabilityEvaluation?.length
+    && Object.keys(current.technicalAnalysis || {}).length);
+  const computedEvaluation = hasStoredEvaluation ? null : await evaluateInWorker(evaluationHistory);
+  const storedForecast = current.forecastEvaluation?.length ? current.forecastEvaluation : computedEvaluation.forecastEvaluation;
+  const storedCalibrated = current.calibratedProbabilityEvaluation?.length ? current.calibratedProbabilityEvaluation : computedEvaluation.calibratedProbabilityEvaluation;
   const hydratedProfitability = hydrateStoredPeriodMatches(current.profitabilityEvaluation, visible);
   const storedProfitabilityReady = Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
     && hydratedProfitability.every((play) => Array.isArray(play.best?.periodResults)
       && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
-  const storedProfitability = storedProfitabilityReady ? hydratedProfitability : profitabilityEvaluation(evaluationHistory);
-  const storedZone = current.zoneProfitabilityEvaluation?.length ? current.zoneProfitabilityEvaluation : zoneProfitabilityEvaluation(evaluationHistory);
-  const storedTechnical = Object.keys(current.technicalAnalysis || {}).length ? current.technicalAnalysis : technicalAnalysis(evaluationHistory);
+  const storedProfitability = storedProfitabilityReady ? hydratedProfitability : computedEvaluation.profitabilityEvaluation;
+  const storedZone = current.zoneProfitabilityEvaluation?.length ? current.zoneProfitabilityEvaluation : computedEvaluation.zoneProfitabilityEvaluation;
+  const storedTechnical = Object.keys(current.technicalAnalysis || {}).length ? current.technicalAnalysis : computedEvaluation.technicalAnalysis;
   return {
     ...history[0],
     history: compactHistoryForResponse(history.slice(0, responseHistoryLimit)),
@@ -2565,13 +2607,8 @@ function refreshInBackground(persisted, days = 1) {
   if (days === 1 && persisted[0]?.models?.length && !storedProfitabilityReady) {
     setImmediate(() => void (async () => {
       try {
-        const evaluation = {
-          forecastEvaluation: forecastEvaluation(history),
-          calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history),
-          profitabilityEvaluation: hydratedProfitability.length ? hydratedProfitability : profitabilityEvaluation(history),
-          zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history),
-          technicalAnalysis: technicalAnalysis(history),
-        };
+        const evaluation = await evaluateInWorker(history);
+        if (hydratedProfitability.length) evaluation.profitabilityEvaluation = hydratedProfitability;
         history[0] = { ...history[0], ...evaluation };
         await persistSnapshots(history);
         writeLatestResponseCache('latest-1', { ...history[0], history: compactHistoryForResponse(history.slice(0, responseHistoryLimit)), historyDays: retentionDays, modelStatus: 'formal', ...evaluation });
@@ -2739,3 +2776,11 @@ if (isMainThread) {
     // 避免冷啟動立刻搶滿 CPU，導致 /health 與最新資料端點一起逾時。
   });
 }
+
+export {
+  forecastEvaluation,
+  calibratedProbabilityEvaluation,
+  profitabilityEvaluation,
+  zoneProfitabilityEvaluation,
+  technicalAnalysis,
+};

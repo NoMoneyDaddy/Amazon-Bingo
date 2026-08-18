@@ -468,7 +468,6 @@ export function BingoResearchView() {
   const [page, setPage] = useState<Page>("overview");
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const [specifiedInput, setSpecifiedInput] = useState("");
-  const [specifiedMode, setSpecifiedMode] = useState<"period" | "at">("period");
   const [specified, setSpecified] = useState<DrawSnapshot | null>(null);
   const latest = sorted[0];
   const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
@@ -500,16 +499,16 @@ export function BingoResearchView() {
 
   const calculateSpecified = useCallback(async () => {
     const value = specifiedInput.trim();
-    if (!value) { setError(specifiedMode === "period" ? "請輸入期號" : "請輸入台北日期時間"); return; }
+    if (!value) { setError("請輸入台北日期時間"); return; }
     setSyncing(true);
     setError("");
     try {
-      const result = await fetchSpecified(specifiedMode === "period" ? `period=${encodeURIComponent(value)}` : `at=${encodeURIComponent(value)}`);
+      const result = await fetchSpecified(`at=${encodeURIComponent(value)}`);
       setSpecified(result);
       setPage("process");
     } catch (err) { setError(err instanceof Error ? err.message : "指定計算失敗"); }
     finally { setSyncing(false); }
-  }, [specifiedInput, specifiedMode]);
+  }, [specifiedInput]);
 
   useEffect(() => {
     void sync();
@@ -625,24 +624,22 @@ export function BingoResearchView() {
                         <p className="text-xs font-semibold uppercase tracking-[0.18em] text-cyan-200/80">指定計算</p>
                         <h2 id="specified-heading" className="mt-1 text-base font-bold text-cyan-100">回算指定期數／時間</h2>
                       </div>
-                      <span className="text-[10px] text-muted-foreground">只用目標之前資料</span>
+                      <span className="text-[10px] text-muted-foreground">固定時間、可重現計算</span>
                     </div>
                     <div className="mt-3 flex flex-wrap gap-2">
-                      <Button size="sm" variant={specifiedMode === "period" ? "default" : "ghost"} onClick={() => setSpecifiedMode("period")}>期號</Button>
-                      <Button size="sm" variant={specifiedMode === "at" ? "default" : "ghost"} onClick={() => setSpecifiedMode("at")}>日期時間</Button>
                       <input
                         value={specifiedInput}
                         onChange={(event) => setSpecifiedInput(event.target.value)}
                         onKeyDown={(event) => { if (event.key === "Enter") void calculateSpecified(); }}
-                        placeholder={specifiedMode === "period" ? "例如 115046513" : "例如 2026-08-18 12:35"}
-                        aria-label={specifiedMode === "period" ? "指定期號" : "指定日期時間"}
+                        placeholder="例如 2026-08-18 12:35"
+                        aria-label="指定日期時間"
                         className="min-w-0 flex-1 rounded-md border border-slate-600 bg-slate-900 px-2 py-1.5 text-xs text-foreground outline-none focus:border-cyan-300"
                       />
                       <Button size="sm" onClick={() => void calculateSpecified()} disabled={syncing}>計算</Button>
                     </div>
                     {specified && (
                       <div className="mt-2 rounded-lg border border-cyan-300/20 bg-cyan-300/5 px-2.5 py-2 text-[11px] leading-5 text-cyan-100">
-                        <div>模式：{specified.calculationMode === "specified-period-walk-forward" ? "指定期號嚴格走勢回算" : "指定時間前推計算"} · 樣本 {specified.historySamples ?? 0} 期</div>
+                        <div>模式：指定時間前推計算 · 樣本 {specified.historySamples ?? 0} 期</div>
                         <div className="text-muted-foreground">{specified.dataBoundary}</div>
                         {specified.actual && <div className="mt-1">實際結果：{specified.actual.numbers.join("、")} · 超 {specified.actual.superNumber} · {specified.actual.size}／{specified.actual.oddEven}</div>}
                       </div>

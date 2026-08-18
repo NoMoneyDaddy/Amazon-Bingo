@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v5-specified-period';
+const reproducibilityVersion = 'bingo-research-v6-specified-time';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -580,27 +580,19 @@ function summarizePick(numbers) {
   };
 }
 
-function calculateSpecifiedTarget(history, { period = '', at = '' } = {}) {
-  const normalizedPeriod = String(period || '').trim();
-  const targetIndex = normalizedPeriod ? history.findIndex((item) => String(item.period) === normalizedPeriod) : -1;
-  const actual = targetIndex >= 0 ? history[targetIndex] : null;
-  const training = targetIndex >= 0
-    ? history.slice(targetIndex + 1, targetIndex + maxModelHistory + 1)
-    : history.slice(0, maxModelHistory);
-  const targetPeriod = normalizedPeriod || `custom-${String(at || '').replace(/[^0-9]/g, '').slice(0, 14) || 'time'}`;
-  const castingAt = reproducibleCastingAt(at || actual?.castingAt || actual?.drawAt, targetPeriod);
-  const snapshot = { ...(actual || {}), period: targetPeriod, drawAt: at || actual?.drawAt || '', castingAt };
+function calculateSpecifiedTime(history, at = '') {
+  const training = history.slice(0, maxModelHistory);
+  const targetPeriod = `custom-${String(at || '').replace(/[^0-9]/g, '').slice(0, 14) || 'time'}`;
+  const castingAt = reproducibleCastingAt(at, targetPeriod);
+  const snapshot = { period: targetPeriod, drawAt: at, castingAt, numbers: [], superNumber: '', size: '', oddEven: '' };
   const models = buildModels(snapshot, training, { evolve: true, castingAt });
   return {
     ...snapshot,
     models,
     historySamples: training.length,
-    calculationMode: actual ? 'specified-period-walk-forward' : 'specified-time-forward',
+    calculationMode: 'specified-time-forward',
     targetPeriod,
-    actual: actual ? { period: actual.period, drawAt: actual.drawAt, numbers: actual.numbers, superNumber: actual.superNumber, size: actual.size, oddEven: actual.oddEven } : null,
-    dataBoundary: actual
-      ? `只使用第 ${training[training.length - 1]?.period || '最早'} 至第 ${training[0]?.period || '無'} 期資料，不使用目標期結果。`
-      : `只使用目前已取得的 ${training.length} 期歷史資料；指定時間沒有官方實際開獎結果。`,
+    dataBoundary: `只使用目前已取得的 ${training.length} 期歷史資料；指定時間沒有官方實際開獎結果。`,
   };
 }
 
@@ -978,15 +970,14 @@ const server = http.createServer(async (req, res) => {
   if (req.method === 'GET' && req.url.startsWith('/api/calculate')) {
     try {
       const requestUrl = new URL(req.url, 'http://localhost');
-      const period = requestUrl.searchParams.get('period') || '';
       const at = requestUrl.searchParams.get('at') || '';
-      if (!period && !at) return send(res, 400, { error: '請提供 period 或 at' }, req);
+      if (!at) return send(res, 400, { error: '請提供 at' }, req);
       let persisted = await readPersistedCached(10000);
       if (!persisted.length) {
         await latest(30, []);
         persisted = await readPersistedCached(10000);
       }
-      return send(res, 200, calculateSpecifiedTarget(persisted, { period, at }), req);
+      return send(res, 200, calculateSpecifiedTime(persisted, at), req);
     } catch (error) { return send(res, 422, { error: error instanceof Error ? error.message : '指定期數計算失敗' }, req); }
   }
   send(res, 404, { error: 'Not found' });

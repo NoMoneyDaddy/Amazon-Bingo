@@ -2810,8 +2810,9 @@ function refreshInBackground(persisted, days = 1) {
         // 統一走 persistedResponse：它同時處理最新模型缺失、歷史模型補建與三種回測模式，
         // 避免「有模型」與「無模型」各自走不同、容易漏掉的修復分支。
         const recovered = await persistedResponse(persisted);
-        await persistSnapshots([recovered]);
+        // 先更新記憶體快取，讓下一次首頁請求立即看到回測；資料庫寫入放在後面，避免慢寫入再次遮蔽結果。
         writeLatestResponseCache('latest-1', recovered);
+        await persistSnapshots([recovered]);
       } catch (error) {
         console.error(JSON.stringify({ event: 'background-evaluation-failed', message: error instanceof Error ? error.message : '回測補寫失敗' }));
       } finally {

@@ -601,30 +601,9 @@ function BacktestEvidence({
 
 function ProfitabilityDetail({
   best,
-  mode,
 }: {
   best: ProfitabilityPlay["best"];
-  mode: "period" | "summary";
 }) {
-  if (mode === "period") {
-    return (
-      <div className="border-t border-slate-800 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground">
-        <div className="mb-1 text-center font-semibold text-slate-200">最近 10 期逐期結果</div>
-        {best.periodResults?.length ? (
-          <div className="grid grid-cols-2 gap-1.5 sm:grid-cols-5">
-            {best.periodResults.map((item) => (
-              <div key={item.period} className="rounded-md bg-background/40 px-1.5 py-1 text-center">
-                <div className="text-slate-300">第 {item.period.slice(-4)} 期</div>
-                <div className={`font-semibold tabular-nums ${item.profitable ? "text-emerald-300" : "text-rose-300"}`}>
-                  {item.profitable ? "盈利 " : "未盈利 "}{formatNetProfit(item.net)}
-                </div>
-              </div>
-            ))}
-          </div>
-        ) : <div className="text-center">尚無逐期回測資料</div>}
-      </div>
-    );
-  }
   return (
     <div className="grid gap-1.5 border-t border-slate-800 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground sm:grid-cols-4">
       <span>有效回測期數：<strong className="tabular-nums text-slate-200">{best.samples} 期</strong></span>
@@ -635,6 +614,11 @@ function ProfitabilityDetail({
       <span>總成本：<strong className="tabular-nums text-slate-200">{formatNetProfit(-best.costTotal)}</strong></span>
       <span>平均命中：<strong className="tabular-nums text-slate-200">{best.samples ? (best.matches / best.samples).toFixed(1) : "—"}{best.targetCount > 1 ? ` / ${(best.targetCount / best.samples).toFixed(0)}` : ""}</strong></span>
       <span className={best.positiveExpected ? "text-emerald-300" : "text-rose-300"}>{best.positiveExpected ? "正期望：平均每期淨盈利" : "未達正期望：僅供比較"}</span>
+      <div className="col-span-full mt-1 border-t border-slate-800 pt-1 text-center">
+        <span className="font-semibold text-slate-200">10期逐期結果：</span>{best.periodResults?.length
+          ? best.periodResults.map((item) => <span key={item.period} className={item.profitable ? "ml-1 text-emerald-300" : "ml-1 text-rose-300"}>{item.period.slice(-4)} {formatNetProfit(item.net)}</span>)
+          : " 尚無資料"}
+      </div>
     </div>
   );
 }
@@ -742,17 +726,16 @@ function modelPlainLanguage(name: string) {
 
 const UI_PREFERENCES_KEY = "bingoResearch.uiPreferences.v2";
 
-function readUiPreferences(): { expandedPlayDetails: string[]; profitDisplayMode: "period" | "summary"; profitStrategy: ProfitStrategy } {
-  if (typeof window === "undefined") return { expandedPlayDetails: [], profitDisplayMode: "summary", profitStrategy: "fixed" };
+function readUiPreferences(): { expandedPlayDetails: string[]; profitStrategy: ProfitStrategy } {
+  if (typeof window === "undefined") return { expandedPlayDetails: [], profitStrategy: "fixed" };
   try {
     const value = JSON.parse(window.localStorage.getItem(UI_PREFERENCES_KEY) || "{}");
     return {
       expandedPlayDetails: Array.isArray(value?.expandedPlayDetails) ? value.expandedPlayDetails : [],
-      profitDisplayMode: value?.profitDisplayMode === "period" ? "period" : "summary",
       profitStrategy: value?.profitStrategy === "follow" ? "follow" : "fixed",
     };
   } catch {
-    return { expandedPlayDetails: [], profitDisplayMode: "summary", profitStrategy: "fixed" };
+    return { expandedPlayDetails: [], profitStrategy: "fixed" };
   }
 }
 
@@ -773,15 +756,14 @@ export function BingoResearchView() {
   const [page, setPage] = useState<Page>("overview");
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const [expandedPlayDetails, setExpandedPlayDetails] = useState<string[]>(() => readUiPreferences().expandedPlayDetails);
-  const [profitDisplayMode, setProfitDisplayMode] = useState<"period" | "summary">(() => readUiPreferences().profitDisplayMode);
   const [profitStrategy, setProfitStrategy] = useState<ProfitStrategy>(() => readUiPreferences().profitStrategy);
   useEffect(() => {
     try {
-      window.localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({ expandedPlayDetails, profitDisplayMode, profitStrategy }));
+      window.localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({ expandedPlayDetails, profitStrategy }));
     } catch {
       // 私密瀏覽或儲存空間受限時，維持當次畫面的狀態即可。
     }
-  }, [expandedPlayDetails, profitDisplayMode, profitStrategy]);
+  }, [expandedPlayDetails, profitStrategy]);
   const latest = sorted[0];
   const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
   const latestModels = useMemo(
@@ -1048,7 +1030,7 @@ export function BingoResearchView() {
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 以下是「淨盈利大於 0」的回測統計，不是實際中獎機率；可切換「固定連買10期」或「連續跟買10期」。
+                    {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 以下是「淨盈利大於 0」的回測統計，不是實際中獎機率；可切換固定連買或連續跟買。
                   </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
                     <div className="grid grid-cols-[5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)]">
@@ -1064,6 +1046,7 @@ export function BingoResearchView() {
                         <span>/</span>
                         <button type="button" className={profitStrategy === "follow" ? "font-bold text-cyan-200" : "text-muted-foreground"} onClick={() => setProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>跟買</button>
                       </span>
+                      <span className="text-center sm:hidden">盈利</span>
                       <span className="hidden text-center sm:inline">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (
@@ -1079,24 +1062,18 @@ export function BingoResearchView() {
                         className="min-w-0 max-w-full border-b border-slate-800 last:border-b-0"
                       >
                         <summary className="grid min-w-0 max-w-full cursor-pointer list-none grid-cols-[5rem_minmax(0,1fr)_8.3rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
-                          {(() => {
-                            const best = profitStrategy === "fixed" ? (play.fixed || play.best) : (play.follow || play.best);
-                            return <>
+                          {(() => { const best = profitStrategy === "fixed" ? (play.fixed || play.best) : (play.follow || play.best); return <>
                           <span className="min-w-0 shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">{play.label}</span>
                           <div className="min-w-0 max-w-full">
                             <PredictionValue value={best.prediction} />
                             <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">點擊看回測</span>
                           </div>
                           <span className="text-right text-[10px] font-semibold leading-4 text-amber-200 sm:text-xs">
-                            {best.samples ? profitDisplayMode === "period"
-                              ? <><span className="block">逐期明細</span><span className="block font-normal tabular-nums text-slate-300">{best.wins}/{best.samples} 期盈利</span></>
-                              : <><span className="block">10期盈利率 {(best.wins / best.samples * 100).toFixed(1)}%</span><span className="block font-normal tabular-nums text-slate-300">盈利 {best.wins} 期／共 {best.samples} 期</span><span className={`block font-normal tabular-nums ${best.profit > 0 ? "text-emerald-300" : "text-rose-300"}`}>10期淨賺賠 {formatNetProfit(best.profit)}</span></>
-                              : "尚無回測資料"}
+                            {best.samples ? <><span className="block">盈利機率 {(best.wins / best.samples * 100).toFixed(1)}%</span><span className="block font-normal tabular-nums text-slate-300">正盈利 {best.wins} 期／共 {best.samples} 期</span><span className={`block font-normal tabular-nums ${best.profit > 0 ? "text-emerald-300" : "text-rose-300"}`}>累計賺賠 {formatNetProfit(best.profit)}</span></> : "尚無回測資料"}
                           </span>
-                            </>;
-                          })()}
+                          </>; })()}
                         </summary>
-                        <ProfitabilityDetail best={profitStrategy === "fixed" ? (play.fixed || play.best) : (play.follow || play.best)} mode={profitDisplayMode} />
+                        <ProfitabilityDetail best={profitStrategy === "fixed" ? (play.fixed || play.best) : (play.follow || play.best)} />
                       </details>
                     ))}
                   </div>

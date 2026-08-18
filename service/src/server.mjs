@@ -977,8 +977,8 @@ function profitabilityEvaluation(history = []) {
           return model ? history.slice(0, profitabilityBacktestWindow).map((actual) => ({ actual, model })) : [];
         })()
         : history.slice(0, profitabilityBacktestWindow).flatMap((actual, index) => {
-          const predictor = history[index + 1]?.models?.find((item) => item.name === currentModel.name);
-          return predictor ? [{ actual, model: predictor }] : [];
+          const model = history[index + 1]?.models?.find((item) => item.name === currentModel.name);
+          return model ? [{ actual, model }] : [];
         });
       let wins = 0; let trials = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;
       const periodResults = [];

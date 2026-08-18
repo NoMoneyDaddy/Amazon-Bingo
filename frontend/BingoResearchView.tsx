@@ -1134,6 +1134,32 @@ export function BingoResearchView() {
     },
     [latest, latestModels],
   );
+  const modelRankings = useMemo(() => {
+    const selectedCount = new Map<string, number>();
+    bestPlays.forEach((play) => {
+      const selected = profitStrategy === "fixed" ? (play.fixed || play.best) : (play.follow || play.best);
+      if (selected?.model && selected.model !== "—") selectedCount.set(selected.model, (selectedCount.get(selected.model) || 0) + 1);
+    });
+    return latestModels
+      .filter((model) => model.name !== "多模型聚合")
+      .map((model) => {
+        const evidence = Object.values(model.calculation?.evolution || {}).filter((item) => Number(item.trials || item.validationSamples || 0) > 0);
+        const trials = evidence.reduce((sum, item) => sum + Number(item.trials || item.validationSamples || 0), 0);
+        const wins = evidence.reduce((sum, item) => sum + Number(item.wins || 0), 0);
+        const scores = evidence.map((item) => Number(item.score)).filter(Number.isFinite);
+        const weight = Number(model.calculation?.empiricalWeight);
+        return {
+          model,
+          trials,
+          wins,
+          rate: trials ? wins / trials : null,
+          score: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
+          weight: Number.isFinite(weight) ? weight : null,
+          selected: selectedCount.get(model.name) || 0,
+        };
+      })
+      .sort((a, b) => (b.selected - a.selected) || ((b.score ?? -Infinity) - (a.score ?? -Infinity)) || ((b.weight ?? -Infinity) - (a.weight ?? -Infinity)) || a.model.name.localeCompare(b.model.name));
+  }, [bestPlays, latestModels, profitStrategy]);
   const technicalAnalysisFallback = useMemo(() => {
     const draws = sorted.slice(0, 30);
     const frequency = new Map<string, number>();
@@ -1464,6 +1490,27 @@ export function BingoResearchView() {
                       <div><span className="block text-[10px] text-muted-foreground">回測樣本</span><strong className="text-sm tabular-nums text-cyan-50">10 期</strong></div>
                       <div><span className="block text-[10px] text-muted-foreground">目前模式</span><strong className="text-sm text-cyan-50">{profitStrategy === "fixed" ? "固定連買" : "連續跟買"}</strong></div>
                     </div>
+                    <details className="mt-3 border-t border-cyan-300/15 pt-2">
+                      <summary className="cursor-pointer select-none text-xs font-semibold text-cyan-100">模型排名與透明度 <span className="ml-1 text-[10px] font-normal text-muted-foreground">{modelRankings.length} 個模型</span></summary>
+                      <div className="mt-2 space-y-1.5">
+                        {modelRankings.slice(0, 8).map((item, index) => (
+                          <div key={item.model.name} className="rounded-lg border border-cyan-300/15 bg-background/35 px-2.5 py-2 text-[10px] leading-4">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="min-w-0 truncate font-semibold text-slate-100">{index + 1}. {item.model.name}</span>
+                              <span className="shrink-0 text-indigo-200">權重 {item.weight == null ? "—" : `${(item.weight * 100).toFixed(1)}%`}</span>
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-muted-foreground">
+                              <span>驗證樣本 {item.trials || "—"}</span>
+                              <span>驗證命中 {item.trials ? `${item.wins}/${item.trials}` : "—"}</span>
+                              <span>驗證率 {item.rate == null ? "—" : `${(item.rate * 100).toFixed(1)}%`}</span>
+                              <span>採用玩法 {item.selected || "—"}</span>
+                            </div>
+                          </div>
+                        ))}
+                        {!modelRankings.length ? <div className="rounded-lg border border-dashed border-cyan-300/20 px-2.5 py-2 text-muted-foreground">模型排名資料尚未回傳</div> : null}
+                      </div>
+                      <p className="mt-2 text-[10px] leading-4 text-muted-foreground">排名優先看被玩法選用次數，再看樣本外驗證分數；缺少驗證樣本時顯示「—」，不把未知資料當成 0。</p>
+                    </details>
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-cyan-300/15 pt-2">
                       <span className="text-[10px] font-semibold text-cyan-200">切換回測模式</span>
                       <div className="flex min-h-10 w-full rounded-lg border border-cyan-300/25 bg-background/40 p-1 sm:w-auto" role="group" aria-label="回測模式">

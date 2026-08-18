@@ -11,6 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 300;
+const liveModelHistoryLimit = 180;
 const profitabilityBacktestWindow = 10;
 // 顯示回測維持 10 期；模型調參另用較長樣本，並保留最新 10 期作為未參與調參的隔離窗口。
 const minimumValidationSamples = 18;
@@ -2341,7 +2342,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         const isNextPrediction = index === 0;
         const modelCastingAt = isNextPrediction ? predictionCastingAt : castingAt;
         const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt, castingAt: modelCastingAt } : { ...item, castingAt };
-        const modelHistory = rawHistory.slice(index + 1, index + maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
+        const modelHistory = rawHistory.slice(index + 1, index + liveModelHistoryLimit + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
         // 同步只重新計算最新一期的「當期 → 下一期」模型。
         // 舊歷史模型若已存在就保留；同步歷史資料不應逐期重新啟動 worker，否則 31 日查詢會阻塞首屏。
         const previous = historyByPeriod.get(String(item.period));
@@ -2446,7 +2447,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
 function refreshInBackground(persisted, days = 1) {
   if (refreshInFlight) return;
   refreshInFlight = true;
-  void latest(days, persisted)
+  void latest(days, persisted, '', { deferEvaluationModels: true })
     .then((result) => {
       if (days === 1) writeLatestResponseCache('latest-1', result);
       return result;
@@ -2485,7 +2486,7 @@ async function scheduledSync(forceRepair = false) {
     const persisted = await readPersistedCached(persistedHistoryLimit);
     const requestedDays = forceRepair || !persisted.length || !hasRetentionCoverage(persisted, retentionDays) ? retentionDays : 1;
     const refreshDays = requestedDays === 1 && persisted.length < persistedHistoryLimit ? 30 : requestedDays;
-    const result = await latest(refreshDays, persisted);
+    const result = await latest(refreshDays, persisted, '', { deferEvaluationModels: true });
     console.log(JSON.stringify({ event: 'sync-ok', period: result.period, historyDays: result.historyDays, persisted: Boolean(pool) }));
   } catch (error) {
     console.error(JSON.stringify({ event: 'sync-failed', message: error instanceof Error ? error.message : '同步失敗' }));

@@ -823,6 +823,25 @@ function deriveSnapshot(period, numbers, source, drawAt = '') {
   };
 }
 
+function normalizeSourceDrawTimes(history, fallbackDate = taipeiDateKey(0)) {
+  const validDate = (value) => {
+    const text = String(value || '').replaceAll('/', '-').slice(0, 10);
+    return /^\d{4}-\d{2}-\d{2}$/.test(text) && !text.startsWith('0001-');
+  };
+  const byDate = new Map();
+  history.forEach((item) => {
+    const date = validDate(item.drawAt) ? String(item.drawAt).replaceAll('/', '-').slice(0, 10) : fallbackDate;
+    const period = Number(item.period);
+    const first = byDate.get(date);
+    if (Number.isFinite(period) && (!Number.isFinite(first) || period < first)) byDate.set(date, period);
+  });
+  return history.map((item) => {
+    const date = validDate(item.drawAt) ? String(item.drawAt).replaceAll('/', '-').slice(0, 10) : fallbackDate;
+    const normalized = officialDrawDateTime(date, item.period, byDate.get(date));
+    return normalized ? { ...item, drawAt: normalized } : item;
+  });
+}
+
 function parseOfficialPage(html) {
   const text = cleanHtml(html);
   const period = text.match(/第\s*(\d{7,9})\s*期/)?.[1];
@@ -2001,7 +2020,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const stat = updateSourceStat(attempt.name, true, latencyMs, snapshot.period);
       health.push({ name: attempt.name, ok: true, latencyMs, records: (result.history || [snapshot]).length, latestPeriod: snapshot.period, stability: stat.success / (stat.success + stat.failure) });
       const syncedAt = Date.now();
-      const fetchedHistory = result.history || [snapshot];
+      const fetchedHistory = normalizeSourceDrawTimes(result.history || [snapshot]);
       const historyByPeriod = new Map(existingHistory.map((item) => [String(item.period), item]));
       fetchedHistory.forEach((item) => {
         const previous = historyByPeriod.get(String(item.period));
@@ -2009,7 +2028,9 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           ? { ...previous, ...item, superNumber: item.superNumber || previous.superNumber, size: item.size || previous.size, oddEven: item.oddEven || previous.oddEven }
           : item);
       });
-      const allHistory = [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period));
+      const allHistory = normalizeSourceDrawTimes(
+        [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period)),
+      );
       // 同步與模型只處理最近 31 日；更早資料已存在資料庫，不必每次重新計算。
       const rawHistory = selectRecentHistory(allHistory, retentionDays);
       const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);

@@ -316,6 +316,94 @@ function normalizeCategory(value: string) {
   return text === "－" || text === "-" || text === "和局" ? "和" : text;
 }
 
+function localCategory(draw: DrawSnapshot, field: "size" | "oddEven") {
+  const count = field === "size"
+    ? draw.numbers.filter((value) => Number(value) >= 41).length
+    : draw.numbers.filter((value) => Number(value) % 2 === 1).length;
+  if (count >= 13) return field === "size" ? "大" : "單";
+  if (count <= 7) return field === "size" ? "小" : "雙";
+  return "和";
+}
+
+function localPrediction(history: DrawSnapshot[], field: "size" | "oddEven") {
+  const allowed = field === "size" ? ["大", "小"] : ["單", "雙"];
+  const counts = Object.fromEntries(allowed.map((value) => [value, 0]));
+  history.slice(0, 60).forEach((draw) => {
+    const value = localCategory(draw, field);
+    if (value in counts) counts[value] += 1;
+  });
+  return counts[allowed[0]] >= counts[allowed[1]] ? allowed[0] : allowed[1];
+}
+
+function localNumberPrediction(history: DrawSnapshot[], count: number) {
+  const frequencies = new Map<number, number>();
+  history.slice(0, 60).forEach((draw) => draw.numbers.forEach((value) => {
+    const number = Number(value);
+    frequencies.set(number, (frequencies.get(number) || 0) + 1);
+  }));
+  return Array.from({ length: 80 }, (_, index) => index + 1)
+    .sort((a, b) => (frequencies.get(b) || 0) - (frequencies.get(a) || 0) || a - b)
+    .slice(0, count).sort((a, b) => a - b).map((value) => String(value).padStart(2, "0"));
+}
+
+function localModel(history: DrawSnapshot[], targetPeriod: string): Model {
+  const size = localPrediction(history, "size");
+  const oddEven = localPrediction(history, "oddEven");
+  const basic: Record<string, string[]> = {};
+  for (let count = 1; count <= 10; count += 1) basic[`${count}星`] = localNumberPrediction(history, count);
+  const prediction: Model = {
+    name: "民俗統計基線", status: "官方資料備援計算", rule: "只使用目標期以前的官方開獎資料；大小／單雙為二分類，不產生和局預測。",
+    sources: [{ name: "台灣彩券官方 API", url: OFFICIAL_API_URL }],
+    calculation: { algorithmVersion: "bingo-local-fallback-v1", historySamples: history.length, predictionEligible: true },
+    official: { size, oddEven, superNumber: localNumberPrediction(history, 1)[0] || "", basic },
+    research: { numberPicks: basic["10星"] || [], sumBand: "—", oddEvenCount: "—", highLowCount: "—", zones: [] },
+  };
+  return prediction;
+}
+
+function localProfitability(history: DrawSnapshot[]) {
+  const rows = [
+    { key: "size", label: "猜大小", cost: 25 },
+    { key: "oddEven", label: "猜單雙", cost: 25 },
+    ...Array.from({ length: 10 }, (_, index) => ({ key: `${index + 1}星`, label: `${index + 1} 星`, cost: 25 })),
+  ];
+  return rows.map((play) => {
+    const periods = history.slice(0, 30).map((actual, index) => {
+      const prior = history.slice(index + 1);
+      const model = localModel(prior, actual.period);
+      const predicted = play.key === "size" ? model.official.size : play.key === "oddEven" ? model.official.oddEven : model.official.basic[play.key] || [];
+      let payout = 0;
+      if (play.key === "size" || play.key === "oddEven") {
+        const observed = localCategory(actual, play.key);
+        payout = observed !== "和" && predicted === observed ? 150 : 0;
+      } else {
+        const actualSet = new Set(actual.numbers);
+        const matches = (predicted as string[]).filter((value) => actualSet.has(value)).length;
+        const payoutTable: Record<string, Record<number, number>> = { "1星": { 1: 50 }, "2星": { 1: 25, 2: 75 }, "3星": { 2: 50, 3: 500 }, "4星": { 2: 25, 3: 100, 4: 1000 } };
+        payout = payoutTable[play.key]?.[matches] || 0;
+      }
+      const net = payout - play.cost;
+      return { period: actual.period, payout, net, profitable: net > 0 };
+    });
+    const profit = periods.reduce((sum, item) => sum + item.net, 0);
+    return { key: play.key, label: play.label, metricLabel: "官方資料備援逐期回測", best: { model: "民俗統計基線", samples: periods.length, wins: periods.filter((item) => item.profitable).length, profit, payoutTotal: periods.reduce((sum, item) => sum + item.payout, 0), costTotal: periods.length * play.cost, matches: 0, targetCount: 0, averageProfit: periods.length ? profit / periods.length : null, positiveExpected: profit > 0, profitRate: periods.length ? periods.filter((item) => item.profitable).length / periods.length : null, prediction: play.key === "size" ? localPrediction(history, "size") : play.key === "oddEven" ? localPrediction(history, "oddEven") : "—", periodResults: periods }, fixed: undefined, follow: undefined };
+  });
+}
+
+function enrichLocalFallback(rows: DrawSnapshot[]) {
+  const ordered = [...rows].sort((a, b) => Number(b.period) - Number(a.period));
+  const current = ordered[0];
+  const model = localModel(ordered.slice(1), String(Number(current.period) + 1));
+  return { ...current, models: [model], profitabilityEvaluation: localProfitability(ordered), history: ordered.map((item, index) => index === 0 ? { ...item, models: [model] } : item) };
+}
+
+function officialFallbackDrawTime(period: string, date: string, firstPeriod: number) {
+  const offset = Number(period) - firstPeriod;
+  if (!Number.isInteger(offset) || offset < 0 || offset > 202) return date;
+  const totalMinutes = 425 + offset * 5;
+  return `${date} ${String(Math.floor(totalMinutes / 60)).padStart(2, "0")}:${String(totalMinutes % 60).padStart(2, "0")}`;
+}
+
 async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Promise<DrawSnapshot> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 1; attempt += 1) {
@@ -336,7 +424,9 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
         ? payload.history.map((item) => normalizeSnapshot(item))
         : [normalizeSnapshot(payload)];
       const latest = normalizeSnapshot({ ...payload, history });
-      return { ...latest, history };
+      return latest.models.length && latest.profitabilityEvaluation?.length
+        ? { ...latest, history }
+        : enrichLocalFallback(history);
     } catch (error) {
       lastError = new Error(
         error instanceof Error && /abort|signal/i.test(error.message)
@@ -352,7 +442,7 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
     const response = await fetch(`${OFFICIAL_API_URL}?openDate=${taipeiDate}&pageNum=1&pageSize=500`, { cache: "no-store" });
     if (!response.ok) throw new Error("官方資料暫時無法更新");
     const payload = await response.json() as { content?: { bingoQueryResult?: Array<Record<string, unknown>> } };
-    const rows = (payload.content?.bingoQueryResult || [])
+    const rawRows = (payload.content?.bingoQueryResult || [])
       .filter((row) => Array.isArray(row.openShowOrder) && row.openShowOrder.length === 20)
       .map((row) => {
         const numbers = (row.openShowOrder as Array<string | number>).map(normalizeNumber);
@@ -360,7 +450,7 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
         const oddCount = numbers.filter((number) => Number(number) % 2 === 1).length;
         return normalizeSnapshot({
           period: String(row.drawTerm || ""),
-          drawAt: String(row.dDate || ""),
+          drawAt: "",
           numbers,
           superNumber: normalizeNumber(String(row.bullEyeTop || "")),
           size: bigCount >= 13 ? "大" : bigCount <= 7 ? "小" : "和",
@@ -374,8 +464,10 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
       })
       .filter((row) => row.period)
       .sort((a, b) => Number(b.period) - Number(a.period));
+    const firstPeriod = Math.min(...rawRows.map((row) => Number(row.period)).filter(Number.isFinite));
+    const rows = rawRows.map((row) => ({ ...row, drawAt: officialFallbackDrawTime(row.period, taipeiDate, firstPeriod) }));
     if (!rows.length) throw new Error("官方資料格式不完整");
-    return { ...rows[0], history: rows, historyDays: 1 };
+    return enrichLocalFallback(rows);
   } catch {
     throw lastError instanceof Error ? lastError : new Error("資料暫時無法更新");
   }

@@ -32,6 +32,9 @@ type Model = {
     empiricalWeight?: number;
     empiricalWeights?: Record<string, number>;
     evolution?: Evolution;
+    commonCasting?: string;
+    commonCastingValue?: string;
+    targetRules?: Record<string, string>;
     targetCastings?: Record<string, string>;
     targetCastingValues?: Record<string, string>;
   };
@@ -657,13 +660,10 @@ export function BingoResearchView() {
                       <div className="mt-1 text-xs text-amber-100">{model.status || "狀態未提供"}</div>
                       <p className="mt-2 text-sm leading-6 text-slate-300">{modelPlainLanguage(model.name)}</p>
                       <div className="mt-3 rounded-xl border border-border bg-card p-3 text-xs leading-6 text-muted-foreground">
-                        <div className="mb-1 font-semibold text-cyan-200">計算輸入</div>
-                        <span className="text-foreground">起卦依據：</span>同一預測時刻共用時間起卦核心；各玩法／星級只作問題語境，再獨立套用研究排序與回測，不把期號／星級硬編碼成卦象。
-                        <div className="mt-2 space-y-1">
-                          {Object.entries(model.calculation?.targetCastings || {}).map(([target, formula]) => (
-                            <div key={target} className="break-words"><span className="text-amber-200">{targetLabel(target)}：</span>{formula}{model.calculation?.targetCastingValues?.[target] ? `｜結果：${model.calculation.targetCastingValues[target]}` : ""}</div>
-                          ))}
-                        </div>
+                        <div className="mb-1 font-semibold text-cyan-200">共同計算輸入</div>
+                        <div><span className="text-foreground">起卦核心：</span>{model.calculation?.commonCastingValue || "—"}</div>
+                        <div className="mt-1 break-words text-[11px]">{model.calculation?.commonCasting || "共同預測時間未提供"}</div>
+                        <div className="mt-2 text-[11px] text-amber-100">這組起卦只計算一次；下方每個玩法顯示的是獨立適配規則與回測，不是重新起卦。</div>
                       </div>
                       <div className="mt-3 border-t border-slate-800 pt-2 text-xs leading-5 text-slate-300">
                         本模型候選：{model.research.numberPicks.join("、")} · 區間：{model.research.zones.join("、")} · 總和：{model.research.sumBand}
@@ -682,19 +682,18 @@ export function BingoResearchView() {
                                   : result.numberPicks.join("、");
                               const weight = model.calculation?.empiricalWeights?.[target];
                               const score = model.calculation?.evolution?.[target]?.score;
-                              const castingValue = model.calculation?.targetCastingValues?.[target];
                               return (
                                 <div key={target} className="rounded-xl border border-amber-300/20 bg-card/70 px-2.5 py-2.5 text-[11px]">
                                   <div className="flex items-center justify-between gap-2">
                                     <span className="rounded-md bg-amber-300/15 px-1.5 py-0.5 font-semibold text-amber-100">{targetLabel(target)}</span>
                                     <span className="max-w-[70%] truncate text-right font-bold tabular-nums text-cyan-200">{prediction || "—"}</span>
                                   </div>
-                                  <div className="mt-2 grid grid-cols-3 gap-1.5 text-[10px]">
+                                  <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px]">
                                     <div className="rounded-md bg-amber-300/10 px-1.5 py-1"><span className="block text-muted-foreground">歷史權重</span><span className="font-semibold tabular-nums text-amber-200">{weight == null ? "—" : `${(weight * 100).toFixed(0)}%`}</span></div>
                                     <div className="rounded-md bg-cyan-300/10 px-1.5 py-1"><span className="block text-muted-foreground">正盈利率</span><span className="font-semibold tabular-nums text-cyan-200">{score == null ? "—" : `${(score * 100).toFixed(1)}%`}</span></div>
-                                    <div className="rounded-md bg-slate-700/40 px-1.5 py-1"><span className="block text-muted-foreground">卦象結果</span><span className="block truncate font-semibold text-slate-200">{castingValue || "—"}</span></div>
                                   </div>
-                                  <div className="mt-1.5 text-muted-foreground">{result.sumBand} · {result.oddEvenCount} · {result.highLowCount}</div>
+                                  <div className="mt-1.5 rounded-md bg-slate-700/40 px-1.5 py-1 text-muted-foreground"><span className="text-slate-200">玩法適配：</span>{model.calculation?.targetRules?.[target] || "—"}</div>
+                                  <div className="mt-1.5 text-muted-foreground">研究描述：{result.sumBand} · {result.oddEvenCount} · {result.highLowCount}</div>
                                 </div>
                               );
                             })}

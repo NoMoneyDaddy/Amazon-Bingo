@@ -313,18 +313,38 @@ function historicalFrequencies(history) {
   return counts.map((count) => count / total);
 }
 
+function deterministicTie(seed, number) {
+  const digest = createHash('sha256').update(`${seed}|${number}`).digest('hex').slice(0, 8);
+  return Number.parseInt(digest, 16) / 0xffffffff;
+}
+
+function targetAdapterSignal(number, target, tradition) {
+  const targetNo = playIndex(target);
+  const row = Math.floor((number - 1) / 10);
+  const col = (number - 1) % 10;
+  const upper = tradition.upper ?? tradition.palace ?? tradition.center ?? tradition.digits?.[0] ?? tradition.cycle ?? 1;
+  const lower = tradition.lower ?? tradition.star ?? tradition.cycle ?? tradition.palace ?? 1;
+  const moving = tradition.moving ?? tradition.door ?? tradition.palace ?? 1;
+  if (target === 'superNumber') {
+    return (number % 10 === moving % 10 ? 0.32 : 0)
+      + (number % 8 === upper ? 0.24 : 0)
+      + (row === lower % 8 ? 0.12 : 0);
+  }
+  // 星級不是另一套起卦法：它只決定候選集合大小，並用固定、可解釋的區段／位置適配。
+  const zone = (upper + lower + moving + targetNo) % 4;
+  const zoneHit = Math.floor((number - 1) / 20) === zone;
+  const diagonal = (row + col + moving + targetNo) % 4 === 0;
+  const remainder = number % (targetNo + 3) === (upper + targetNo) % (targetNo + 3);
+  return (zoneHit ? 0.18 : 0) + (diagonal ? 0.08 : 0) + (remainder ? 0.12 : 0);
+}
+
 function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, target = '') {
   const frequencies = historicalFrequencies(history);
-  const random = seededRandom(seed);
-  const targetNo = playIndex(target);
   const values = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
-    const row = Math.floor((number - 1) / 10);
-    const col = (number - 1) % 10;
-    const parity = number % 2 ? 1 : -1;
     const traditional = tradition.kind === 'luoshu'
-      ? (1 - Math.abs((tradition.center + row + col) % 9 - 4) / 4) * 0.55 + (number % tradition.center === 0 ? 0.2 : 0)
+      ? (1 - Math.abs((tradition.center + Math.floor((number - 1) / 10) + (number - 1) % 10) % 9 - 4) / 4) * 0.55 + (number % tradition.center === 0 ? 0.2 : 0)
       : tradition.kind === 'sixyao'
-        ? ((tradition.bits[(number + tradition.moving) % 6] === '1' ? 1 : -1) * parity * 0.12) + (number % 8 === tradition.lower ? 0.18 : 0)
+        ? ((tradition.bits[(number + tradition.moving) % 6] === '1' ? 1 : -1) * (number % 2 ? 1 : -1) * 0.12) + (number % 8 === tradition.lower ? 0.18 : 0)
         : tradition.kind === 'numeral-gua'
           ? (tradition.digits.includes(number % 10) ? 0.3 : 0) + (number % 6 === tradition.digits[number % 6] ? 0.18 : 0)
           : tradition.kind === 'qimen'
@@ -333,10 +353,9 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, t
               ? (number % 9 === tradition.palace - 1 ? 0.34 : 0) + (number % 9 === tradition.cycle ? 0.18 : 0)
               : ((number % 8 === tradition.upper ? 0.32 : 0) + (number % 6 === tradition.moving ? 0.16 : 0));
     const empirical = clamp(frequencies[number] / 0.25, 0, 1) * empiricalWeight;
-    // 玩法適配訊號：同一模型在不同星級／目標使用不同的數字排列特徵，避免所有玩法只共用一份排序。
-    const targetPulse = ((number * (targetNo + 3) + row * 5 + col * 7) % 19) / 19;
-    const targetWeight = target === 'superNumber' ? 0.2 : targetNo > 3 ? 0.14 : 0.1;
-    return { number, score: traditional * (1 - empiricalWeight) + empirical + targetPulse * targetWeight + random() * 0.04 };
+    const adapter = targetAdapterSignal(number, target, tradition);
+    const targetWeight = target === 'superNumber' ? 0.24 : 0.22;
+    return { number, score: traditional * (1 - empiricalWeight) + empirical + adapter * targetWeight + deterministicTie(seed, number) * 0.000001 };
   });
   return values.sort((a, b) => b.score - a.score || a.number - b.number).slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
 }
@@ -471,9 +490,33 @@ function traditionFor(kind, casting) {
 }
 
 function targetTraditionalCategory(casting, target, seed) {
-  const value = casting.upper || casting.palace || casting.center || casting.digits?.[0] || casting.cycle || seed;
+  const values = [casting.upper, casting.lower, casting.moving, casting.palace, casting.center, casting.digits?.[0], casting.cycle].filter(Number.isFinite);
+  const value = values.reduce((sum, item) => sum + item, 0) || seed;
   if (target === 'size') return value % 2 === 0 ? '大' : '小';
-  return value % 2 === 0 ? '雙' : '單';
+  return (value + (casting.moving || 0)) % 2 === 0 ? '雙' : '單';
+}
+
+function targetRule(target) {
+  if (target === 'size') return '二分類適配：以共同卦數與動爻映射大／小，再與歷史大小比例融合；不是把大小當號碼集合。';
+  if (target === 'oddEven') return '二分類適配：以共同卦數與動爻映射單／雙，再與歷史單雙比例融合；和局保留為未知／不偏。';
+  if (target === 'superNumber') return '單號適配：以卦數、動爻與位置特徵排序 1 個候選，另以歷史超級號碼作獨立權重。';
+  const count = Number(String(target).replace('星', ''));
+  return `${count} 星適配：共同卦象只提供排序特徵，依固定區段、位置與歷史頻率排序，取 ${count} 個候選；不宣稱卦象直接推出號碼。`;
+}
+
+function summarizePick(numbers) {
+  const parsed = numbers.map(Number).filter(Number.isFinite);
+  if (!parsed.length) return { sumBand: '—', oddEvenCount: '—', highLowCount: '—', zones: [] };
+  const sum = parsed.reduce((total, number) => total + number, 0);
+  const odd = parsed.filter((number) => number % 2 === 1).length;
+  const high = parsed.filter((number) => number >= 41).length;
+  const zones = [...new Set(parsed.map((number) => `${Math.floor((number - 1) / 20) * 20 + 1}-${Math.floor((number - 1) / 20) * 20 + 20}`))];
+  return {
+    sumBand: sum / parsed.length < 27 ? '低區' : sum / parsed.length > 54 ? '高區' : '中區',
+    oddEvenCount: odd > parsed.length / 2 ? '單數偏多' : odd < parsed.length / 2 ? '雙數偏多' : '均衡',
+    highLowCount: high > parsed.length / 2 ? '大號偏多' : high < parsed.length / 2 ? '小號偏多' : '均衡',
+    zones,
+  };
 }
 
 function aggregateModel(models, history) {
@@ -544,7 +587,9 @@ export function buildModels(snapshot, history = [], options = {}) {
   const baseModels = methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
     const weights = Object.fromEntries(predictionTargets.map((target) => [target, targetProfile(profiles, method.name, target).empiricalWeight ?? 0.32]));
-    const targetCastings = Object.fromEntries(predictionTargets.map((target) => [target, castingFor(method.kind, snapshot, target, castingAt)]));
+    // 起卦只做一次。玩法／星級是下游適配器，不再重複製造看似不同的起卦結果。
+    const commonCasting = castingFor(method.kind, snapshot, '10星', castingAt);
+    const targetCastings = Object.fromEntries(predictionTargets.map((target) => [target, commonCasting]));
     const picksByTarget = Object.fromEntries(predictionTargets.filter((target) => target !== 'size' && target !== 'oddEven').map((target) => {
       const casting = targetCastings[target];
       const seed = `${castingAt}|${snapshot.period}|${method.kind}|${target}|${method.seedOffset}`;
@@ -553,18 +598,17 @@ export function buildModels(snapshot, history = [], options = {}) {
     }));
     const picks = picksByTarget['10星'] || scoreNumbers(`${castingAt}|${snapshot.period}|${method.kind}|10星`, 10, traditionFor(method.kind, targetCastings['10星']), history, weights['10星'], '10星');
     const modelSeed = playIndex('10星') + method.seedOffset;
-    const sumBand = ['低區', '中區', '高區'][modelSeed % 3];
-    const oddEvenCount = ['單數偏多', '雙數偏多', '均衡'][modelSeed % 3];
-    const highLowCount = ['小號偏多', '大號偏多', '均衡'][Math.floor(modelSeed / 3) % 3];
+    const pickSummary = summarizePick(picks);
+    const { sumBand, oddEvenCount, highLowCount } = pickSummary;
     const targetResearch = Object.fromEntries(predictionTargets.map((target) => {
-      const targetSeed = playIndex(target) + method.seedOffset;
       const targetPicks = picksByTarget[target] || [];
+      const targetSummary = summarizePick(targetPicks);
       return [target, {
         numberPicks: targetPicks,
-        sumBand: ['低區', '中區', '高區'][targetSeed % 3],
-        oddEvenCount: ['單數偏多', '雙數偏多', '均衡'][targetSeed % 3],
-        highLowCount: ['小號偏多', '大號偏多', '均衡'][Math.floor(targetSeed / 3) % 3],
-        zones: [`${(targetSeed % 4) * 20 + 1}-${(targetSeed % 4 + 1) * 20}`],
+        sumBand: targetSummary.sumBand,
+        oddEvenCount: targetSummary.oddEvenCount,
+        highLowCount: targetSummary.highLowCount,
+        zones: targetSummary.zones,
       }];
     }));
     return {
@@ -572,10 +616,10 @@ export function buildModels(snapshot, history = [], options = {}) {
       status: method.status,
       rule: `${method.status}；歷史頻率只做獨立統計排序，不修改傳統規則，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
-      calculation: { method: method.kind, castingSource: 'prediction-time', historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
+      calculation: { method: method.kind, castingSource: 'prediction-time-common', historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
         const casting = targetCastings[target];
         if (method.kind === 'sixyao') return [target, casting.lines.map((line) => line.value).join('、')];
-        if (method.kind === 'meihua') return [target, `上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];
+        if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];
         if (method.kind === 'qimen') return [target, `九宮${casting.palace}／九星${casting.star}／八門${casting.door}`];
         if (method.kind === 'taiyi') return [target, `行宮${casting.palace}／循環${casting.cycle}`];
         if (method.kind === 'luoshu') return [target, `宮位${casting.palace}／數${casting.center}`];

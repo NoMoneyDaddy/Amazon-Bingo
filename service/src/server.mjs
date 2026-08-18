@@ -1325,7 +1325,10 @@ function profitabilityEvaluation(history = []) {
           : followModels.find((item) => item.name === currentModel.name)
             || followModels.find((item) => item.name && item.name !== '多模型聚合')
             || currentModel;
-        const model = rebuildEvaluationModel(source, actual, training);
+        let model = rebuildEvaluationModel(source, actual, training);
+        if (!model && mode === 'follow' && source !== currentModel) {
+          model = rebuildEvaluationModel(currentModel, actual, training);
+        }
         if (model) rows.push({ actual, model });
       }
       let wins = 0; let trials = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;

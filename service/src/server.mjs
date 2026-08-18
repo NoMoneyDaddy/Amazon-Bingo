@@ -58,6 +58,7 @@ let databaseReady = false;
 let lastPersistedPeriod = '';
 let scheduledTimer;
 let refreshInFlight = false;
+let evaluationRefreshQueued = false;
 const persistedCache = new Map();
 const persistedReadInFlight = new Map();
 const compressedPayloadCache = new Map();
@@ -2723,7 +2724,10 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
 }
 
 function refreshInBackground(persisted, days = 1) {
-  if (refreshInFlight) return;
+  if (refreshInFlight) {
+    evaluationRefreshQueued = true;
+    return;
+  }
   refreshInFlight = true;
   // 已有正式模型但缺少回測時，只補寫評估快照；不要為了回測再次重跑模型。
   const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);
@@ -2742,6 +2746,10 @@ function refreshInBackground(persisted, days = 1) {
         console.error(JSON.stringify({ event: 'background-evaluation-failed', message: error instanceof Error ? error.message : '回測補寫失敗' }));
       } finally {
         refreshInFlight = false;
+        if (evaluationRefreshQueued) {
+          evaluationRefreshQueued = false;
+          setImmediate(() => refreshInBackground(persisted, 1));
+        }
       }
     })());
     return;
@@ -2752,7 +2760,13 @@ function refreshInBackground(persisted, days = 1) {
       return result;
     })
     .catch((error) => console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' })))
-    .finally(() => { refreshInFlight = false; });
+    .finally(() => {
+      refreshInFlight = false;
+      if (evaluationRefreshQueued) {
+        evaluationRefreshQueued = false;
+        setImmediate(() => refreshInBackground(persisted, 1));
+      }
+    });
 }
 
 function readLatestResponseCache(key) {

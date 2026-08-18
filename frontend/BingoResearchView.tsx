@@ -114,6 +114,12 @@ type DrawSnapshot = {
     verdict: string;
     caveat: string;
   };
+  backtestIntegrity?: {
+    checkedTargets: number;
+    violations: number;
+    passed: boolean;
+    rule: string;
+  };
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
 };
 type Page = "overview" | "process" | "history";
@@ -175,6 +181,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     backup: value.backup,
     audit: value.audit,
     behaviorAudit: value.behaviorAudit,
+    backtestIntegrity: value.backtestIntegrity,
     researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
   };
 }
@@ -838,6 +845,18 @@ export function BingoResearchView() {
                     </div>
                     <p className="mt-2 text-xs text-fuchsia-100">判讀：{latest.behaviorAudit.verdict}</p>
                     <p className="mt-1 text-[11px] text-muted-foreground">{latest.behaviorAudit.caveat}</p>
+                  </div>
+                )}
+                {latest?.backtestIntegrity && (
+                  <div className="mt-3 rounded-2xl border border-emerald-300/25 bg-emerald-300/10 p-4 text-sm leading-6 text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-emerald-100">資料防洩漏閘門</strong>
+                      <span className={`rounded-full px-2 py-1 text-xs tabular-nums ${latest.backtestIntegrity.passed ? "bg-emerald-300/15 text-emerald-100" : "bg-rose-300/15 text-rose-100"}`}>
+                        {latest.backtestIntegrity.passed ? "通過" : `發現 ${latest.backtestIntegrity.violations} 項問題`}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-emerald-100">已檢查 {latest.backtestIntegrity.checkedTargets} 個目標期；每個目標只使用更早資料，歷史模型不重用未驗證快取。</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{latest.backtestIntegrity.rule}</p>
                   </div>
                 )}
                 {latest?.researchEvidence?.length ? (

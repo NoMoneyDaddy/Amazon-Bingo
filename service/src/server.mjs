@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v40-feature-statistics';
+const reproducibilityVersion = 'bingo-research-v41-leakage-guard';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -422,6 +422,27 @@ function behaviorAudit(draws = []) {
     consecutiveShare,
     verdict: valid.length < 30 ? '樣本不足，僅供觀察' : '只描述歷史號碼形狀，不代表下一期存在行為因果',
     caveat: '玩家偏好可能影響選號集中與獎金分配，但不會改變官方開獎機制；本欄不納入預測加權。',
+  };
+}
+
+function leakageGuard(history = [], nextPeriod = '') {
+  const checks = [];
+  const horizon = Math.min(maxModelHistory, history.length - 1);
+  for (let index = 0; index <= horizon; index += 1) {
+    const targetPeriod = index === 0 ? String(nextPeriod) : String(history[index - 1]?.period || '');
+    const training = history.slice(index + 1, index + maxModelHistory + 1);
+    const targetNumber = Number(targetPeriod);
+    const leaked = training.some((draw) => {
+      const period = Number(draw.period);
+      return targetPeriod && ((Number.isFinite(targetNumber) && Number.isFinite(period) && period >= targetNumber) || String(draw.period) === targetPeriod);
+    });
+    checks.push({ targetPeriod, trainingCount: training.length, leaked });
+  }
+  return {
+    checkedTargets: checks.length,
+    violations: checks.filter((check) => check.leaked).length,
+    passed: checks.every((check) => !check.leaked),
+    rule: '每個目標期只使用更早期數；下一期預測排除最新開獎期與所有未來期數；不重用未驗證歷史模型快取。',
   };
 }
 
@@ -1070,11 +1091,11 @@ async function latest(daysOverride = null, existingHistory = []) {
         const modelCastingAt = isNextPrediction ? predictionCastingAt : castingAt;
         const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt, castingAt: modelCastingAt } : { ...item, castingAt };
         const modelHistory = rawHistory.slice(index + 1, index + maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
+        // 歷史回測一律重新計算，禁止重用可能由舊版本或錯誤資料集產生的模型快取。
+        // 歷史折只用固定預設權重以控制成本；下一期才在其目標期以前資料上做 walk-forward 調參。
         const models = index > maxModelHistory
           ? []
-          : index > 0 && item.models?.length
-            ? item.models
-            : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: isNextPrediction, castingAt: modelCastingAt });
+          : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: isNextPrediction, castingAt: modelCastingAt });
         history.push({
           ...item,
           drawAt,
@@ -1091,7 +1112,7 @@ async function latest(daysOverride = null, existingHistory = []) {
       const responseHistory = daysOverride && daysOverride > 1
         ? selectRecentHistory(history, retentionDays)
         : history.slice(0, fastResponseHistoryLimit);
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }
@@ -1112,13 +1133,10 @@ async function persistedResponse(persisted) {
     drawAt: formatTaipeiDateTime(new Date(predictionCastingAt)),
     castingAt: predictionCastingAt,
   };
-  const savedProfiles = Object.fromEntries((current.models || []).filter((model) => model.name && model.calculation?.empiricalWeights).map((model) => [model.name, {
-    targets: Object.fromEntries(Object.entries(model.calculation.empiricalWeights).map(([target, empiricalWeight]) => [target, { empiricalWeight }])),
-  }]));
-  // 首屏只使用已保存的模型，完整 walk-forward 權重由背景同步產生，避免首屏超時。
+  // 快取只提供開獎資料；不讀取舊模型權重，避免歷史版本把目標期或未來資料帶入預測。
   let models = current.models || [];
   try {
-    models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, profiles: savedProfiles, castingAt: predictionCastingAt });
+    models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, profiles: {}, castingAt: predictionCastingAt });
   } catch (error) {
     console.error(JSON.stringify({ event: 'cached-prediction-recompute-failed', message: error instanceof Error ? error.message : String(error) }));
   }
@@ -1135,6 +1153,7 @@ async function persistedResponse(persisted) {
     sourceHealth: current.sourceHealth || [],
     audit: researchAudit(visible.slice(1)),
     behaviorAudit: behaviorAudit(visible.slice(1)),
+    backtestIntegrity: leakageGuard(visible, targetPeriod),
     researchEvidence: researchEvidenceRegistry,
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
   };
@@ -1234,7 +1253,10 @@ const server = http.createServer(async (req, res) => {
       }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
       const hasUsableHistory = persisted.length >= persistedHistoryLimit;
-      if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory && forecastFresh) return send(res, 200, { ...persisted[0], history: selectRecentHistory(persisted, retentionDays), historyDays: retentionDays, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory && forecastFresh) {
+        const cached = await persistedResponse(persisted);
+        return send(res, 200, { ...cached, history: selectRecentHistory(persisted, retentionDays), historyDays: retentionDays });
+      }
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
       return send(res, 200, await latest(refreshDays, persisted), req);
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }

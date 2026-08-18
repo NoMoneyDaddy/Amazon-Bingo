@@ -88,7 +88,8 @@ type DrawSnapshot = {
   oddEven: string;
   source: string;
   sourceLabel: string;
-  sourceHealth: Array<{ name: string; ok: boolean; error?: string; latencyMs?: number; records?: number }>;
+  sourceHealth: Array<{ name: string; ok: boolean; error?: string; latencyMs?: number; records?: number; stability?: number | null; latestPeriod?: string }>;
+  sourceRanking?: Array<{ name: string; authority?: string; ok?: boolean | null; error?: string; latencyMs?: number | null; records?: number; latestPeriod?: string; stability?: number | null; freshness?: number | null; rankScore?: number }>;
   models: Model[];
   fetchedAt?: number;
   history?: DrawSnapshot[];
@@ -206,6 +207,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     source: value.source || "",
     sourceLabel: value.sourceLabel || "",
     sourceHealth: Array.isArray(value.sourceHealth) ? value.sourceHealth : [],
+    sourceRanking: Array.isArray(value.sourceRanking) ? value.sourceRanking : [],
     models: Array.isArray(value.models) ? value.models.map(normalizeModel) : [],
     fetchedAt: value.fetchedAt || 0,
     historyDays: value.historyDays,
@@ -801,6 +803,23 @@ export function BingoResearchView() {
                   <span className="whitespace-nowrap">{latest?.sourceHealth?.some((item) => item.ok) ? "官方來源正常" : "來源狀態未知"}</span>
                   <span className="whitespace-nowrap">{latest?.sourceHealth?.find((item) => item.ok)?.latencyMs == null ? "來源延遲—" : `來源延遲 ${latest.sourceHealth.find((item) => item.ok)?.latencyMs}ms`}</span>
                 </div>
+                {latest?.sourceRanking?.length ? (
+                  <details className="border border-cyan-300/20 bg-cyan-300/5 px-3 py-2 text-[10px] leading-5 text-muted-foreground">
+                    <summary className="cursor-pointer select-none font-semibold text-cyan-100">資料源排序：速度／穩定度／新鮮度</summary>
+                    <div className="mt-2 grid gap-1.5">
+                      {latest.sourceRanking.map((item, index) => (
+                        <div key={item.name} className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 rounded border border-border/60 bg-background/40 px-2 py-1">
+                          <span className="w-4 shrink-0 font-bold tabular-nums text-cyan-200">{index + 1}</span>
+                          <span className="min-w-[10rem] flex-1 font-medium text-slate-200">{item.name}</span>
+                          <span className="whitespace-nowrap">{item.latencyMs == null ? "未測速" : `${item.latencyMs}ms`}</span>
+                          <span className="whitespace-nowrap">穩定 {item.stability == null ? "—" : `${(item.stability * 100).toFixed(0)}%`}</span>
+                          <span className="whitespace-nowrap">{item.freshness == null ? "新鮮度—" : `新鮮度 ${(item.freshness * 100).toFixed(0)}%`}</span>
+                          <span className={`whitespace-nowrap ${item.ok === false ? "text-rose-300" : "text-emerald-300"}`}>{item.ok === false ? "失敗" : item.ok === true ? "正常" : "待測"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full border border-primary/40 bg-card p-3 shadow-none sm:p-4">
                   <div className="flex min-w-0 items-end justify-between gap-2">
                     <div className="min-w-0">

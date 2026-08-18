@@ -17,7 +17,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v56-fresh-latest-draw';
+const reproducibilityVersion = 'bingo-research-v57-ranked-data-sources';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -34,8 +34,11 @@ const basicPayouts = {
   "10星": { 10: 5000000, 9: 250000, 8: 25000, 7: 2500, 6: 250, 5: 25, 0: 25 },
 };
 const fallbackSources = [
-  { name: 'Pilio 賓果開獎查詢', url: 'https://www.pilio.idv.tw/bingo/list.asp' },
-  { name: 'Auzo 奧索樂透網', url: 'https://lotto.auzo.tw/bingobingo.php' },
+  { name: '台灣彩券官方網頁', url: sourceUrl, parser: 'officialPage', authority: 'official', initialRank: 100 },
+  { name: '168win 開獎網', url: 'https://www.168win.org/info/BingoBingo', parser: '168win', authority: 'mirror', initialRank: 80 },
+  { name: 'Pilio 賓果開獎查詢', url: 'https://www.pilio.idv.tw/bingo/list.asp', parser: 'mirror', authority: 'mirror', initialRank: 70 },
+  { name: 'Auzo 奧索樂透網', url: 'https://lotto.auzo.tw/bingobingo.php', parser: 'mirror', authority: 'mirror', initialRank: 60 },
+  { name: '台灣彩券開獎歷史（Timetable）', url: 'https://lottery.timetable.tw/bin-guo-bin-guo', parser: 'timetable', authority: 'mirror', initialRank: 40 },
 ];
 const databaseUrl = process.env.DATABASE_URL || '';
 const pool = databaseUrl ? new Pool({ connectionString: databaseUrl, max: 8, idleTimeoutMillis: 30_000, connectionTimeoutMillis: 3_000, query_timeout: 8_000, statement_timeout: 8_000 }) : null;
@@ -51,6 +54,54 @@ let refreshInFlight = false;
 const persistedCache = new Map();
 const persistedReadInFlight = new Map();
 const compressedPayloadCache = new Map();
+const sourceRuntimeStats = new Map();
+
+function sourceStat(name) {
+  if (!sourceRuntimeStats.has(name)) sourceRuntimeStats.set(name, { success: 0, failure: 0, latencyMs: null, latestPeriod: '' });
+  return sourceRuntimeStats.get(name);
+}
+
+function updateSourceStat(name, ok, latencyMs, period = '') {
+  const stat = sourceStat(name);
+  if (ok) stat.success += 1;
+  else stat.failure += 1;
+  stat.latencyMs = stat.latencyMs == null ? latencyMs : Math.round(stat.latencyMs * 0.7 + latencyMs * 0.3);
+  if (period) stat.latestPeriod = String(period);
+  return stat;
+}
+
+function sourceRankingScore(source, referencePeriod = '') {
+  const stat = sourceStat(source.name);
+  const total = stat.success + stat.failure;
+  const stability = total ? stat.success / total : 0.5;
+  const speed = stat.latencyMs == null ? 0.5 : 1 / (1 + stat.latencyMs / 1500);
+  const agePeriods = referencePeriod && stat.latestPeriod ? Math.max(0, Number(referencePeriod) - Number(stat.latestPeriod)) : 3;
+  const freshness = stat.latestPeriod ? Math.max(0, 1 - agePeriods / 3) : 0.2;
+  const authorityBonus = source.authority === 'official' ? 1000 : 0;
+  return authorityBonus + stability * 60 + speed * 25 + freshness * 15 + (source.initialRank || 0) / 100;
+}
+
+function sourceRanking(referencePeriod = '', currentHealth = []) {
+  const healthByName = new Map(currentHealth.map((item) => [item.name, item]));
+  const sources = [{ name: '台灣彩券官方 API', authority: 'official', initialRank: 1000 }, ...fallbackSources];
+  return sources.map((source) => {
+    const stat = sourceStat(source.name);
+    const total = stat.success + stat.failure;
+    const current = healthByName.get(source.name);
+    return {
+      name: source.name,
+      authority: source.authority,
+      ok: current?.ok ?? (total ? stat.failure === 0 : null),
+      error: current?.error,
+      latencyMs: current?.latencyMs ?? stat.latencyMs,
+      records: current?.records,
+      latestPeriod: stat.latestPeriod || '',
+      stability: total ? stat.success / total : null,
+      freshness: stat.latestPeriod && referencePeriod ? Math.max(0, 1 - Math.max(0, Number(referencePeriod) - Number(stat.latestPeriod)) / 3) : null,
+      rankScore: sourceRankingScore(source, referencePeriod),
+    };
+  }).sort((a, b) => b.rankScore - a.rankScore);
+}
 
 function logCombination(n, k) {
   if (!Number.isInteger(n) || !Number.isInteger(k) || k < 0 || k > n) return -Infinity;
@@ -650,6 +701,33 @@ function parseOfficialPage(html) {
   const oddEven = oddEvenRaw === '－' || oddEvenRaw === '-' ? '和' : oddEvenRaw;
   if (!period || !numbers) throw new Error('官方頁面格式變更，無法解析完整開獎資料');
   return { period, drawAt, numbers: numbers[1].trim().split(/\\s+/).map((n) => n.padStart(2, '0')), superNumber: numbers[2].padStart(2, '0'), size, oddEven };
+}
+
+function parse168WinPage(html, sourceName) {
+  const period = html.match(/期號[：:]\s*(\d{7,9})/)?.[1];
+  const drawAt = html.match(/開獎時間[：:]\s*(\d{4}\/\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2})/)?.[1]?.replaceAll('/', '-') || '';
+  const ballsBlock = html.match(/<div\s+class=["']balls["'][^>]*>([\s\S]*?)<\/div>/i)?.[1] || '';
+  const numbers = [...ballsBlock.matchAll(/<span[^>]*class=["'][^"']*\bnumber\b[^"']*["'][^>]*>\s*(\d{1,2})\s*<\/span>/gi)].map((match) => match[1]);
+  const superNumber = ballsBlock.match(/class=["'][^"']*\bspecial\b[^"']*["'][^>]*>\s*(\d{1,2})/i)?.[1] || html.match(/超級獎號[：:]\s*(\d{1,2})/)?.[1] || '';
+  const summary = html.match(/猜大小：([^|<]+)\|\s*猜單雙：([^|<]+)\|\s*超級獎號：([^<]+)/)?.[0] || '';
+  if (!period || numbers.length !== 20) throw new Error('168win 未回傳完整 20 個號碼');
+  const snapshot = deriveSnapshot(period, numbers, sourceName, drawAt);
+  return {
+    ...snapshot,
+    superNumber: superNumber.padStart(2, '0'),
+    size: normalizeDrawCategory(summary.match(/猜大小：([^|<]+)/)?.[1] || snapshot.size, 'size'),
+    oddEven: normalizeDrawCategory(summary.match(/猜單雙：([^|<]+)/)?.[1] || snapshot.oddEven, 'oddEven'),
+  };
+}
+
+function parseTimetablePage(html, sourceName) {
+  const events = [...html.matchAll(/"name":"賓果賓果 第 (\d{7,9}) 期開獎"[\s\S]{0,1800}?"description":"開獎號碼：([^"]+)"/g)]
+    .map((match) => ({ period: match[1], numbers: match[2].split(',').map((value) => value.trim()).filter(Boolean) }))
+    .filter((item) => item.numbers.length === 20)
+    .sort((a, b) => Number(b.period) - Number(a.period));
+  if (!events.length) throw new Error('Timetable 未找到完整開獎資料');
+  const date = html.match(/"dateModified":"(\d{4}-\d{2}-\d{2})/)?.[1] || '';
+  return deriveSnapshot(events[0].period, events[0].numbers, sourceName, date);
 }
 
 const predictionTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
@@ -1428,7 +1506,11 @@ function parseMirrorPage(html, sourceName) {
 async function fetchMirror(source) {
   const response = await fetchWithTimeout(source.url, { headers: { accept: 'text/html', 'user-agent': 'bingo-research-api/1.0' } });
   if (!response.ok) throw new Error(`${source.name} HTTP ${response.status}`);
-  return parseMirrorPage(await response.text(), source.name);
+  const html = await response.text();
+  if (source.parser === 'officialPage') return parseOfficialPage(html);
+  if (source.parser === '168win') return parse168WinPage(html, source.name);
+  if (source.parser === 'timetable') return parseTimetablePage(html, source.name);
+  return parseMirrorPage(html, source.name);
 }
 
 function nextPredictionPeriod(period) {
@@ -1468,13 +1550,19 @@ function requestedCastingTime(value) {
 
 async function latest(daysOverride = null, existingHistory = [], requestedCastingAt = '') {
   const health = [];
-  const attempts = [{ name: '台灣彩券官方 API', run: () => fetchOfficial(daysOverride) }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
+  const apiSource = { name: '台灣彩券官方 API', authority: 'official', initialRank: 1000 };
+  const attempts = [{ ...apiSource, run: () => fetchOfficial(daysOverride) }, ...fallbackSources
+    .slice()
+    .sort((a, b) => sourceRankingScore(b, existingHistory[0]?.period) - sourceRankingScore(a, existingHistory[0]?.period))
+    .map((source) => ({ ...source, run: () => fetchMirror(source) }))];
   for (const attempt of attempts) {
     const startedAt = Date.now();
     try {
       const result = await attempt.run();
       const snapshot = result.snapshot || result;
-      health.push({ name: attempt.name, ok: true, latencyMs: Date.now() - startedAt, records: (result.history || [snapshot]).length });
+      const latencyMs = Date.now() - startedAt;
+      const stat = updateSourceStat(attempt.name, true, latencyMs, snapshot.period);
+      health.push({ name: attempt.name, ok: true, latencyMs, records: (result.history || [snapshot]).length, latestPeriod: snapshot.period, stability: stat.success / (stat.success + stat.failure) });
       const syncedAt = Date.now();
       const fetchedHistory = result.history || [snapshot];
       const historyByPeriod = new Map(existingHistory.map((item) => [String(item.period), item]));
@@ -1526,9 +1614,11 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const responseHistory = daysOverride && daysOverride > 1
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
-      health.push({ name: attempt.name, ok: false, latencyMs: Date.now() - startedAt, error: error instanceof Error ? error.message : '來源失敗' });
+      const latencyMs = Date.now() - startedAt;
+      const stat = updateSourceStat(attempt.name, false, latencyMs);
+      health.push({ name: attempt.name, ok: false, latencyMs, error: error instanceof Error ? error.message : '來源失敗', stability: stat.success / (stat.success + stat.failure) });
     }
   }
   throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);

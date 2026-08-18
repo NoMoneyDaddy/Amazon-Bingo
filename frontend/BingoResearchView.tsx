@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CustomScrollbar, PluginTopbar, Button, create } from "@cubelv/sdk";
 
 const API_URL = "https://bingo-api.zeabur.app/api/latest";
@@ -1065,6 +1065,7 @@ export function BingoResearchView() {
     [draws],
   );
   const [syncing, setSyncing] = useState(false);
+  const syncingRef = useRef(false);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
@@ -1164,7 +1165,8 @@ export function BingoResearchView() {
   const technicalAnalysis: TechnicalAnalysisData = latest?.technicalAnalysis || technicalAnalysisFallback;
 
   const sync = useCallback(async (forceHistory = false) => {
-    if (syncing) return;
+    if (syncingRef.current) return;
+    syncingRef.current = true;
     setSyncing(true);
     setError("");
     try {
@@ -1212,15 +1214,22 @@ export function BingoResearchView() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "讀取失敗");
     } finally {
+      syncingRef.current = false;
       setSyncing(false);
     }
-  }, [syncing]);
+  }, []);
 
   useEffect(() => {
     const runtime = useBingoRuntimeStore.getState();
     const shouldRefreshLatest = !runtime.draws.length || Date.now() - runtime.latestSyncedAt >= LATEST_REFRESH_MS;
     if (shouldRefreshLatest) void sync();
   }, []);
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void sync();
+    }, LATEST_REFRESH_MS);
+    return () => window.clearInterval(timer);
+  }, [sync]);
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);

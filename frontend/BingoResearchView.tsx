@@ -89,7 +89,7 @@ type DrawSnapshot = {
   source: string;
   sourceLabel: string;
   sourceHealth: Array<{ name: string; ok: boolean; error?: string; latencyMs?: number; records?: number; stability?: number | null; latestPeriod?: string }>;
-  sourceRanking?: Array<{ name: string; authority?: string; ok?: boolean | null; error?: string; latencyMs?: number | null; records?: number; latestPeriod?: string; stability?: number | null; freshness?: number | null; rankScore?: number }>;
+  sourceRanking?: Array<{ name: string; authority?: string; ok?: boolean | null; error?: string; lastError?: string; latencyMs?: number | null; records?: number; latestPeriod?: string; stability?: number | null; freshness?: number | null; rankScore?: number }>;
   models: Model[];
   fetchedAt?: number;
   history?: DrawSnapshot[];
@@ -814,7 +814,7 @@ export function BingoResearchView() {
                           <span className="whitespace-nowrap">{item.latencyMs == null ? "未測速" : `${item.latencyMs}ms`}</span>
                           <span className="whitespace-nowrap">穩定 {item.stability == null ? "—" : `${(item.stability * 100).toFixed(0)}%`}</span>
                           <span className="whitespace-nowrap">{item.freshness == null ? "新鮮度—" : `新鮮度 ${(item.freshness * 100).toFixed(0)}%`}</span>
-                          <span className={`whitespace-nowrap ${item.ok === false ? "text-rose-300" : "text-emerald-300"}`}>{item.ok === false ? "失敗" : item.ok === true ? "正常" : "待測"}</span>
+                          <span title={item.error || item.lastError || undefined} className={`whitespace-nowrap ${item.ok === false ? "text-rose-300" : "text-emerald-300"}`}>{item.ok === false ? "失敗" : item.ok === true ? "正常" : "待測"}</span>
                         </div>
                       ))}
                     </div>

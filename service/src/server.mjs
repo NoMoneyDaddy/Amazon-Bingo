@@ -35,6 +35,7 @@ const basicPayouts = {
 };
 const fallbackSources = [
   { name: '台灣彩券官方網頁', url: sourceUrl, parser: 'officialPage', authority: 'official', initialRank: 100 },
+  { name: 'WINWIN 樂贏', url: 'https://winwin.tw/Bingo', parser: 'winwin', authority: 'mirror', initialRank: 85 },
   { name: '168win 開獎網', url: 'https://www.168win.org/info/BingoBingo', parser: '168win', authority: 'mirror', initialRank: 80 },
   { name: 'Pilio 賓果開獎查詢', url: 'https://www.pilio.idv.tw/bingo/list.asp', parser: 'mirror', authority: 'mirror', initialRank: 70 },
   { name: 'Auzo 奧索樂透網', url: 'https://lotto.auzo.tw/bingobingo.php', parser: 'mirror', authority: 'mirror', initialRank: 60 },
@@ -57,16 +58,17 @@ const compressedPayloadCache = new Map();
 const sourceRuntimeStats = new Map();
 
 function sourceStat(name) {
-  if (!sourceRuntimeStats.has(name)) sourceRuntimeStats.set(name, { success: 0, failure: 0, latencyMs: null, latestPeriod: '' });
+  if (!sourceRuntimeStats.has(name)) sourceRuntimeStats.set(name, { success: 0, failure: 0, latencyMs: null, latestPeriod: '', lastError: '' });
   return sourceRuntimeStats.get(name);
 }
 
-function updateSourceStat(name, ok, latencyMs, period = '') {
+function updateSourceStat(name, ok, latencyMs, period = '', error = '') {
   const stat = sourceStat(name);
   if (ok) stat.success += 1;
   else stat.failure += 1;
   stat.latencyMs = stat.latencyMs == null ? latencyMs : Math.round(stat.latencyMs * 0.7 + latencyMs * 0.3);
   if (period) stat.latestPeriod = String(period);
+  if (error) stat.lastError = String(error).slice(0, 180);
   return stat;
 }
 
@@ -96,6 +98,7 @@ function sourceRanking(referencePeriod = '', currentHealth = []) {
       latencyMs: current?.latencyMs ?? stat.latencyMs,
       records: current?.records,
       latestPeriod: stat.latestPeriod || '',
+      lastError: stat.lastError || '',
       stability: total ? stat.success / total : null,
       freshness: stat.latestPeriod && referencePeriod ? Math.max(0, 1 - Math.max(0, Number(referencePeriod) - Number(stat.latestPeriod)) / 3) : null,
       rankScore: sourceRankingScore(source, referencePeriod),
@@ -728,6 +731,21 @@ function parseTimetablePage(html, sourceName) {
   if (!events.length) throw new Error('Timetable 未找到完整開獎資料');
   const date = html.match(/"dateModified":"(\d{4}-\d{2}-\d{2})/)?.[1] || '';
   return deriveSnapshot(events[0].period, events[0].numbers, sourceName, date);
+}
+
+function parseWinwinData(payload, sourceName) {
+  if (!Array.isArray(payload)) throw new Error('WINWIN 回傳格式不是陣列');
+  const history = payload.map((item) => {
+    const numbers = String(item?.OpenShowOrder || '').split(',').map((value) => value.trim()).filter(Boolean);
+    if (!item?.No || numbers.length !== 20) return null;
+    const snapshot = deriveSnapshot(item.No, numbers, sourceName, String(item.OpenDate || '').replace('T', ' '));
+    snapshot.superNumber = String(item.BullEyeTop || '').padStart(2, '0');
+    snapshot.size = normalizeDrawCategory(item.HighLowTop || snapshot.size, 'size');
+    snapshot.oddEven = normalizeDrawCategory(item.OddEvenTop || snapshot.oddEven, 'oddEven');
+    return snapshot;
+  }).filter(Boolean).sort((a, b) => Number(b.period) - Number(a.period));
+  if (!history.length) throw new Error('WINWIN 未回傳完整開獎資料');
+  return { snapshot: history[0], history, historyDays: 1 };
 }
 
 const predictionTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
@@ -1504,8 +1522,10 @@ function parseMirrorPage(html, sourceName) {
 }
 
 async function fetchMirror(source) {
-  const response = await fetchWithTimeout(source.url, { headers: { accept: 'text/html', 'user-agent': 'bingo-research-api/1.0' } });
+  const url = source.parser === 'winwin' ? `${source.url}/GetBingoData?date=${taipeiDateKey(0)}` : source.url;
+  const response = await fetchWithTimeout(url, { headers: { accept: source.parser === 'winwin' ? 'application/json' : 'text/html', 'user-agent': 'bingo-research-api/1.0' } });
   if (!response.ok) throw new Error(`${source.name} HTTP ${response.status}`);
+  if (source.parser === 'winwin') return parseWinwinData(await response.json(), source.name);
   const html = await response.text();
   if (source.parser === 'officialPage') return parseOfficialPage(html);
   if (source.parser === '168win') return parse168WinPage(html, source.name);
@@ -1617,8 +1637,9 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
-      const stat = updateSourceStat(attempt.name, false, latencyMs);
-      health.push({ name: attempt.name, ok: false, latencyMs, error: error instanceof Error ? error.message : '來源失敗', stability: stat.success / (stat.success + stat.failure) });
+      const errorMessage = error instanceof Error ? error.message : '來源失敗';
+      const stat = updateSourceStat(attempt.name, false, latencyMs, '', errorMessage);
+      health.push({ name: attempt.name, ok: false, latencyMs, error: errorMessage, stability: stat.success / (stat.success + stat.failure) });
     }
   }
   throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);

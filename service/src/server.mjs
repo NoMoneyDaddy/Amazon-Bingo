@@ -891,7 +891,8 @@ async function persistedResponse(persisted) {
     drawAt: formatTaipeiDateTime(new Date(predictionCastingAt)),
     castingAt: predictionCastingAt,
   };
-  const models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: predictionCastingAt });
+  // 快取回應路徑只做快速重算；完整 walk-forward 自動調權重交給背景同步，避免 API 被重運算卡住。
+  const models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, castingAt: predictionCastingAt });
   const history = [{
     ...current,
     models,

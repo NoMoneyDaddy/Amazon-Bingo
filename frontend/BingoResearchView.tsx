@@ -665,29 +665,33 @@ export function BingoResearchView() {
                     {latest?.predictionTargetPeriod ? `預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 預估勝率採中性先驗平滑，樣本越多越穩定，不代表實際中獎機率。
                   </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[4.5rem_5rem_minmax(0,1fr)] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[4.2rem_minmax(0,1fr)_4rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
                       <span>玩法</span>
-                      <span>預估勝率</span>
-                      <span className="text-right">預測號碼</span>
+                      <span className="sm:hidden">推薦</span>
+                      <span className="hidden sm:inline">預估勝率</span>
+                      <span className="text-right sm:hidden">勝率</span>
+                      <span className="hidden text-right sm:inline">預測號碼</span>
                     </div>
-                    {bestPlays.map((play) => (
+                    {bestPlays.map((play, index) => (
                       <div
                         key={play.key}
-                        className="grid min-w-0 max-w-full grid-cols-[4.5rem_5rem_minmax(0,1fr)] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
+                        className={`${index >= 3 ? "hidden sm:grid" : "grid"} min-w-0 max-w-full grid-cols-[4.2rem_minmax(0,1fr)_4rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]`}
                       >
                         <span className="shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
                           {play.label}
                         </span>
-                        <span className="text-xs font-semibold tabular-nums text-amber-200 sm:text-sm">
-                          <Rate value={play.best.estimatedRate} label={play.metricLabel} />
-                          <BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} />
-                        </span>
-                        <div className="min-w-0 max-w-full">
+                        <div className="order-2 min-w-0 max-w-full sm:order-3">
                           <PredictionValue value={play.best.prediction} />
+                          <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">樣本 {play.best.samples} 期</span>
                         </div>
+                        <span className="order-3 text-right text-xs font-semibold tabular-nums text-amber-200 sm:order-2 sm:text-sm">
+                          <Rate value={play.best.estimatedRate} label={play.metricLabel} />
+                          <span className="hidden sm:block"><BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} /></span>
+                        </span>
                       </div>
                     ))}
                   </div>
+                  <p className="mt-2 text-[11px] text-muted-foreground sm:hidden">手機版顯示前三項推薦；完整玩法與回測證據請查看「過程」與「歷史」。</p>
                 </section>
               </>
             )}

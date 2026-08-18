@@ -1298,7 +1298,7 @@ function profitabilityEvaluation(history = []) {
         const payout = backtestPayout(play.key, predicted, actual);
         const cost = betCostForTarget(play.key);
         const net = payout - cost;
-        periodResults.push({ period: String(actual.period || ''), drawAt: actual.drawAt || '', payout, net, profitable: net > 0 });
+        periodResults.push({ period: String(actual.period || ''), drawAt: actual.drawAt || '', prediction: Array.isArray(predicted) ? predicted.join('、') : String(predicted || '—'), payout, net, profitable: net > 0 });
         wins += net > 0 ? 1 : 0;
         payoutTotal += payout;
         profit += net;
@@ -1312,7 +1312,10 @@ function profitabilityEvaluation(history = []) {
       const selectionModel = selectionModels.find((item) => item.name === currentModel.name) || currentModel;
       const evolution = selectionModel.calculation?.evolution?.[play.key];
       // 回測統計使用歷史模型；畫面「預測號碼」必須使用目前最新模型，不能顯示回測錨點的舊號碼。
-      const predictionSource = currentModels.find((item) => item.name === currentModel.name) || currentModel;
+      const currentPredictionSource = currentModels.find((item) => item.name === currentModel.name) || currentModel;
+      const predictionSource = mode === 'fixed'
+        ? (history[0] ? rebuildEvaluationModel(currentModel, history[0], history.slice(1)) : null) || currentPredictionSource
+        : currentPredictionSource;
       const prediction = play.key === 'size'
         ? predictionSource.official?.size
         : play.key === 'oddEven'

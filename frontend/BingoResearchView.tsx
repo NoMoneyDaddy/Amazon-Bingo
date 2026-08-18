@@ -208,7 +208,7 @@ type ProfitabilityPlay = {
     estimatedRate?: number | null;
     confidence?: number | null;
     prediction: string;
-    periodResults?: Array<{ period: string; drawAt?: string; payout: number; net: number; profitable: boolean }>;
+    periodResults?: Array<{ period: string; drawAt?: string; prediction?: string; payout: number; net: number; profitable: boolean }>;
   };
   fixed?: ProfitabilityPlay["best"];
   follow?: ProfitabilityPlay["best"];
@@ -413,25 +413,31 @@ function localProfitability(history: DrawSnapshot[]) {
     ...Array.from({ length: 10 }, (_, index) => ({ key: `${index + 1}星`, label: `${index + 1} 星`, cost: 25 })),
   ];
   return rows.map((play) => {
-    const periods = history.slice(0, 30).map((actual, index) => {
-      const prior = history.slice(index + 1);
-      const model = localModel(prior, actual.period);
-      const predicted = play.key === "size" ? model.official.size : play.key === "oddEven" ? model.official.oddEven : model.official.basic[play.key] || [];
-      let payout = 0;
-      if (play.key === "size" || play.key === "oddEven") {
-        const observed = localCategory(actual, play.key);
-        payout = observed !== "和" && predicted === observed ? 150 : 0;
-      } else {
-        const actualSet = new Set(actual.numbers);
-        const matches = (predicted as string[]).filter((value) => actualSet.has(value)).length;
-        const payoutTable: Record<string, Record<number, number>> = { "1星": { 1: 50 }, "2星": { 1: 25, 2: 75 }, "3星": { 2: 50, 3: 500 }, "4星": { 2: 25, 3: 100, 4: 1000 } };
-        payout = payoutTable[play.key]?.[matches] || 0;
-      }
-      const net = payout - play.cost;
-      return { period: actual.period, payout, net, profitable: net > 0 };
-    });
-    const profit = periods.reduce((sum, item) => sum + item.net, 0);
-    return { key: play.key, label: play.label, metricLabel: "官方資料備援逐期回測", best: { model: "民俗統計基線", samples: periods.length, wins: periods.filter((item) => item.profitable).length, profit, payoutTotal: periods.reduce((sum, item) => sum + item.payout, 0), costTotal: periods.length * play.cost, matches: 0, targetCount: 0, averageProfit: periods.length ? profit / periods.length : null, positiveExpected: profit > 0, profitRate: periods.length ? periods.filter((item) => item.profitable).length / periods.length : null, prediction: play.key === "size" ? localPrediction(history, "size") : play.key === "oddEven" ? localPrediction(history, "oddEven") : "—", periodResults: periods }, fixed: undefined, follow: undefined };
+    const evaluate = (mode: "fixed" | "follow") => {
+      const frozenPrior = history.slice(10);
+      const periods = history.slice(0, 10).map((actual, index) => {
+        const prior = mode === "fixed" ? frozenPrior : history.slice(index + 1);
+        const model = localModel(prior, actual.period);
+        const predicted = play.key === "size" ? model.official.size : play.key === "oddEven" ? model.official.oddEven : model.official.basic[play.key] || [];
+        let payout = 0;
+        if (play.key === "size" || play.key === "oddEven") {
+          const observed = localCategory(actual, play.key);
+          payout = observed !== "和" && predicted === observed ? 150 : 0;
+        } else {
+          const actualSet = new Set(actual.numbers);
+          const matches = (predicted as string[]).filter((value) => actualSet.has(value)).length;
+          const payoutTable: Record<string, Record<number, number>> = { "1星": { 1: 50 }, "2星": { 1: 25, 2: 75 }, "3星": { 2: 50, 3: 500 }, "4星": { 2: 25, 3: 100, 4: 1000 } };
+          payout = payoutTable[play.key]?.[matches] || 0;
+        }
+        const net = payout - play.cost;
+        return { period: actual.period, prediction: Array.isArray(predicted) ? (predicted as string[]).join("、") : String(predicted), payout, net, profitable: net > 0 };
+      });
+      const profit = periods.reduce((sum, item) => sum + item.net, 0);
+      return { model: "民俗統計基線", samples: periods.length, wins: periods.filter((item) => item.profitable).length, profit, payoutTotal: periods.reduce((sum, item) => sum + item.payout, 0), costTotal: periods.length * play.cost, matches: 0, targetCount: 0, averageProfit: periods.length ? profit / periods.length : null, positiveExpected: profit > 0, profitRate: periods.length ? periods.filter((item) => item.profitable).length / periods.length : null, prediction: play.key === "size" ? localPrediction(mode === "fixed" ? frozenPrior : history, "size") : play.key === "oddEven" ? localPrediction(mode === "fixed" ? frozenPrior : history, "oddEven") : "—", periodResults: periods };
+    };
+    const fixed = evaluate("fixed");
+    const follow = evaluate("follow");
+    return { key: play.key, label: play.label, metricLabel: "官方資料備援逐期回測", best: fixed, fixed, follow };
   });
 }
 
@@ -769,6 +775,7 @@ function ProfitabilityDetail({
             {best.periodResults.map((item) => (
               <div key={item.period} className={`rounded-md border px-2 py-1.5 text-center ${item.profitable ? "border-emerald-300/30 bg-emerald-300/5" : "border-rose-300/25 bg-rose-300/5"}`}>
                 <div className="text-[9px] text-muted-foreground">第 {item.period.slice(-4)} 期</div>
+                <div className="mt-0.5 truncate text-[9px] text-cyan-200">{item.prediction || "—"}</div>
                 <div className={`mt-0.5 font-semibold tabular-nums ${item.profitable ? "text-emerald-300" : "text-rose-300"}`}>{formatNetProfit(item.net)}</div>
               </div>
             ))}

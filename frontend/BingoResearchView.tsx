@@ -1054,9 +1054,8 @@ export function BingoResearchView() {
     [latest],
   );
   const consensusModel = latestModels.find((model) => model.name === "多模型聚合");
-  const hasConsensusWeight = Number(consensusModel?.calculation?.weightedModelCount || 0) > 0
-    || Boolean(consensusModel?.official.basic && Object.values(consensusModel.official.basic).some((numbers) => numbers.length))
-    || Boolean(consensusModel?.official.size || consensusModel?.official.oddEven || consensusModel?.official.superNumber);
+  // 有候選號碼不等於通過樣本外閘門；只有後端實際選出正權重模型才算「超越基準」。
+  const hasConsensusWeight = Number(consensusModel?.calculation?.weightedModelCount || 0) > 0;
   const bestPlays: ProfitabilityPlay[] = useMemo(
     () => {
       const plays = latest?.profitabilityEvaluation?.length ? latest.profitabilityEvaluation : emptyProfitabilityPlayStats();
@@ -1359,8 +1358,8 @@ export function BingoResearchView() {
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-cyan-300/15 pt-2">
                       <span className="text-[10px] font-semibold text-cyan-200">切換回測模式</span>
                       <div className="flex min-h-10 w-full rounded-lg border border-cyan-300/25 bg-background/40 p-1 sm:w-auto" role="group" aria-label="回測模式">
-                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "fixed" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => setProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定連買 10 期</button>
-                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "follow" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => setProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>連續跟買 10 期</button>
+                        <Button type="button" variant="ghost" size="sm" className={`min-h-8 flex-1 px-3 text-[11px] font-semibold sm:flex-none ${profitStrategy === "fixed" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => setProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定連買 10 期</Button>
+                        <Button type="button" variant="ghost" size="sm" className={`min-h-8 flex-1 px-3 text-[11px] font-semibold sm:flex-none ${profitStrategy === "follow" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => setProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>連續跟買 10 期</Button>
                       </div>
                     </div>
                   </div>
@@ -1711,15 +1710,17 @@ export function BingoResearchView() {
                           <h3 className="text-xs font-bold tabular-nums text-white">第 {draw.period} 期</h3>
                           <div className="mt-0.5 truncate text-[9px] text-muted-foreground">{formatDisplayDate(draw.drawAt)}</div>
                         </div>
-                        <button
+                        <Button
                           type="button"
-                          className="min-h-10 shrink-0 rounded-md border border-cyan-300/25 bg-cyan-300/5 px-3 text-[11px] font-semibold text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+                          variant="outline"
+                          size="sm"
+                          className="min-h-10 shrink-0 border-cyan-300/25 bg-cyan-300/5 px-3 text-[11px] font-semibold text-cyan-100"
                           aria-expanded={expandedHistory === draw.period}
                           aria-controls={`history-detail-${draw.period}`}
                           onClick={() => setExpandedHistory((current) => current === draw.period ? null : draw.period)}
                         >
                           {expandedHistory === draw.period ? "收合" : "詳情"}
-                        </button>
+                        </Button>
                       </div>
                       <div className="mt-1.5 min-w-0 rounded-md bg-slate-950/45 px-1.5 py-1">
                         <DrawNumberBalls draw={draw} recentStats={recentStats} compact />

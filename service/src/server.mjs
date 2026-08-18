@@ -239,6 +239,14 @@ async function ensureDatabase() {
     source_label TEXT NOT NULL DEFAULT '',
     source_health JSONB NOT NULL DEFAULT '[]'::jsonb,
     models JSONB NOT NULL DEFAULT '[]'::jsonb,
+    forecast_evaluation JSONB NOT NULL DEFAULT '[]'::jsonb,
+    calibrated_probability_evaluation JSONB NOT NULL DEFAULT '[]'::jsonb,
+    profitability_evaluation JSONB NOT NULL DEFAULT '[]'::jsonb,
+    zone_profitability_evaluation JSONB NOT NULL DEFAULT '[]'::jsonb,
+    technical_analysis JSONB NOT NULL DEFAULT '{}'::jsonb,
+    audit JSONB NOT NULL DEFAULT '{}'::jsonb,
+    behavior_audit JSONB NOT NULL DEFAULT '{}'::jsonb,
+    backtest_integrity JSONB NOT NULL DEFAULT '{}'::jsonb,
     prediction_target_period TEXT NOT NULL DEFAULT '',
     casting_at TEXT NOT NULL DEFAULT '',
     forecast_casting_at TEXT NOT NULL DEFAULT '',
@@ -248,6 +256,14 @@ async function ensureDatabase() {
   await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS prediction_target_period TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS casting_at TEXT NOT NULL DEFAULT ''");
   await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS forecast_casting_at TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS forecast_evaluation JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS calibrated_probability_evaluation JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS profitability_evaluation JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS zone_profitability_evaluation JSONB NOT NULL DEFAULT '[]'::jsonb");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS technical_analysis JSONB NOT NULL DEFAULT '{}'::jsonb");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS audit JSONB NOT NULL DEFAULT '{}'::jsonb");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS behavior_audit JSONB NOT NULL DEFAULT '{}'::jsonb");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS backtest_integrity JSONB NOT NULL DEFAULT '{}'::jsonb");
   await pool.query('CREATE INDEX IF NOT EXISTS bingo_draws_updated_idx ON bingo_draws (updated_at DESC)');
   await pool.query(`CREATE TABLE IF NOT EXISTS bingo_model_backups (
     id BIGSERIAL PRIMARY KEY,
@@ -309,14 +325,20 @@ async function persistSnapshots(snapshots) {
     await client.query('BEGIN');
     for (const item of snapshots) {
       await client.query(`INSERT INTO bingo_draws
-        (period, draw_at, numbers, super_number, size, odd_even, source, source_label, source_health, models, prediction_target_period, casting_at, forecast_casting_at, fetched_at)
-        VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14)
+        (period, draw_at, numbers, super_number, size, odd_even, source, source_label, source_health, models, forecast_evaluation, calibrated_probability_evaluation, profitability_evaluation, zone_profitability_evaluation, technical_analysis, audit, behavior_audit, backtest_integrity, prediction_target_period, casting_at, forecast_casting_at, fetched_at)
+        VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19,$20,$21,$22)
         ON CONFLICT (period) DO UPDATE SET draw_at=EXCLUDED.draw_at, numbers=EXCLUDED.numbers,
         super_number=EXCLUDED.super_number, size=EXCLUDED.size, odd_even=EXCLUDED.odd_even,
         source=EXCLUDED.source, source_label=EXCLUDED.source_label, source_health=EXCLUDED.source_health,
-        models=EXCLUDED.models, prediction_target_period=EXCLUDED.prediction_target_period, casting_at=EXCLUDED.casting_at, forecast_casting_at=EXCLUDED.forecast_casting_at, fetched_at=EXCLUDED.fetched_at, updated_at=NOW()` , [
+        models=EXCLUDED.models, forecast_evaluation=EXCLUDED.forecast_evaluation, calibrated_probability_evaluation=EXCLUDED.calibrated_probability_evaluation,
+        profitability_evaluation=EXCLUDED.profitability_evaluation, zone_profitability_evaluation=EXCLUDED.zone_profitability_evaluation,
+        technical_analysis=EXCLUDED.technical_analysis, audit=EXCLUDED.audit, behavior_audit=EXCLUDED.behavior_audit,
+        backtest_integrity=EXCLUDED.backtest_integrity, prediction_target_period=EXCLUDED.prediction_target_period, casting_at=EXCLUDED.casting_at, forecast_casting_at=EXCLUDED.forecast_casting_at, fetched_at=EXCLUDED.fetched_at, updated_at=NOW()` , [
         item.period, item.drawAt || '', JSON.stringify(item.numbers), item.superNumber || '', item.size || '', item.oddEven || '',
-        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []), item.predictionTargetPeriod || '', item.castingAt || '', item.forecastCastingAt || '', item.fetchedAt || Date.now(),
+        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []),
+        JSON.stringify(item.forecastEvaluation || []), JSON.stringify(item.calibratedProbabilityEvaluation || []), JSON.stringify(item.profitabilityEvaluation || []), JSON.stringify(item.zoneProfitabilityEvaluation || []),
+        JSON.stringify(item.technicalAnalysis || {}), JSON.stringify(item.audit || {}), JSON.stringify(item.behaviorAudit || {}), JSON.stringify(item.backtestIntegrity || {}),
+        item.predictionTargetPeriod || '', item.castingAt || '', item.forecastCastingAt || '', item.fetchedAt || Date.now(),
       ]);
     }
     await client.query('COMMIT');
@@ -333,11 +355,14 @@ async function readPersisted(limit = 6000) {
   await ensureDatabase();
   const result = await pool.query(`SELECT period, draw_at AS "drawAt", numbers, super_number AS "superNumber",
     size, odd_even AS "oddEven", source, source_label AS "sourceLabel", source_health AS "sourceHealth",
-    models, prediction_target_period AS "predictionTargetPeriod", casting_at AS "castingAt", forecast_casting_at AS "forecastCastingAt", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
+    models, forecast_evaluation AS "forecastEvaluation", calibrated_probability_evaluation AS "calibratedProbabilityEvaluation",
+    profitability_evaluation AS "profitabilityEvaluation", zone_profitability_evaluation AS "zoneProfitabilityEvaluation",
+    technical_analysis AS "technicalAnalysis", audit, behavior_audit AS "behaviorAudit", backtest_integrity AS "backtestIntegrity",
+    prediction_target_period AS "predictionTargetPeriod", casting_at AS "castingAt", forecast_casting_at AS "forecastCastingAt", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
   return result.rows.map((row) => {
     const numbers = Array.isArray(row.numbers) ? row.numbers : [];
     const derived = numbers.length === 20 ? deriveSnapshot(row.period, numbers, row.source || '', row.drawAt || '') : null;
-    return { ...row, numbers, size: derived?.size || row.size || '', oddEven: derived?.oddEven || row.oddEven || '', sourceHealth: row.sourceHealth || [], models: row.models || [] };
+    return { ...row, numbers, size: derived?.size || row.size || '', oddEven: derived?.oddEven || row.oddEven || '', sourceHealth: row.sourceHealth || [], models: row.models || [], forecastEvaluation: row.forecastEvaluation || [], calibratedProbabilityEvaluation: row.calibratedProbabilityEvaluation || [], profitabilityEvaluation: row.profitabilityEvaluation || [], zoneProfitabilityEvaluation: row.zoneProfitabilityEvaluation || [], technicalAnalysis: row.technicalAnalysis || {}, audit: row.audit || {}, behaviorAudit: row.behaviorAudit || {}, backtestIntegrity: row.backtestIntegrity || {} };
   });
 }
 
@@ -376,7 +401,7 @@ function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
 function parseTaipeiDate(value) {
   const raw = String(value || '').trim();
-  if (!raw) return new Date();
+  if (!raw) return new Date(Number.NaN);
   // 官方資料常用民國年／未附時區；這類字串一律明確視為台北時間。
   const local = raw.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
   const match = local.match(/^(\d{3,4})[\/-](\d{1,2})[\/-](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
@@ -401,10 +426,10 @@ function parseTaipeiDate(value) {
 
 function reproducibleCastingAt(value, period = '') {
   const raw = String(value || '').trim();
-  const fullDate = parseTaipeiDate(raw);
-  if (raw && Number.isFinite(fullDate.getTime())) return fullDate.toISOString();
   const dateOnly = raw.match(/^(\d{4}-\d{2}-\d{2})$/);
   if (dateOnly) return new Date(`${dateOnly[1]}T04:00:00.000Z`).toISOString();
+  const fullDate = parseTaipeiDate(raw);
+  if (raw && Number.isFinite(fullDate.getTime())) return fullDate.toISOString();
   const digest = createHash('sha256').update(`casting|${period}`).digest('hex');
   const minutes = Number.parseInt(digest.slice(0, 8), 16) % (365 * 24 * 60);
   return new Date(Date.UTC(2020, 0, 1) + minutes * 60_000).toISOString();
@@ -2224,6 +2249,12 @@ async function fetchOfficial(daysOverride = null) {
     const snapshot = deriveSnapshot(record.drawTerm, record.openShowOrder, apiBaseUrl, drawAt);
     snapshot.sourceLabel = '台灣彩券官方 API';
     snapshot.superNumber = String(record.bullEyeTop || '').padStart(2, '0');
+    // 官方 API 已提供猜大小／猜單雙結果；有值時以官方欄位為準，
+    // 只有欄位缺失才回退到 20 個號碼的可重算分類。
+    const officialSize = normalizeDrawCategory(record.highLowTop, 'size');
+    const officialOddEven = normalizeDrawCategory(record.oddEvenTop, 'oddEven');
+    if (['大', '小', '和'].includes(officialSize)) snapshot.size = officialSize;
+    if (['單', '雙', '和'].includes(officialOddEven)) snapshot.oddEven = officialOddEven;
     return snapshot;
   };
   const history = records.map(parseItem);
@@ -2589,8 +2620,8 @@ const server = http.createServer(async (req, res) => {
           historyDays: retentionDays,
           modelStatus: persisted[0].models?.length ? 'formal' : 'queued',
         };
-        const needsFormalRefresh = !persisted[0].models?.length || !persisted[0].profitabilityEvaluation?.length;
-        if (needsFormalRefresh) refreshInBackground(persisted, 1);
+        // 每次快取到期後都要在背景確認官方最新期號；正式模型存在不代表開獎資料已更新。
+        refreshInBackground(persisted, 1);
         return send(res, 200, writeLatestResponseCache(responseCacheKey, cached), req);
       }
       // 冷啟動先查最新一期，完整 31 日資料與建庫交給背景工作，避免首屏等待歷史同步。
@@ -2609,8 +2640,7 @@ const server = http.createServer(async (req, res) => {
             historyDays: retentionDays,
             modelStatus: recent[0].models?.length ? 'formal' : 'queued',
           };
-          const needsFormalRefresh = !recent[0].models?.length || !recent[0].profitabilityEvaluation?.length;
-          if (needsFormalRefresh) refreshInBackground(persisted, hasRetentionCoverage(recent, retentionDays) ? 1 : retentionDays);
+          refreshInBackground(persisted, hasRetentionCoverage(recent, retentionDays) ? 1 : retentionDays);
           return send(res, 200, cached, req);
         }
       }

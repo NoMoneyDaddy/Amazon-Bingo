@@ -2048,9 +2048,13 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           sourceHealth: health,
         });
       }
-      await hydrateEvaluationModels(history);
+      // 首屏快速路徑只確認最新開獎資料；模型補建與 GitHub 備份交給背景同步，
+      // 不得因慢來源、worker 或備份服務讓 /api/latest?days=1 長時間沒有回應。
+      if (!options.deferLatestModel) await hydrateEvaluationModels(history);
       await persistSnapshots(history);
-      const backup = await backupModelProfile(history[0]);
+      const backup = options.deferLatestModel
+        ? { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath, deferred: true }
+        : await backupModelProfile(history[0]);
       const responseHistory = daysOverride && daysOverride > 1
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));

@@ -231,7 +231,7 @@ function normalizeCategory(value: string) {
   return text === "－" || text === "-" || text === "和局" ? "和" : text;
 }
 
-async function fetchLatest(days = 1): Promise<DrawSnapshot> {
+async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Promise<DrawSnapshot> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const controller = new AbortController();
@@ -240,7 +240,7 @@ async function fetchLatest(days = 1): Promise<DrawSnapshot> {
       12_000,
     );
     try {
-      const response = await fetch(`${API_URL}?days=${days}`, {
+      const response = await fetch(`${API_URL}?days=${days}&castingAt=${encodeURIComponent(castingAt)}`, {
         cache: "no-store",
         signal: controller.signal,
       });
@@ -657,7 +657,8 @@ export function BingoResearchView() {
     setError("");
     try {
       // 首次讀取與手動重新讀取都抓最近一個月，避免畫面只剩 60 期。
-      const snapshot = await fetchLatest(31);
+      // 目前最新期號是輸入，服務端以此計算下一期期號；起卦時間取本次同步當下。
+      const snapshot = await fetchLatest(31, new Date().toISOString());
       const records = snapshot.history?.length ? snapshot.history : [snapshot];
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");
@@ -981,7 +982,7 @@ export function BingoResearchView() {
                         <div className="mb-1 font-semibold text-cyan-200">共同計算輸入</div>
                         <div><span className="text-foreground">起卦核心：</span>{model.calculation?.commonCastingValue || "—"}</div>
                         <div className="mt-1 break-words text-[11px]">{model.calculation?.commonCasting || "共同預測時間未提供"}</div>
-                        <div className="mt-2 text-[11px] text-amber-100">固定輸入：{formatDisplayDate(model.calculation?.castingAt || "")} · 版本：{model.calculation?.algorithmVersion || "—"}</div>
+                        <div className="mt-2 text-[11px] text-amber-100">當期 → 下一期：第 {latest?.period || "—"} 期 → 第 {latest?.predictionTargetPeriod || "—"} 期 · 起卦時間：{formatDisplayDate(model.calculation?.castingAt || "")} · 版本：{model.calculation?.algorithmVersion || "—"}</div>
                         <div className="mt-1 text-[11px] text-amber-100">這組起卦只計算一次；下方每個玩法顯示的是獨立適配規則與回測，不是重新起卦。</div>
                         <div className="mt-1 text-[11px] text-cyan-100">號碼鏈路：起卦特徵 → 評分 1–80 號碼 → 各星級取前 1–10 個；每期官方實際開出 20 個號碼，不能把已開結果倒灌到下一期預測。</div>
                       </div>

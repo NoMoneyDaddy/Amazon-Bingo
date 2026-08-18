@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v49-baseline-gated-cache-fix';
+const reproducibilityVersion = 'bingo-research-v50-realtime-casting-time';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -1407,7 +1407,12 @@ function compactHistoryForResponse(history) {
       });
 }
 
-async function latest(daysOverride = null, existingHistory = []) {
+function requestedCastingTime(value) {
+  const parsed = new Date(String(value || ''));
+  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : '';
+}
+
+async function latest(daysOverride = null, existingHistory = [], requestedCastingAt = '') {
   const health = [];
   const attempts = [{ name: '台灣彩券官方 API', run: () => fetchOfficial(daysOverride) }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
   for (const attempt of attempts) {
@@ -1432,7 +1437,9 @@ async function latest(daysOverride = null, existingHistory = []) {
       // 歷史模型的起卦輸入以實際開獎時間為準；舊資料若曾保存錯誤 castingAt，不再優先採用。
       const previousCastingAt = reproducibleCastingAt(rawHistory[0]?.drawAt || rawHistory[0]?.castingAt, rawHistory[0]?.period);
       // 下一期固定輸入永遠以目前計算出的下一個台北開獎時刻為準，不沿用已過期的保存值。
-      const predictionCastingAt = nextDrawAt(new Date()).toISOString();
+      // 當期期號的資料只用來計算下一期期號；起卦時間是本次實際計算當下，
+      // 不是下一次開獎時間。下一次開獎時間只供倒數與目標期判定使用。
+      const predictionCastingAt = requestedCastingTime(requestedCastingAt) || new Date().toISOString();
       const history = [];
       for (let index = 0; index < rawHistory.length; index += 1) {
         await new Promise((resolve) => setImmediate(resolve));
@@ -1472,12 +1479,13 @@ async function latest(daysOverride = null, existingHistory = []) {
   throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);
 }
 
-async function persistedResponse(persisted) {
+async function persistedResponse(persisted, requestedCastingAt = '') {
   if (!persisted.length) return null;
   const visible = persisted.slice(0, fastResponseHistoryLimit);
   const current = visible[0];
   const targetPeriod = nextPredictionPeriod(current.period);
-  const predictionCastingAt = nextDrawAt(new Date()).toISOString();
+  // 快取路徑同樣採「當期 → 下期」；重新計算時以現在時間起卦，不沿用下期開獎時刻。
+  const predictionCastingAt = requestedCastingTime(requestedCastingAt) || new Date().toISOString();
   const modelHistory = visible.slice(1, maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
   const modelSnapshot = {
     ...current,
@@ -1586,6 +1594,7 @@ const server = http.createServer(async (req, res) => {
       const requestUrl = new URL(req.url, 'http://localhost');
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
+      const castingAt = requestedCastingTime(requestUrl.searchParams.get('castingAt'));
       const persisted = await readPersistedCached(daysOverride && daysOverride > 1 ? 10000 : persistedHistoryLimit);
       const cachedForecast = persisted[0]?.forecastCastingAt
         ? reproducibleCastingAt(persisted[0].forecastCastingAt, persisted[0].predictionTargetPeriod || '')
@@ -1593,7 +1602,7 @@ const server = http.createServer(async (req, res) => {
       const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
       // 非開獎時段不應被官方 API 的空回應或逾時清空畫面；先回傳最近一筆已確認開獎資料，更新在背景完成。
       if (persisted.length && daysOverride === 1) {
-        const cached = await persistedResponse(persisted);
+        const cached = await persistedResponse(persisted, castingAt);
         refreshInBackground(persisted);
         return send(res, 200, cached, req);
       }
@@ -1601,7 +1610,7 @@ const server = http.createServer(async (req, res) => {
       if (persisted.length && daysOverride && daysOverride > 1) {
         const recent = selectRecentHistory(persisted, retentionDays);
         if (recent.length > fastResponseHistoryLimit) {
-          const cached = await persistedResponse(recent.slice(0, fastResponseHistoryLimit));
+          const cached = await persistedResponse(recent.slice(0, fastResponseHistoryLimit), castingAt);
           refreshInBackground(persisted, hasRetentionCoverage(recent, retentionDays) ? 1 : retentionDays);
           return send(res, 200, { ...cached, history: compactHistoryForResponse(recent), historyDays: retentionDays }, req);
         }
@@ -1609,11 +1618,11 @@ const server = http.createServer(async (req, res) => {
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
       const hasUsableHistory = persisted.length >= persistedHistoryLimit;
       if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory && forecastFresh) {
-        const cached = await persistedResponse(persisted);
+        const cached = await persistedResponse(persisted, castingAt);
         return send(res, 200, { ...cached, history: selectRecentHistory(persisted, retentionDays), historyDays: retentionDays });
       }
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
-      return send(res, 200, await latest(refreshDays, persisted), req);
+      return send(res, 200, await latest(refreshDays, persisted, castingAt), req);
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }
   }
   send(res, 404, { error: 'Not found' });

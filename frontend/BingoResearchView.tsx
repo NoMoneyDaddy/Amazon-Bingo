@@ -550,11 +550,7 @@ export function BingoResearchView() {
     </Button>
   );
   return (
-    <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-background font-sans text-foreground antialiased">
-      <div aria-hidden="true" className="pointer-events-none absolute inset-0 overflow-hidden">
-        <div className="absolute -left-24 -top-24 h-64 w-64 rounded-full bg-cyan-500/10 blur-3xl motion-safe:animate-pulse" />
-        <div className="absolute -bottom-32 -right-20 h-72 w-72 rounded-full bg-orange-500/10 blur-3xl" />
-      </div>
+    <div className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-background font-mono text-foreground antialiased">
       <PluginTopbar
         title="賓果玄學研究台"
         rightButtons={[
@@ -567,8 +563,8 @@ export function BingoResearchView() {
       />
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-x-hidden" aria-busy={syncing}>
         <CustomScrollbar orientation="vertical">
-          <div className="mx-auto min-w-0 max-w-5xl space-y-4 overflow-x-hidden p-3 pb-[calc(8rem+env(safe-area-inset-bottom))] sm:space-y-5 sm:p-5 sm:pb-6">
-            <header className="overflow-hidden rounded-xl border border-border bg-card px-2.5 py-2 shadow-lg shadow-black/15 sm:px-3">
+          <div className="mx-auto min-w-0 max-w-xl space-y-2 overflow-x-hidden p-2 pb-3 sm:space-y-4 sm:p-5 sm:pb-6">
+            <header className="overflow-hidden border border-primary/45 bg-card px-3 py-2 shadow-none sm:px-4">
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-baseline gap-1.5">
                   <span className="shrink-0 text-[10px] font-medium text-muted-foreground">下期倒數</span>
@@ -581,7 +577,7 @@ export function BingoResearchView() {
                   <span className="ml-1 text-cyan-200">· {latest ? "已更新" : "等待"}</span>
                 </div>
               </div>
-              <nav aria-label="研究台頁面" className="mt-1.5 hidden flex-wrap gap-2 border-t border-slate-700/60 pt-1.5 sm:flex">
+              <nav aria-label="研究台頁面" className="mt-1.5 hidden flex-wrap gap-2 border-t border-primary/20 pt-1.5 sm:flex">
                 {pageButton("overview", "首頁")}
                 {pageButton("process", "計算過程")}
                 {pageButton("history", "歷史紀錄")}
@@ -597,7 +593,7 @@ export function BingoResearchView() {
             </div>
             {page === "overview" && (
               <>
-                <section aria-labelledby="latest-draw-heading" className="rounded-xl border border-orange-300/25 bg-card px-2.5 py-2 shadow-md shadow-orange-950/15 backdrop-blur">
+                <section aria-labelledby="latest-draw-heading" className="border border-primary/40 bg-card px-3 py-2 shadow-none">
                   {latest ? (
                     <div className="flex min-w-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:gap-2" aria-label={`第 ${latest.period} 期最新開獎結果`}>
                       <div className="flex shrink-0 items-center justify-between sm:block">
@@ -616,7 +612,7 @@ export function BingoResearchView() {
                     <p id="latest-draw-heading" className="text-xs text-slate-400">最新開獎：等待首次同步</p>
                   )}
                 </section>
-                <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full rounded-3xl border border-amber-300/30 bg-card p-4 shadow-lg shadow-amber-950/20 backdrop-blur sm:p-5">
+                <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full border border-primary/40 bg-card p-3 shadow-none sm:p-4">
                   <div className="flex items-end justify-between gap-2">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
@@ -635,7 +631,7 @@ export function BingoResearchView() {
                       <span className="text-right sm:hidden">勝率</span>
                       <span className="hidden text-right sm:inline">預測號碼</span>
                     </div>
-                    {bestPlays.map((play) => (
+                    {bestPlays.slice(0, 3).map((play) => (
                       <div
                         key={play.key}
                         className="grid min-w-0 max-w-full grid-cols-[4.2rem_minmax(0,1fr)_4rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
@@ -807,11 +803,6 @@ export function BingoResearchView() {
           </div>
         </CustomScrollbar>
       </div>
-      <nav aria-label="手機頁面導覽" className="fixed inset-x-0 bottom-0 z-20 flex gap-1 border-t border-cyan-300/30 bg-slate-950/95 p-1.5 pb-[max(0.375rem,env(safe-area-inset-bottom))] shadow-2xl shadow-black/40 backdrop-blur sm:hidden">
-        {mobilePageButton("overview", "總覽")}
-        {mobilePageButton("process", "過程")}
-        {mobilePageButton("history", "歷史")}
-      </nav>
     </div>
   );
 }

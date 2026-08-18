@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v59-profitability-10-periods';
+const reproducibilityVersion = 'bingo-research-v61-forward-bet-strategies';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -969,12 +969,19 @@ function profitabilityEvaluation(history = []) {
   ];
   const currentModels = history[0]?.models || [];
   return plays.map((play) => {
-    const candidates = currentModels.map((currentModel) => {
-      const rows = history.slice(1, profitabilityBacktestWindow + 1).flatMap((actual) => {
-        const model = actual.models?.find((item) => item.name === currentModel.name);
-        return model ? [{ actual, model }] : [];
-      });
+    const evaluate = (currentModel, mode) => {
+      const rows = mode === 'fixed'
+        ? (() => {
+          const anchor = history[profitabilityBacktestWindow];
+          const model = anchor?.models?.find((item) => item.name === currentModel.name);
+          return model ? history.slice(0, profitabilityBacktestWindow).map((actual) => ({ actual, model })) : [];
+        })()
+        : history.slice(0, profitabilityBacktestWindow).flatMap((actual, index) => {
+          const predictor = history[index + 1]?.models?.find((item) => item.name === currentModel.name);
+          return predictor ? [{ actual, model: predictor }] : [];
+        });
       let wins = 0; let trials = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;
+      const periodResults = [];
       rows.forEach(({ actual, model }) => {
         const predicted = play.key === 'size'
           ? model.official?.size
@@ -985,6 +992,7 @@ function profitabilityEvaluation(history = []) {
               : model.official?.basic?.[play.key] || [];
         const payout = backtestPayout(play.key, predicted, actual);
         const net = payout - singleBetCost;
+        periodResults.push({ period: String(actual.period || ''), drawAt: actual.drawAt || '', payout, net, profitable: net > 0 });
         wins += net > 0 ? 1 : 0;
         payoutTotal += payout;
         profit += net;
@@ -1007,13 +1015,19 @@ function profitabilityEvaluation(history = []) {
       const profitRate = trials ? wins / trials : null;
       const averageProfit = trials ? profit / trials : null;
       return {
-        model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal: trials * singleBetCost,
+        mode, model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal: trials * singleBetCost,
         matches, targetCount, averageProfit, positiveExpected: averageProfit != null && averageProfit > 0,
         profitRate, estimatedRate: trials ? (evolution?.estimatedRate ?? (wins + 1) / (trials + 2)) : null,
-        confidence: evolution?.confidence ?? (profitRate == null ? -1 : profitRate), prediction: prediction || '—',
+        confidence: evolution?.confidence ?? (profitRate == null ? -1 : profitRate), prediction: prediction || '—', periodResults,
       };
-    }).sort((a, b) => Number(b.positiveExpected) - Number(a.positiveExpected) || (b.confidence ?? -1) - (a.confidence ?? -1) || (b.profitRate ?? -1) - (a.profitRate ?? -1));
-    return { ...play, best: candidates[0] || { model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, prediction: '—' }, metricLabel: '盈利機率' };
+    };
+    const rank = (a, b) => Number(b.positiveExpected) - Number(a.positiveExpected)
+      || (b.confidence ?? -1) - (a.confidence ?? -1)
+      || (b.profitRate ?? -1) - (a.profitRate ?? -1);
+    const empty = (mode) => ({ mode, model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, prediction: '—', periodResults: [] });
+    const fixed = currentModels.map((model) => evaluate(model, 'fixed')).sort(rank)[0] || empty('fixed');
+    const follow = currentModels.map((model) => evaluate(model, 'follow')).sort(rank)[0] || empty('follow');
+    return { ...play, best: fixed, fixed, follow, metricLabel: '盈利機率' };
   });
 }
 

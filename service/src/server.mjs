@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v63-audited-settlement';
+const reproducibilityVersion = 'bingo-research-v64-roi-gated-profiles';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -175,6 +175,21 @@ function positiveProfitBaseline(target, actuals = []) {
   return Object.entries(payoutTable).reduce((sum, [hits, gross]) => (
     gross > singleBetCost ? sum + hypergeometricProbability(80, 20, star, Number(hits)) : sum
   ), 0);
+}
+
+function theoreticalNetPerBet(target) {
+  if (target === 'size' || target === 'oddEven') {
+    const thresholdProbability = Array.from({ length: 21 }, (_, count) => hypergeometricProbability(80, 40, 20, count))
+      .slice(13).reduce((sum, value) => sum + value, 0);
+    return thresholdProbability * 150 - singleBetCost;
+  }
+  if (target === 'superNumber') return 1200 / 80 - singleBetCost;
+  const star = Number(String(target).replace('星', ''));
+  const payoutTable = basicPayouts[target] || {};
+  const expectedPayout = Object.entries(payoutTable).reduce((sum, [hits, payout]) => (
+    sum + hypergeometricProbability(80, 20, star, Number(hits)) * payout
+  ), 0);
+  return expectedPayout - singleBetCost;
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = upstreamTimeoutMs) {
@@ -1229,7 +1244,7 @@ function researchAudit(draws = []) {
 
 function evolveProfiles(history = []) {
   const candidates = [0.24, 0.32, 0.40];
-  // 回測仍使用 60 期；參數調校採 30 期窗口，降低 20 期短樣本造成的權重抖動。
+  // 參數調校維持 30 期快取 walk-forward，避免同步延遲；長期 300 期評估另行執行。
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - 1));
   // 所有玩法都使用同一套 walk-forward + Wilson 下限規則，不讓 4～10 星退回固定權重。
   const tunableTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
@@ -1247,9 +1262,12 @@ function evolveProfiles(history = []) {
       if (!predicted) return;
       tunableTargets.forEach((target) => {
         const prediction = target === 'size' ? predicted.official.size : target === 'oddEven' ? predicted.official.oddEven : target === 'superNumber' ? predicted.official.superNumber : predicted.official.basic[target] || [];
-        const bucket = scores[method][target].find((item) => item.empiricalWeight === empiricalWeight) || { empiricalWeight, wins: 0, trials: 0, baselineSum: 0, baselineTrials: 0 };
+        const bucket = scores[method][target].find((item) => item.empiricalWeight === empiricalWeight) || { empiricalWeight, wins: 0, trials: 0, payout: 0, profit: 0, baselineSum: 0, baselineTrials: 0 };
         bucket.wins += hasPositiveProfit(target, prediction, actual) ? 1 : 0;
         bucket.trials += 1;
+        const payout = backtestPayout(target, prediction, actual);
+        bucket.payout += payout;
+        bucket.profit += payout - singleBetCost;
         const baselineRate = positiveProfitBaseline(target, training);
         if (baselineRate != null) {
           bucket.baselineSum += baselineRate;
@@ -1263,11 +1281,15 @@ function evolveProfiles(history = []) {
     const results = scores[method][target].map((item) => {
       const rate = item.trials ? item.wins / item.trials : 0;
       const baselineRate = item.baselineTrials ? item.baselineSum / item.baselineTrials : null;
-      return { ...item, score: rate, estimatedRate: item.trials ? (item.wins + 2) / (item.trials + 4) : 0, confidence: lowerConfidenceBound(rate, item.trials), baselineRate, validationSamples: item.trials };
+      const cost = item.trials * singleBetCost;
+      const roi = cost ? item.profit / cost : null;
+      const baselineNetPerBet = theoreticalNetPerBet(target);
+      const baselineRoi = baselineNetPerBet / singleBetCost;
+      return { ...item, score: rate, estimatedRate: item.trials ? (item.wins + 2) / (item.trials + 4) : 0, confidence: lowerConfidenceBound(rate, item.trials), baselineRate, baselineNetPerBet, baselineRoi, averageProfit: item.trials ? item.profit / item.trials : null, roi, validationSamples: item.trials };
     });
-    const best = results.sort((a, b) => b.confidence - a.confidence || b.estimatedRate - a.estimatedRate || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0] || { empiricalWeight: 0, wins: 0, trials: 0, score: null, baselineRate: null, estimatedRate: 0, confidence: 0, validationSamples: 0 };
-    const eligible = best.score != null && best.baselineRate != null && best.score > best.baselineRate && best.confidence > best.baselineRate;
-    return [target, { ...best, empiricalWeight: eligible ? best.empiricalWeight : 0, eligible, status: eligible ? `walk-forward ${validationWindow} 期／勝率 ${(best.score * 100).toFixed(1)}%，信賴下限 ${(best.confidence * 100).toFixed(1)}% > 基線 ${(best.baselineRate * 100).toFixed(1)}%，納入權重` : `walk-forward ${validationWindow} 期／信賴下限未超出基線，不納入權重` }];
+    const best = results.sort((a, b) => (b.roi ?? -Infinity) - (a.roi ?? -Infinity) || b.confidence - a.confidence || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0] || { empiricalWeight: 0, wins: 0, trials: 0, score: null, baselineRate: null, estimatedRate: 0, confidence: 0, roi: null, baselineRoi: null, validationSamples: 0 };
+    const eligible = best.roi != null && best.baselineRoi != null && best.roi > best.baselineRoi && best.profit > 0 && best.confidence > (best.baselineRate ?? 0);
+    return [target, { ...best, empiricalWeight: eligible ? best.empiricalWeight : 0, eligible, status: eligible ? `walk-forward ${validationWindow} 期／ROI ${(best.roi * 100).toFixed(1)}%，平均每期 ${best.averageProfit.toFixed(2)} 元，超過理論基線，納入權重` : `walk-forward ${validationWindow} 期／淨利／ROI 未可靠超過理論基線，不納入權重` }];
   })) }]));
 }
 
@@ -1439,12 +1461,15 @@ function aggregateModel(models, history) {
     const score = evolution?.score;
     const baselineRate = evolution?.baselineRate;
     const confidence = evolution?.confidence;
-    if (evolution?.eligible !== true || score == null || baselineRate == null || confidence == null || score <= baselineRate || confidence <= baselineRate) return 0;
-    // 聚合權重採「信賴下限超額」並按樣本量收縮，避免短樣本偶然高勝率主導共識。
-    const conservativeUplift = Math.max(0, Math.min(score - baselineRate, confidence - baselineRate));
+    const roi = evolution?.roi;
+    const baselineRoi = evolution?.baselineRoi;
+    if (evolution?.eligible !== true || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
+    // 聚合權重以 ROI 超額為主，再用命中率信賴下限與樣本量收縮，避免短樣本高派彩偶然主導共識。
+    const roiUplift = Math.max(0, Math.min(1, roi - baselineRoi));
+    const confidenceUplift = Math.max(0, Math.min(1, confidence - baselineRate));
     const samples = evolution?.trials || evolution?.validationSamples || 0;
-    const sampleFactor = clamp(samples / 60, 0.25, 1);
-    return conservativeUplift * sampleFactor;
+    const sampleFactor = clamp(samples / profileValidationWindow, 0.25, 1);
+    return roiUplift * confidenceUplift * sampleFactor;
   };
   const weightedCategory = (target) => {
     const totals = new Map();

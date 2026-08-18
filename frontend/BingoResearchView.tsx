@@ -16,6 +16,7 @@ const MODEL_NAMES = [
   "超幾何集合基線",
   "多窗口穩定性基線",
   "排除濾網基線",
+  "趨勢加權回歸基線",
   "機器學習負對照",
   "多模型聚合",
 ];
@@ -52,6 +53,7 @@ type Model = {
     empiricalWeights?: Record<string, number>;
     evolution?: Evolution;
     exclusionFilters?: Record<string, unknown>;
+    recentGate?: Record<string, unknown>;
     commonCasting?: string;
     commonCastingValue?: string;
     targetRules?: Record<string, string>;
@@ -385,6 +387,25 @@ function localExclusionModel(history: DrawSnapshot[]): Model {
   };
 }
 
+function localRegressionModel(history: DrawSnapshot[]): Model {
+  const windows = [history.slice(0, 12), history.slice(0, 60), history.slice(0, 300)];
+  const frequency = (window: DrawSnapshot[], number: number) => window.reduce((sum, draw) => sum + draw.numbers.filter((value) => Number(value) === number).length, 0) / Math.max(1, window.length);
+  const ranked = Array.from({ length: 80 }, (_, index) => index + 1).sort((a, b) => {
+    const score = (number: number) => frequency(windows[0], number) * 0.5 + frequency(windows[1], number) * 0.3 + frequency(windows[2], number) * 0.2;
+    return score(b) - score(a) || a - b;
+  });
+  const basic: Record<string, string[]> = {};
+  for (let count = 1; count <= 10; count += 1) basic[`${count}星`] = ranked.slice(0, count).sort((a, b) => a - b).map((value) => String(value).padStart(2, "0"));
+  return {
+    name: "趨勢加權回歸基線", status: "官方資料備援；等待後端近期超基準閘門",
+    rule: "依近 12／60／300 期趨勢與動能排序；正式權重必須通過近期樣本外基準檢驗。",
+    sources: [{ name: "台灣彩券官方 API", url: OFFICIAL_API_URL }],
+    calculation: { algorithmVersion: "bingo-local-fallback-v1", method: "trend-weighted-logistic", historySamples: history.length, predictionEligible: false, recentGate: { eligible: false, reason: "本地備援不宣稱回歸優勢" } },
+    official: { size: localPrediction(history, "size"), oddEven: localPrediction(history, "oddEven"), superNumber: basic["1星"]?.[0] || "", basic },
+    research: { numberPicks: basic["10星"] || [], sumBand: "趨勢加權候選", oddEvenCount: "—", highLowCount: "—", zones: [] },
+  };
+}
+
 function localProfitability(history: DrawSnapshot[]) {
   const rows = [
     { key: "size", label: "猜大小", cost: 25 },
@@ -419,7 +440,8 @@ function enrichLocalFallback(rows: DrawSnapshot[]) {
   const current = ordered[0];
   const model = localModel(ordered.slice(1), String(Number(current.period) + 1));
   const exclusionModel = localExclusionModel(ordered.slice(1));
-  return { ...current, models: [model, exclusionModel], profitabilityEvaluation: localProfitability(ordered), history: ordered.map((item, index) => index === 0 ? { ...item, models: [model, exclusionModel] } : item) };
+  const regressionModel = localRegressionModel(ordered.slice(1));
+  return { ...current, models: [model, exclusionModel, regressionModel], profitabilityEvaluation: localProfitability(ordered), history: ordered.map((item, index) => index === 0 ? { ...item, models: [model, exclusionModel, regressionModel] } : item) };
 }
 
 function officialFallbackDrawTime(period: string, date: string, firstPeriod: number) {

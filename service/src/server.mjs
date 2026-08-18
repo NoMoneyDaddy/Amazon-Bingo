@@ -993,6 +993,7 @@ const modelSources = {
   '超幾何集合基線': [{ name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '多窗口穩定性基線': [{ name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '排除濾網基線': [{ name: 'NIST SP 800-22 隨機性測試', url: 'https://csrc.nist.gov/pubs/sp/800/22/r1/upd1/final' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
+  '趨勢加權回歸基線': [{ name: '序列式機率預測與評估', url: 'https://arxiv.org/abs/0905.1673' }, { name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }],
   '機器學習負對照': [{ name: '序列式機率預測與評估', url: 'https://arxiv.org/abs/0905.1673' }, { name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }],
 };
 const researchEvidenceRegistry = [
@@ -1086,9 +1087,9 @@ function randomPrediction(target, seed) {
 
 function evaluationModelFor(actual, name, prior, includeNumbers = true) {
   const saved = actual.models?.find((model) => model.name === name);
-  if (saved || name !== '機器學習負對照') return saved;
+  if (saved || name !== '趨勢加權回歸基線') return saved;
   // 舊保存期數可能沒有新模型；只用該目標期以前的資料即時補算。
-  return buildMlNegativeControl(actual, prior, reproducibleCastingAt(actual.drawAt, actual.period), { includeNumbers });
+  return buildWeightedRegressionModel(actual, prior, reproducibleCastingAt(actual.drawAt, actual.period), { includeNumbers });
 }
 
 function prequentialCategoryProbability(target, modelName, prior = []) {
@@ -1109,7 +1110,7 @@ function prequentialCategoryProbability(target, modelName, prior = []) {
 function forecastEvaluation(history = []) {
   const records = history.slice(1, maxModelHistory + 1).filter((item) => Array.isArray(item.models) && item.models.length);
   const modelNames = [...new Set(records.flatMap((item) => item.models.map((model) => model.name)).filter((name) => name !== '多模型聚合'))];
-  if (records.length && !modelNames.includes('機器學習負對照')) modelNames.push('機器學習負對照');
+  if (records.length && !modelNames.includes('趨勢加權回歸基線')) modelNames.push('趨勢加權回歸基線');
   const byModel = new Map();
   records.forEach((actual, recordIndex) => {
     const prior = records.slice(recordIndex + 1);
@@ -1181,7 +1182,7 @@ function forecastEvaluation(history = []) {
 function calibratedProbabilityEvaluation(history = []) {
   const records = history.slice(1, maxModelHistory + 1).filter((item) => Array.isArray(item.models) && item.models.length);
   const modelNames = [...new Set(records.flatMap((item) => item.models.map((model) => model.name)).filter((name) => name !== '多模型聚合'))];
-  if (records.length && !modelNames.includes('機器學習負對照')) modelNames.push('機器學習負對照');
+  if (records.length && !modelNames.includes('趨勢加權回歸基線')) modelNames.push('趨勢加權回歸基線');
   return modelNames.map((name) => {
     const metrics = { size: { brier: 0, logLoss: 0, count: 0, nextProbability: 0.5, bins: new Map() }, oddEven: { brier: 0, logLoss: 0, count: 0, nextProbability: 0.5, bins: new Map() } };
     records.forEach((actual, recordIndex) => {
@@ -1556,7 +1557,7 @@ function evolveProfiles(history = []) {
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - 1));
   // 所有玩法都使用同一套 walk-forward + Wilson 下限規則，不讓 4～10 星退回固定權重。
   const tunableTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
-  const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線', '貝葉斯平滑基線', '超幾何集合基線', '多窗口穩定性基線'];
+  const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線', '貝葉斯平滑基線', '超幾何集合基線', '多窗口穩定性基線', '排除濾網基線', '趨勢加權回歸基線'];
   if (history.length < minimumValidationSamples + 1) {
     return Object.fromEntries(methods.map((method) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0, validationSamples: validationWindow, score: null, baselineRate: null, eligible: false, status: `樣本不足（至少需要 ${minimumValidationSamples} 期），不納入聚合權重` }])) }]));
   }
@@ -1715,7 +1716,37 @@ function logisticProbability(model, sample) {
   return 1 / (1 + Math.exp(-clamp(model.bias + sample.reduce((sum, value, index) => sum + value * model.weights[index], 0), -30, 30)));
 }
 
-function buildMlNegativeControl(snapshot, history, castingAt, options = {}) {
+function recentRegressionGate(history = [], castingAt = '') {
+  const folds = [];
+  const limit = Math.min(30, Math.max(0, history.length - 1));
+  for (let index = 0; index < limit; index += 1) {
+    const actual = history[index];
+    const prior = history.slice(index + 1);
+    if (!prior.length) continue;
+    const predicted = buildWeightedRegressionModel(actual, prior, reproducibleCastingAt(castingAt || actual.drawAt, actual.period), { includeNumbers: true, skipGate: true });
+    const numbers = predicted.official.basic['10星'] || [];
+    const matches = numbers.filter((number) => (actual.numbers || []).includes(number)).length;
+    const sizeActual = normalizeDrawCategory(actual.size, 'size');
+    const oddActual = normalizeDrawCategory(actual.oddEven, 'oddEven');
+    const sizeHit = ['大', '小'].includes(sizeActual) && predicted.official.size === sizeActual;
+    const oddHit = ['單', '雙'].includes(oddActual) && predicted.official.oddEven === oddActual;
+    folds.push({ matches, sizeHit, oddHit, sizeValid: ['大', '小'].includes(sizeActual), oddValid: ['單', '雙'].includes(oddActual) });
+  }
+  const matchValues = folds.map((item) => item.matches);
+  const meanMatches = matchValues.length ? matchValues.reduce((sum, value) => sum + value, 0) / matchValues.length : null;
+  const matchSe = meanMatches == null ? null : Math.sqrt(Math.max(0, 2.5 * (1 - 2.5 / 20)) / Math.max(1, folds.length));
+  const matchLower = meanMatches == null ? null : meanMatches - 1.96 * (matchSe || 0);
+  const categoryRate = (key, validKey) => {
+    const valid = folds.filter((item) => item[validKey]);
+    return valid.length ? valid.filter((item) => item[key]).length / valid.length : null;
+  };
+  const sizeRate = categoryRate('sizeHit', 'sizeValid');
+  const oddRate = categoryRate('oddHit', 'oddValid');
+  const eligible = folds.length >= 20 && matchLower != null && matchLower > 2.5 && ((sizeRate != null && sizeRate > 0.53) || (oddRate != null && oddRate > 0.53));
+  return { eligible, folds: folds.length, meanMatches, randomMeanMatches: 2.5, matchLower, sizeRate, oddRate, baseline: { numberMatches: 2.5, categoryRate: 0.5 }, rule: '近期 30 折 walk-forward；10 星平均命中須以 95% 下限超過 2.5，且大小或單雙勝率超過 53%。' };
+}
+
+function buildWeightedRegressionModel(snapshot, history, castingAt, options = {}) {
   const includeNumbers = options.includeNumbers !== false;
   const samples = []; const sizeLabels = []; const oddEvenLabels = [];
   const trainingLimit = Math.min(48, Math.max(0, history.length - 1));
@@ -1748,21 +1779,47 @@ function buildMlNegativeControl(snapshot, history, castingAt, options = {}) {
   const picks = (count) => scores.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
   const basic = Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`${index + 1}星`, picks(index + 1)]));
   const superNumber = picks(1)[0] || '';
+  const recentGate = options.skipGate ? { eligible: false, reason: '驗證中' } : recentRegressionGate(history, castingAt);
   return {
-    name: '機器學習負對照',
-    status: '正則化 Logistic 特徵模型；只作負對照，不納入多模型聚合',
-    rule: '以近 12／60 期大小、單雙、和值窗口特徵訓練簡單 Logistic；每個號碼使用獨立包含率模型，禁止使用目標期資料。',
-    sources: modelSources['機器學習負對照'] || [],
+    name: '趨勢加權回歸基線',
+    status: recentGate.eligible ? '近期超過基準；納入候選權重' : '近期未明顯超過基準；權重歸零',
+    rule: '以近 12／60／300 期趨勢、動能與穩定度訓練 Logistic；每個號碼獨立估計出現機率，只有近期樣本外超過基準才可加權。',
+    sources: modelSources['趨勢加權回歸基線'] || [],
     calculation: {
-      algorithmVersion: algorithmVersion(), method: 'logistic-negative-control', evidenceTier: '可重現機器學習負對照', predictionEligible: false,
+      algorithmVersion: algorithmVersion(), method: 'trend-weighted-logistic', evidenceTier: '可重現機器學習基線', predictionEligible: recentGate.eligible,
       castingSource: 'prequential-history-only', castingAt, historySamples: history.length,
       featureNames: ['近12期大號率', '近12期單數率', '近12期和值率', '近60期大號率', '近60期單數率', '近60期和值率', '最新大號率', '最新單數率'],
       probabilities: { size: sizeProbability, oddEven: oddEvenProbability },
-      trainingSamples: samples.length, regularization: 0.35,
+      trainingSamples: samples.length, regularization: 0.35, recentGate,
     },
     official: { size: sizeProbability >= 0.5 ? '大' : '小', oddEven: oddEvenProbability >= 0.5 ? '單' : '雙', superNumber, basic },
-    research: { numberPicks: basic['10星'], numberPicks20: scores.slice(0, 20).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0')), sumBand: '由模型候選另行統計', oddEvenCount: '由模型候選另行統計', highLowCount: '由模型候選另行統計', zones: ['機器學習負對照'], targetResearch: {} },
+    research: { numberPicks: basic['10星'], numberPicks20: scores.slice(0, 20).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0')), sumBand: '由模型候選另行統計', oddEvenCount: '由模型候選另行統計', highLowCount: '由模型候選另行統計', zones: ['趨勢加權回歸'], targetResearch: {} },
   };
+}
+
+function recentTargetGate(modelName, target, history = []) {
+  const rows = history.slice(0, 30).filter((item) => item?.models?.some((model) => model.name === modelName));
+  if (rows.length < 20) return { eligible: false, samples: rows.length, reason: '近期樣本不足' };
+  if (target === 'size' || target === 'oddEven') {
+    const field = target === 'size' ? 'size' : 'oddEven';
+    const valid = rows.filter((item) => ['大', '小', '單', '雙'].includes(normalizeDrawCategory(item[field], field)));
+    const wins = valid.filter((item) => {
+      const model = item.models.find((candidate) => candidate.name === modelName);
+      return validPredictionCategory(model?.official?.[field], field) === normalizeDrawCategory(item[field], field);
+    }).length;
+    const rate = valid.length ? wins / valid.length : 0;
+    return { eligible: valid.length >= 20 && rate >= 0.55, samples: valid.length, rate, baseline: 0.5 };
+  }
+  const count = Number(String(target).replace('星', '')) || 10;
+  const matches = rows.map((item) => {
+    const model = item.models.find((candidate) => candidate.name === modelName);
+    const predicted = model?.official?.basic?.[target] || [];
+    const actual = new Set(item.numbers || []);
+    return predicted.filter((number) => actual.has(number)).length;
+  });
+  const mean = matches.reduce((sum, value) => sum + value, 0) / matches.length;
+  const baseline = count * 20 / 80;
+  return { eligible: mean >= baseline + 0.2, samples: matches.length, mean, baseline };
 }
 
 function aggregateModel(models, history) {
@@ -1780,7 +1837,8 @@ function aggregateModel(models, history) {
     const baselineRoi = evolution?.baselineRoi;
     // 沒有任何模型通過驗證時，只保留超幾何模型作透明 fallback；不把文化規則硬湊成共識。
     if (!hasValidatedWeight && model.calculation?.method === 'hypergeometric') return 1;
-    if (evolution?.eligible !== true || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
+    const recentGate = recentTargetGate(model.name, target, history);
+    if (evolution?.eligible !== true || !recentGate.eligible || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
     // 聚合權重以 ROI 超額為主，再用命中率信賴下限與樣本量收縮，避免短樣本高派彩偶然主導共識。
     const roiUplift = Math.max(0, Math.min(1, roi - baselineRoi));
     const confidenceUplift = Math.max(0, Math.min(1, confidence - baselineRate));
@@ -1949,10 +2007,10 @@ export function buildModels(snapshot, history = [], options = {}) {
       },
     };
   });
-  const negativeControl = options.onlyMethod && options.onlyMethod !== '機器學習負對照'
-    ? []
-    : [buildMlNegativeControl(snapshot, history, castingAt)];
-  const allModels = [...baseModels, ...negativeControl];
+  const regressionModel = !options.onlyMethod || options.onlyMethod === '趨勢加權回歸基線'
+    ? [buildWeightedRegressionModel(snapshot, history, castingAt)]
+    : [];
+  const allModels = [...baseModels, ...regressionModel];
   return [...allModels, aggregateModel(allModels, history)];
 }
 

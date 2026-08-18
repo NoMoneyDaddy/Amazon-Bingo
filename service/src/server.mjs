@@ -2458,7 +2458,7 @@ function refreshInBackground(persisted, days = 1) {
   refreshInFlight = true;
   // 已有正式模型但缺少回測時，只補寫評估快照；不要為了回測再次重跑模型。
   if (days === 1 && persisted[0]?.models?.length && !persisted[0]?.profitabilityEvaluation?.length) {
-    void (async () => {
+    setImmediate(() => void (async () => {
       try {
         const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);
         const evaluation = {
@@ -2476,7 +2476,7 @@ function refreshInBackground(persisted, days = 1) {
       } finally {
         refreshInFlight = false;
       }
-    })();
+    })());
     return;
   }
   void latest(days, persisted, '', { deferEvaluationModels: true })

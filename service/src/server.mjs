@@ -2565,7 +2565,8 @@ const server = http.createServer(async (req, res) => {
           historyDays: retentionDays,
           modelStatus: persisted[0].models?.length ? 'formal' : 'queued',
         };
-        refreshInBackground(persisted, 1);
+        const needsFormalRefresh = !persisted[0].models?.length || !persisted[0].profitabilityEvaluation?.length;
+        if (needsFormalRefresh) refreshInBackground(persisted, 1);
         return send(res, 200, writeLatestResponseCache(responseCacheKey, cached), req);
       }
       // 冷啟動先查最新一期，完整 31 日資料與建庫交給背景工作，避免首屏等待歷史同步。
@@ -2584,7 +2585,8 @@ const server = http.createServer(async (req, res) => {
             historyDays: retentionDays,
             modelStatus: recent[0].models?.length ? 'formal' : 'queued',
           };
-          refreshInBackground(persisted, hasRetentionCoverage(recent, retentionDays) ? 1 : retentionDays);
+          const needsFormalRefresh = !recent[0].models?.length || !recent[0].profitabilityEvaluation?.length;
+          if (needsFormalRefresh) refreshInBackground(persisted, hasRetentionCoverage(recent, retentionDays) ? 1 : retentionDays);
           return send(res, 200, cached, req);
         }
       }

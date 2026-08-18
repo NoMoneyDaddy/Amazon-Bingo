@@ -1297,7 +1297,15 @@ function rebuildEvaluationModel(sourceModel, actual, training) {
     profiles: { [sourceModel.name]: { targets } },
     castingAt: reproducibleCastingAt(actual.drawAt, actual.period),
   });
-  return rebuilt.find((model) => model.name === sourceModel.name) || null;
+  const matched = rebuilt.find((model) => model.name === sourceModel.name);
+  if (matched) return matched;
+  const fallback = buildModels(actual, training, {
+    evolve: false,
+    castingAt: reproducibleCastingAt(actual.drawAt, actual.period),
+  });
+  return fallback.find((model) => model.name === sourceModel.name)
+    || fallback.find((model) => model.name && model.name !== '多模型聚合')
+    || null;
 }
 
 function profitabilityEvaluation(history = []) {

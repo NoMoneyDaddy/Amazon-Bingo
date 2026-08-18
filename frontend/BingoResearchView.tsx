@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CustomScrollbar, PluginTopbar, Button } from "@cubelv/sdk";
+import { CustomScrollbar, PluginTopbar, Button, create } from "@cubelv/sdk";
 
 const API_URL = "https://bingo-api.zeabur.app/api/latest";
 const OFFICIAL_API_URL = "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult";
@@ -307,6 +307,42 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     zoneProfitabilityEvaluation: Array.isArray(value.zoneProfitabilityEvaluation) ? value.zoneProfitabilityEvaluation : [],
     technicalAnalysis: value.technicalAnalysis,
   };
+}
+
+const LATEST_REFRESH_MS = 30_000;
+const HISTORY_REFRESH_MS = 5 * 60_000;
+
+type BingoRuntimeState = {
+  draws: DrawSnapshot[];
+  latestSyncedAt: number;
+  historySyncedAt: number;
+  setDraws: (draws: DrawSnapshot[]) => void;
+  markLatestSynced: (at: number) => void;
+  markHistorySynced: (at: number) => void;
+};
+type BingoRuntimeStore = {
+  <T>(selector: (state: BingoRuntimeState) => T): T;
+  getState: () => BingoRuntimeState;
+};
+
+// View 切換會卸載 React 元件；資料放在插件共用 store，讓回到頁面時先保留畫面。
+const useBingoRuntimeStore = create((set: (partial: Partial<BingoRuntimeState>) => void): BingoRuntimeState => ({
+  draws: [],
+  latestSyncedAt: 0,
+  historySyncedAt: 0,
+  setDraws: (draws) => set({ draws }),
+  markLatestSynced: (latestSyncedAt) => set({ latestSyncedAt }),
+  markHistorySynced: (historySyncedAt) => set({ historySyncedAt }),
+})) as BingoRuntimeStore;
+
+function mergeDrawSnapshots(current: DrawSnapshot[], incoming: DrawSnapshot[]) {
+  const byPeriod = new Map<string, DrawSnapshot>();
+  [...current, ...incoming].forEach((draw) => {
+    if (draw.period) byPeriod.set(draw.period, draw);
+  });
+  return [...byPeriod.values()].sort(
+    (a, b) => Number(b.period) - Number(a.period) || (b.fetchedAt || 0) - (a.fetchedAt || 0),
+  );
 }
 
 function normalizeNumber(value: string | number) {
@@ -905,7 +941,7 @@ function readUiPreferences(): { expandedPlayDetails: string[]; profitStrategy: P
 }
 
 export function BingoResearchView() {
-  const [draws, setDraws] = useState<DrawSnapshot[]>([]);
+  const draws = useBingoRuntimeStore((state) => state.draws);
   const sorted = useMemo(
     () =>
       [...draws].sort(
@@ -1014,12 +1050,17 @@ export function BingoResearchView() {
   }, [sorted]);
   const technicalAnalysis: TechnicalAnalysisData = latest?.technicalAnalysis || technicalAnalysisFallback;
 
-  const sync = useCallback(async () => {
+  const sync = useCallback(async (forceHistory = false) => {
     if (syncing) return;
     setSyncing(true);
     setError("");
     try {
-      // 首屏先取最新一期；歷史 31 日由後端背景建庫，稍後再補到畫面。
+      const runtime = useBingoRuntimeStore.getState();
+      const nowMs = Date.now();
+      const shouldRefreshHistory = forceHistory
+        || !runtime.draws.length
+        || nowMs - runtime.historySyncedAt >= HISTORY_REFRESH_MS;
+      // 有快取時先保留舊資料，只確認最新一期；完整 31 日資料按間隔背景更新。
       const castingAt = new Date().toISOString();
       const snapshot = await fetchLatest(1, castingAt);
       // 最新模型與回測摘要在回應根節點；歷史陣列只保留開獎折，不能直接丟掉根節點。
@@ -1029,17 +1070,22 @@ export function BingoResearchView() {
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");
       }
-      setDraws(records);
+      useBingoRuntimeStore.getState().setDraws(mergeDrawSnapshots(runtime.draws, records));
+      useBingoRuntimeStore.getState().markLatestSynced(Date.now());
       setLastSync(Date.now());
-      void new Promise((resolve) => window.setTimeout(resolve, 2000))
-        .then(() => fetchLatest(31, castingAt))
-        .then((fullSnapshot) => {
-          const fullRecords = fullSnapshot.history?.length
-            ? [{ ...fullSnapshot, history: undefined }, ...fullSnapshot.history.slice(1)]
-            : [fullSnapshot];
-          if (fullRecords.length > records.length) setDraws(fullRecords);
-        })
-        .catch(() => undefined);
+      if (shouldRefreshHistory) {
+        void new Promise((resolve) => window.setTimeout(resolve, 2000))
+          .then(() => fetchLatest(31, castingAt))
+          .then((fullSnapshot) => {
+            const fullRecords = fullSnapshot.history?.length
+              ? [{ ...fullSnapshot, history: undefined }, ...fullSnapshot.history.slice(1)]
+              : [fullSnapshot];
+            const latestRuntime = useBingoRuntimeStore.getState();
+            latestRuntime.setDraws(mergeDrawSnapshots(latestRuntime.draws, fullRecords));
+            latestRuntime.markHistorySynced(Date.now());
+          })
+          .catch(() => undefined);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "讀取失敗");
     } finally {
@@ -1048,7 +1094,9 @@ export function BingoResearchView() {
   }, [syncing]);
 
   useEffect(() => {
-    void sync();
+    const runtime = useBingoRuntimeStore.getState();
+    const shouldRefreshLatest = !runtime.draws.length || Date.now() - runtime.latestSyncedAt >= LATEST_REFRESH_MS;
+    if (shouldRefreshLatest) void sync();
   }, []);
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -1106,7 +1154,7 @@ export function BingoResearchView() {
         rightButtons={[
           {
             icon: syncing ? "loader-2" : "refresh",
-            onClick: syncing ? undefined : () => void sync(),
+            onClick: syncing ? undefined : () => void sync(true),
             title: syncing ? "同步中" : "重新讀取",
           },
         ]}

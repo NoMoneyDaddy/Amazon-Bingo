@@ -1065,5 +1065,7 @@ if (isMainThread) {
     console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
     const firstWakeAt = nextDrawAt(new Date()).getTime() - Date.now() - 30_000;
     scheduledTimer = setTimeout(() => void scheduledSync(false), Math.max(60_000, firstWakeAt));
+    // 啟動後立即補齊月份缺口；若官方來源逾時，下一次排程仍會重試。
+    void scheduledSync(false);
   });
 }

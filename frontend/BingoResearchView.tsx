@@ -883,6 +883,27 @@ function ProfitabilityDetail({
   history: DrawSnapshot[];
 }) {
   const actualByPeriod = new Map(history.map((draw) => [String(draw.period), draw]));
+  const resolvedPeriodResults = (best.periodResults || []).map((item) => {
+    const draw = actualByPeriod.get(String(item.period));
+    const prediction = String(item.prediction || "").trim();
+    let matches = 0;
+    let targetCount = 1;
+    if (playKey === "size" || playKey === "oddEven") {
+      matches = draw && normalizeCategory(prediction) === normalizeCategory(playKey === "size" ? draw.size : draw.oddEven) ? 1 : 0;
+    } else if (playKey === "superNumber") {
+      const selected = normalizeNumber(prediction);
+      const drawn = new Set((draw?.numbers || []).map(normalizeNumber));
+      matches = draw && selected && (selected === normalizeNumber(draw.superNumber) || drawn.has(selected)) ? 1 : 0;
+    } else {
+      const predicted = prediction.split("、").filter(Boolean);
+      const drawn = new Set((draw?.numbers || []).map(normalizeNumber));
+      targetCount = predicted.length;
+      matches = predicted.filter((value) => drawn.has(normalizeNumber(value))).length;
+    }
+    return { ...item, matches, targetCount };
+  });
+  const resolvedMatchTotal = resolvedPeriodResults.reduce((sum, item) => sum + item.matches, 0);
+  const resolvedTargetTotal = resolvedPeriodResults.reduce((sum, item) => sum + item.targetCount, 0);
   return (
     <div className="grid gap-1.5 border-t border-slate-800 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground sm:grid-cols-4">
       <span>有效回測期數：<strong className="tabular-nums text-slate-200">{best.samples} 期</strong></span>
@@ -891,7 +912,7 @@ function ProfitabilityDetail({
       <span>平均／期：<strong className={best.averageProfit != null && best.averageProfit > 0 ? "tabular-nums text-emerald-200" : "tabular-nums text-rose-200"}>{formatNetProfit(best.averageProfit)}</strong></span>
       <span>總派彩：<strong className="tabular-nums text-slate-200">{formatNetProfit(best.payoutTotal)}</strong></span>
       <span>總成本：<strong className="tabular-nums text-slate-200">{formatNetProfit(-best.costTotal)}</strong></span>
-      <span>平均命中：<strong className="tabular-nums text-slate-200">{best.samples ? (best.matches / best.samples).toFixed(1) : "—"}{best.targetCount > 1 ? ` / ${(best.targetCount / best.samples).toFixed(0)}` : ""}</strong></span>
+      <span>平均命中：<strong className="tabular-nums text-slate-200">{resolvedPeriodResults.length ? (resolvedMatchTotal / resolvedPeriodResults.length).toFixed(1) : "—"}{resolvedTargetTotal > resolvedPeriodResults.length ? ` / ${(resolvedTargetTotal / resolvedPeriodResults.length).toFixed(0)}` : ""}</strong></span>
       <span className={best.positiveExpected ? "text-emerald-300" : "text-rose-300"}>{best.positiveExpected ? "正期望：平均每期淨盈利" : "未達正期望：僅供比較"}</span>
       <div className="col-span-full mt-1 border-t border-slate-800 pt-2">
         <div className="flex items-center justify-between gap-2">
@@ -900,35 +921,13 @@ function ProfitabilityDetail({
         </div>
         {best.periodResults?.length ? (
           <div className="mt-1.5 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
-            {best.periodResults.map((item) => (
-              (() => {
-                const draw = actualByPeriod.get(String(item.period));
-                let matches = item.matches;
-                let targetCount = item.targetCount;
-                if (!Number.isFinite(matches) || !Number.isFinite(targetCount)) {
-                  const prediction = String(item.prediction || "").trim();
-                  if (playKey === "size" || playKey === "oddEven") {
-                    matches = draw && prediction === (playKey === "size" ? draw.size : draw.oddEven) ? 1 : 0;
-                    targetCount = 1;
-                  } else if (playKey === "superNumber") {
-                    const selected = normalizeNumber(prediction);
-                    const drawn = new Set((draw?.numbers || []).map(normalizeNumber));
-                    matches = draw && selected && (selected === normalizeNumber(draw.superNumber) || drawn.has(selected)) ? 1 : 0;
-                    targetCount = 1;
-                  } else {
-                    const predicted = prediction.split("、").filter(Boolean);
-                    const drawn = new Set((draw?.numbers || []).map(normalizeNumber));
-                    matches = predicted.filter((value) => drawn.has(normalizeNumber(value))).length;
-                    targetCount = predicted.length;
-                  }
-                }
-                return <div key={item.period} className={`rounded-md border px-2 py-1.5 text-center ${item.profitable ? "border-emerald-300/30 bg-emerald-300/5" : "border-rose-300/25 bg-rose-300/5"}`}>
+            {resolvedPeriodResults.map((item) => (
+                <div key={item.period} className={`rounded-md border px-2 py-1.5 text-center ${item.profitable ? "border-emerald-300/30 bg-emerald-300/5" : "border-rose-300/25 bg-rose-300/5"}`}>
                 <div className="text-[9px] text-muted-foreground">第 {item.period.slice(-4)} 期</div>
                 <div className="mt-0.5 truncate text-[9px] text-cyan-200">{item.prediction || "—"}</div>
-                <div className="mt-0.5 text-[10px] font-semibold tabular-nums text-amber-200">命中 {matches}/{targetCount}</div>
+                <div className="mt-0.5 text-[10px] font-semibold tabular-nums text-amber-200">命中 {item.matches}/{item.targetCount}</div>
                 <div className={`mt-0.5 font-semibold tabular-nums ${item.profitable ? "text-emerald-300" : "text-rose-300"}`}>{formatNetProfit(item.net)}</div>
-                </div>;
-              })()
+                </div>
             ))}
           </div>
         ) : <div className="mt-1 text-center text-[10px]">尚無逐期資料</div>}

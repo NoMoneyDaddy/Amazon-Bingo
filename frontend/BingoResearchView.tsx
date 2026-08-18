@@ -658,7 +658,7 @@ export function BingoResearchView() {
                   <div className="flex items-end justify-between gap-2">
                     <div>
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
-                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">下一期預測與預估勝率</h2>
+                      <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100">下一期各玩法與星級預測</h2>
                     </div>
                     <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">資料證據</span>
                   </div>
@@ -673,10 +673,10 @@ export function BingoResearchView() {
                       <span className="text-right sm:hidden">勝率</span>
                       <span className="hidden text-right sm:inline">預測號碼</span>
                     </div>
-                    {bestPlays.map((play, index) => (
+                    {bestPlays.map((play) => (
                       <div
                         key={play.key}
-                        className={`${index >= 3 ? "hidden sm:grid" : "grid"} min-w-0 max-w-full grid-cols-[4.2rem_minmax(0,1fr)_4rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]`}
+                        className="grid min-w-0 max-w-full grid-cols-[4.2rem_minmax(0,1fr)_4rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
                       >
                         <span className="shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
                           {play.label}
@@ -692,7 +692,6 @@ export function BingoResearchView() {
                       </div>
                     ))}
                   </div>
-                  <p className="mt-2 text-[11px] text-muted-foreground sm:hidden">手機版顯示前三項推薦；完整玩法與回測證據請查看「過程」與「歷史」。</p>
                 </section>
               </>
             )}

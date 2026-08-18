@@ -787,7 +787,7 @@ export function BingoResearchView() {
                         <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-200/80">最新開獎</p>
                         <h2 id="latest-draw-heading" className="text-xs font-bold tabular-nums text-orange-100" style={{ textWrap: "balance" }}>第 {latest.period} 期</h2>
                         <time className="mt-0.5 block whitespace-nowrap text-[10px] text-cyan-200/80" dateTime={latest.drawAt || undefined}>
-                          開獎 {formatDisplayDate(latest.drawAt)}
+                          {formatDisplayDate(latest.drawAt)}
                         </time>
                       </div>
                       <div className="min-w-0 flex-1 overflow-hidden rounded-md bg-slate-950/45 px-1.5 py-1">

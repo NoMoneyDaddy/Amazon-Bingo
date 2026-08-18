@@ -212,7 +212,7 @@ type ProfitabilityPlay = {
     estimatedRate?: number | null;
     confidence?: number | null;
     prediction: string;
-    periodResults?: Array<{ period: string; drawAt?: string; prediction?: string; payout: number; net: number; profitable: boolean }>;
+    periodResults?: Array<{ period: string; drawAt?: string; prediction?: string; matches: number; targetCount: number; payout: number; net: number; profitable: boolean }>;
   };
   fixed?: ProfitabilityPlay["best"];
   follow?: ProfitabilityPlay["best"];
@@ -536,7 +536,12 @@ function localProfitability(history: DrawSnapshot[]) {
           payout = payoutTable[play.key]?.[matches] || 0;
         }
         const net = payout - play.cost;
-        return { period: actual.period, prediction: Array.isArray(predicted) ? (predicted as string[]).join("、") : String(predicted), payout, net, profitable: net > 0 };
+        const predictedNumbers = Array.isArray(predicted) ? predicted as string[] : [];
+        const actualSet = new Set(actual.numbers.map(normalizeNumber));
+        const matches = Array.isArray(predicted)
+          ? predictedNumbers.filter((value) => actualSet.has(normalizeNumber(value))).length
+          : payout > 0 ? 1 : 0;
+        return { period: actual.period, prediction: Array.isArray(predicted) ? predictedNumbers.join("、") : String(predicted), matches, targetCount: Array.isArray(predicted) ? predictedNumbers.length : 1, payout, net, profitable: net > 0 };
       });
       const profit = periods.reduce((sum, item) => sum + item.net, 0);
       return { model: "本地備援基線", samples: periods.length, wins: periods.filter((item) => item.profitable).length, profit, payoutTotal: periods.reduce((sum, item) => sum + item.payout, 0), costTotal: periods.length * play.cost, matches: 0, targetCount: 0, averageProfit: periods.length ? profit / periods.length : null, positiveExpected: profit > 0, profitRate: periods.length ? periods.filter((item) => item.profitable).length / periods.length : null, prediction: play.key === "size" ? localPrediction(mode === "fixed" ? frozenPrior : history, "size") : play.key === "oddEven" ? localPrediction(mode === "fixed" ? frozenPrior : history, "oddEven") : "—", periodResults: periods };
@@ -894,6 +899,7 @@ function ProfitabilityDetail({
               <div key={item.period} className={`rounded-md border px-2 py-1.5 text-center ${item.profitable ? "border-emerald-300/30 bg-emerald-300/5" : "border-rose-300/25 bg-rose-300/5"}`}>
                 <div className="text-[9px] text-muted-foreground">第 {item.period.slice(-4)} 期</div>
                 <div className="mt-0.5 truncate text-[9px] text-cyan-200">{item.prediction || "—"}</div>
+                <div className="mt-0.5 text-[10px] font-semibold tabular-nums text-amber-200">命中 {item.matches}/{item.targetCount}</div>
                 <div className={`mt-0.5 font-semibold tabular-nums ${item.profitable ? "text-emerald-300" : "text-rose-300"}`}>{formatNetProfit(item.net)}</div>
               </div>
             ))}

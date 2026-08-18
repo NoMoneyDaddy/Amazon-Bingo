@@ -1338,13 +1338,23 @@ function profitabilityEvaluation(history = []) {
         const payout = backtestPayout(play.key, predicted, actual);
         const cost = betCostForTarget(play.key);
         const net = payout - cost;
-        periodResults.push({ period: String(actual.period || ''), drawAt: actual.drawAt || '', prediction: Array.isArray(predicted) ? predicted.join('、') : String(predicted || '—'), payout, net, profitable: net > 0 });
+        const predictedNumbers = Array.isArray(predicted) ? predicted : [];
+        const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
+        const matchesForPeriod = Array.isArray(predicted)
+          ? predictedNumbers.filter((number) => actualNumbers.has(normalizeNumberValue(number))).length
+          : (payout > 0 ? 1 : 0);
+        const targetCountForPeriod = Array.isArray(predicted) ? predictedNumbers.length : 1;
+        periodResults.push({
+          period: String(actual.period || ''), drawAt: actual.drawAt || '',
+          prediction: Array.isArray(predicted) ? predicted.join('、') : String(predicted || '—'),
+          matches: matchesForPeriod, targetCount: targetCountForPeriod,
+          payout, net, profitable: net > 0,
+        });
         wins += net > 0 ? 1 : 0;
         payoutTotal += payout;
         profit += net;
         if (Array.isArray(predicted)) {
-          const actualNumbers = new Set(actual.numbers || []);
-          matches += predicted.filter((number) => actualNumbers.has(String(number).padStart(2, '0'))).length;
+          matches += matchesForPeriod;
           targetCount += predicted.length;
         } else { matches += payout > 0 ? 1 : 0; targetCount += 1; }
         trials += 1;

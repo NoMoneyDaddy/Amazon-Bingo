@@ -2464,6 +2464,23 @@ function hasCompleteProfitabilityEvaluation(profitability) {
     }));
 }
 
+function ensureFollowBacktestVisible(profitability) {
+  if (!Array.isArray(profitability)) return [];
+  return profitability.map((play) => {
+    if (Number(play?.follow?.samples || 0) > 0 && play?.follow?.periodResults?.length) return play;
+    const fixed = play?.fixed;
+    if (!fixed || Number(fixed.samples || 0) <= 0 || !fixed.periodResults?.length) return play;
+    return {
+      ...play,
+      follow: {
+        ...fixed,
+        mode: 'follow',
+        fallback: '缺少歷史模型，使用同算法固定重建備援',
+      },
+    };
+  });
+}
+
 function requestedCastingTime(value) {
   const parsed = new Date(String(value || ''));
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : '';
@@ -2653,7 +2670,9 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   const hydratedProfitability = hydrateStoredPeriodMatches(current.profitabilityEvaluation, visible);
   const storedProfitabilityReady = hasCompleteProfitabilityEvaluation(hydratedProfitability)
     && hydratedProfitability.every((play) => play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
-  const storedProfitability = storedProfitabilityReady ? hydratedProfitability : computedEvaluation.profitabilityEvaluation;
+  const storedProfitability = ensureFollowBacktestVisible(
+    storedProfitabilityReady ? hydratedProfitability : computedEvaluation.profitabilityEvaluation,
+  );
   const storedZone = current.zoneProfitabilityEvaluation?.length ? current.zoneProfitabilityEvaluation : computedEvaluation.zoneProfitabilityEvaluation;
   const storedTechnical = Object.keys(current.technicalAnalysis || {}).length ? current.technicalAnalysis : computedEvaluation.technicalAnalysis;
   return {

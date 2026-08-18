@@ -211,6 +211,7 @@ type ProfitabilityPlay = {
     profitRate: number | null;
     estimatedRate?: number | null;
     confidence?: number | null;
+    fallback?: string;
     prediction: string;
     periodResults?: Array<{ period: string; drawAt?: string; prediction?: string; matches?: number; targetCount?: number; payout: number; net: number; profitable: boolean }>;
   };
@@ -942,6 +943,7 @@ function ProfitabilityDetail({
       <span>總派彩：<strong className="tabular-nums text-slate-200">{formatNetProfit(best.payoutTotal)}</strong></span>
       <span>總成本：<strong className="tabular-nums text-slate-200">{formatNetProfit(-best.costTotal)}</strong></span>
       <span>平均命中：<strong className="tabular-nums text-slate-200">{resolvedPeriodResults.length ? (resolvedMatchTotal / resolvedPeriodResults.length).toFixed(1) : "—"}{resolvedTargetTotal > resolvedPeriodResults.length ? ` / ${(resolvedTargetTotal / resolvedPeriodResults.length).toFixed(0)}` : ""}</strong></span>
+      {best.fallback ? <span className="col-span-full text-amber-300">資料狀態：{best.fallback}</span> : null}
       <span className={best.positiveExpected ? "text-emerald-300" : "text-rose-300"}>{best.positiveExpected ? "正期望：平均每期淨盈利" : "未達正期望：僅供比較"}</span>
       <div className="col-span-full mt-1 border-t border-slate-800 pt-2">
         <div className="flex items-center justify-between gap-2">

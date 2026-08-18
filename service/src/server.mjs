@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v52-fast-sync-timeout';
+const reproducibilityVersion = 'bingo-research-v53-compact-sync-response';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -1392,19 +1392,11 @@ function hasRetentionCoverage(history, days = retentionDays) {
 }
 
 function compactHistoryForResponse(history) {
-  return history.map((item, index) => index <= maxModelHistory
-    ? item
-    : {
-        period: item.period,
-        drawAt: item.drawAt,
-        numbers: item.numbers,
-        superNumber: item.superNumber,
-        size: item.size,
-        oddEven: item.oddEven,
-        predictionTargetPeriod: item.predictionTargetPeriod,
-        castingAt: item.castingAt,
-        fetchedAt: item.fetchedAt,
-      });
+  return history.map((item, index) => {
+    if (index === 0) return item;
+    const { models, ...compact } = item;
+    return compact;
+  });
 }
 
 function requestedCastingTime(value) {
@@ -1470,8 +1462,8 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       await persistSnapshots(history);
       const backup = await backupModelProfile(history[0]);
       const responseHistory = daysOverride && daysOverride > 1
-        ? selectRecentHistory(history, retentionDays)
-        : history.slice(0, fastResponseHistoryLimit);
+        ? compactHistoryForResponse(selectRecentHistory(history, retentionDays))
+        : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
       return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, latencyMs: Date.now() - startedAt, error: error instanceof Error ? error.message : '來源失敗' });
@@ -1509,7 +1501,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   }, ...visible.slice(1)];
   return {
     ...history[0],
-    history,
+    history: compactHistoryForResponse(history),
     historyDays: retentionDays,
     sourceHealth: current.sourceHealth || [],
     audit: researchAudit(visible.slice(1)),

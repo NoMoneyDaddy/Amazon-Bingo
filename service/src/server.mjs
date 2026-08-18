@@ -1617,8 +1617,10 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         // 同步只重新計算最新一期的「當期 → 下一期」模型。
         // 舊歷史模型若已存在就保留；同步歷史資料不應逐期重新啟動 worker，否則 31 日查詢會阻塞首屏。
         const previous = historyByPeriod.get(String(item.period));
-        const models = isNextPrediction && !options.deferLatestModel
-          ? await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt })
+        const models = isNextPrediction
+          ? options.deferLatestModel
+            ? []
+            : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt })
           : previous?.models || item.models || [];
         history.push({
           ...item,
@@ -1792,7 +1794,8 @@ const server = http.createServer(async (req, res) => {
       if (persisted.length && daysOverride === 1) {
         // 最新開獎不可先回傳保存快取；否則新一期出現後畫面必然延遲一期。
         // 只有歷史查詢允許背景更新，days=1 必須先向官方來源確認最新期號。
-        const fresh = await latest(1, persisted, castingAt);
+        const fresh = await latest(1, persisted, castingAt, { deferLatestModel: true });
+        refreshInBackground(persisted, 1);
         return send(res, 200, writeLatestResponseCache(responseCacheKey, fresh), req);
       }
       // 冷啟動先查最新一期，完整 31 日資料與建庫交給背景工作，避免首屏等待歷史同步。

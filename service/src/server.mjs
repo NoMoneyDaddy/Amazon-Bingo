@@ -68,10 +68,14 @@ async function ensureDatabase() {
     source_health JSONB NOT NULL DEFAULT '[]'::jsonb,
     models JSONB NOT NULL DEFAULT '[]'::jsonb,
     prediction_target_period TEXT NOT NULL DEFAULT '',
+    casting_at TEXT NOT NULL DEFAULT '',
+    forecast_casting_at TEXT NOT NULL DEFAULT '',
     fetched_at BIGINT NOT NULL DEFAULT 0,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );`);
   await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS prediction_target_period TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS casting_at TEXT NOT NULL DEFAULT ''");
+  await pool.query("ALTER TABLE bingo_draws ADD COLUMN IF NOT EXISTS forecast_casting_at TEXT NOT NULL DEFAULT ''");
   await pool.query('CREATE INDEX IF NOT EXISTS bingo_draws_updated_idx ON bingo_draws (updated_at DESC)');
   await pool.query(`CREATE TABLE IF NOT EXISTS bingo_model_backups (
     id BIGSERIAL PRIMARY KEY,
@@ -133,14 +137,14 @@ async function persistSnapshots(snapshots) {
     await client.query('BEGIN');
     for (const item of snapshots) {
       await client.query(`INSERT INTO bingo_draws
-        (period, draw_at, numbers, super_number, size, odd_even, source, source_label, source_health, models, prediction_target_period, fetched_at)
-        VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12)
+        (period, draw_at, numbers, super_number, size, odd_even, source, source_label, source_health, models, prediction_target_period, casting_at, forecast_casting_at, fetched_at)
+        VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11,$12,$13,$14)
         ON CONFLICT (period) DO UPDATE SET draw_at=EXCLUDED.draw_at, numbers=EXCLUDED.numbers,
         super_number=EXCLUDED.super_number, size=EXCLUDED.size, odd_even=EXCLUDED.odd_even,
         source=EXCLUDED.source, source_label=EXCLUDED.source_label, source_health=EXCLUDED.source_health,
-        models=EXCLUDED.models, prediction_target_period=EXCLUDED.prediction_target_period, fetched_at=EXCLUDED.fetched_at, updated_at=NOW()` , [
+        models=EXCLUDED.models, prediction_target_period=EXCLUDED.prediction_target_period, casting_at=EXCLUDED.casting_at, forecast_casting_at=EXCLUDED.forecast_casting_at, fetched_at=EXCLUDED.fetched_at, updated_at=NOW()` , [
         item.period, item.drawAt || '', JSON.stringify(item.numbers), item.superNumber || '', item.size || '', item.oddEven || '',
-        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []), item.predictionTargetPeriod || '', item.fetchedAt || Date.now(),
+        item.source || '', item.sourceLabel || '', JSON.stringify(item.sourceHealth || []), JSON.stringify(item.models || []), item.predictionTargetPeriod || '', item.castingAt || '', item.forecastCastingAt || '', item.fetchedAt || Date.now(),
       ]);
     }
     await client.query('COMMIT');
@@ -157,7 +161,7 @@ async function readPersisted(limit = 6000) {
   await ensureDatabase();
   const result = await pool.query(`SELECT period, draw_at AS "drawAt", numbers, super_number AS "superNumber",
     size, odd_even AS "oddEven", source, source_label AS "sourceLabel", source_health AS "sourceHealth",
-    models, prediction_target_period AS "predictionTargetPeriod", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
+    models, prediction_target_period AS "predictionTargetPeriod", casting_at AS "castingAt", forecast_casting_at AS "forecastCastingAt", fetched_at AS "fetchedAt" FROM bingo_draws ORDER BY period DESC LIMIT $1`, [Math.min(10000, Math.max(1, limit))]);
   return result.rows.map((row) => ({ ...row, numbers: Array.isArray(row.numbers) ? row.numbers : [], sourceHealth: row.sourceHealth || [], models: row.models || [] }));
 }
 
@@ -572,10 +576,15 @@ function aggregateModel(models, history) {
     rule: '多模型聚合；依各模型歷史回測表現加權投票，不保證提升下一期命中。',
     sources: [],
     calculation: {
+      algorithmVersion: algorithmVersion(),
       method: 'ensemble',
       castingSource: 'weighted-model-consensus',
+      castingAt: models[0]?.calculation?.castingAt || '',
       historySamples: history.length,
       aggregation: '依各模型各玩法回測分數加權；無回測分數時採等權重',
+      commonCasting: '多模型聚合不另起卦；它整合各子模型在同一固定輸入下的結果。',
+      commonCastingValue: '多模型加權整合',
+      targetRules: Object.fromEntries(predictionTargets.map((target) => [target, '依各子模型同一玩法的回測權重加權投票，不產生獨立卦象。'])),
     },
     official: { size: weightedCategory('size'), oddEven: weightedCategory('oddEven'), superNumber, basic },
     research: {

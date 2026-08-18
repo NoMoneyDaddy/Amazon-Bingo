@@ -843,6 +843,22 @@ function hasRetentionCoverage(history, days = retentionDays) {
   return Number.isFinite(parsed.getTime()) && parsed.getTime() <= cutoff + 24 * 60 * 60 * 1000;
 }
 
+function compactHistoryForResponse(history) {
+  return history.map((item, index) => index <= maxModelHistory
+    ? item
+    : {
+        period: item.period,
+        drawAt: item.drawAt,
+        numbers: item.numbers,
+        superNumber: item.superNumber,
+        size: item.size,
+        oddEven: item.oddEven,
+        predictionTargetPeriod: item.predictionTargetPeriod,
+        castingAt: item.castingAt,
+        fetchedAt: item.fetchedAt,
+      });
+}
+
 async function latest(daysOverride = null, existingHistory = []) {
   const health = [];
   const attempts = [{ name: '台灣彩券官方 API', run: () => fetchOfficial(daysOverride) }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
@@ -1029,7 +1045,7 @@ const server = http.createServer(async (req, res) => {
         if (recent.length > fastResponseHistoryLimit) {
           const cached = await persistedResponse(recent.slice(0, fastResponseHistoryLimit));
           refreshInBackground(persisted, hasRetentionCoverage(recent, retentionDays) ? 1 : retentionDays);
-          return send(res, 200, { ...cached, history: recent, historyDays: retentionDays }, req);
+          return send(res, 200, { ...cached, history: compactHistoryForResponse(recent), historyDays: retentionDays }, req);
         }
       }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;

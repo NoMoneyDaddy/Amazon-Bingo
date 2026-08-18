@@ -160,6 +160,32 @@ function formatCountdown(ms: number) {
   return `${String(Math.floor(seconds / 3600)).padStart(2, "0")}:${String(Math.floor((seconds % 3600) / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+function formatDisplayDate(value: string) {
+  const raw = String(value || "").trim();
+  if (!raw) return "時間未知";
+  let date = new Date(raw);
+  if (!Number.isFinite(date.getTime())) {
+    const local = raw.replace(/\([^)]*\)/g, "").replace(/\s+/g, " ").trim();
+    const roc = local.match(/^(\d{2,3})[\/-](\d{1,2})[\/-](\d{1,2})\s+(\d{1,2}):(\d{2})/);
+    const iso = local.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})(?:[ T](\d{1,2}):(\d{2}))?$/);
+    if (roc) date = new Date(Date.UTC(Number(roc[1]) + 1911, Number(roc[2]) - 1, Number(roc[3]), Number(roc[4]) - 8, Number(roc[5])));
+    else if (iso) date = new Date(Date.UTC(Number(iso[1]), Number(iso[2]) - 1, Number(iso[3]), Number(iso[4] || 0) - 8, Number(iso[5] || 0)));
+  }
+  if (!Number.isFinite(date.getTime())) return "時間未知";
+  const parts = new Intl.DateTimeFormat("zh-TW", {
+    timeZone: "Asia/Taipei",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    weekday: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).formatToParts(date);
+  const get = (type: string) => parts.find((part) => part.type === type)?.value || "";
+  return `${get("year")}年${get("month")}月${get("day")}日（${get("weekday")}）${get("hour")}:${get("minute")}（台北時間）`;
+}
+
 function numberSum(numbers: string[]) {
   return numbers.reduce((sum, number) => sum + Number(number), 0);
 }
@@ -669,7 +695,7 @@ export function BingoResearchView() {
                         <div className="mb-1 font-semibold text-cyan-200">共同計算輸入</div>
                         <div><span className="text-foreground">起卦核心：</span>{model.calculation?.commonCastingValue || "—"}</div>
                         <div className="mt-1 break-words text-[11px]">{model.calculation?.commonCasting || "共同預測時間未提供"}</div>
-                        <div className="mt-2 text-[11px] text-amber-100">固定輸入：{model.calculation?.castingAt || "—"} · 版本：{model.calculation?.algorithmVersion || "—"}</div>
+                        <div className="mt-2 text-[11px] text-amber-100">固定輸入：{formatDisplayDate(model.calculation?.castingAt || "")} · 版本：{model.calculation?.algorithmVersion || "—"}</div>
                         <div className="mt-1 text-[11px] text-amber-100">這組起卦只計算一次；下方每個玩法顯示的是獨立適配規則與回測，不是重新起卦。</div>
                       </div>
                       <div className="mt-3 border-t border-slate-800 pt-2 text-xs leading-5 text-slate-300">
@@ -741,7 +767,7 @@ export function BingoResearchView() {
                       <div className="flex min-w-0 items-center justify-between gap-2">
                         <div className="min-w-0">
                           <h3 className="text-xs font-bold tabular-nums text-white">第 {draw.period} 期</h3>
-                          <div className="mt-0.5 truncate text-[9px] text-muted-foreground">{draw.drawAt || "時間未知"}</div>
+                          <div className="mt-0.5 truncate text-[9px] text-muted-foreground">{formatDisplayDate(draw.drawAt)}</div>
                         </div>
                         <button
                           type="button"

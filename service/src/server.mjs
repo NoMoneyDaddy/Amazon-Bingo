@@ -55,6 +55,8 @@ let refreshInFlight = false;
 const persistedCache = new Map();
 const persistedReadInFlight = new Map();
 const compressedPayloadCache = new Map();
+const latestResponseCache = new Map();
+const latestResponseCacheTtlMs = 5_000;
 const sourceRuntimeStats = new Map();
 
 function sourceStat(name) {
@@ -1568,7 +1570,7 @@ function requestedCastingTime(value) {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : '';
 }
 
-async function latest(daysOverride = null, existingHistory = [], requestedCastingAt = '') {
+async function latest(daysOverride = null, existingHistory = [], requestedCastingAt = '', options = {}) {
   const health = [];
   const apiSource = { name: '台灣彩券官方 API', authority: 'official', initialRank: 1000 };
   const attempts = [{ ...apiSource, run: () => fetchOfficial(daysOverride) }, ...fallbackSources
@@ -1616,7 +1618,9 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         // 舊歷史模型若已存在就保留；同步歷史資料不應逐期重新啟動 worker，否則 31 日查詢會阻塞首屏。
         const previous = historyByPeriod.get(String(item.period));
         const models = isNextPrediction
-          ? await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt })
+          ? options.deferLatestModel
+            ? []
+            : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt })
           : previous?.models || item.models || [];
         history.push({
           ...item,
@@ -1696,6 +1700,21 @@ function refreshInBackground(persisted, days = 1) {
     .finally(() => { refreshInFlight = false; });
 }
 
+function readLatestResponseCache(key) {
+  const cached = latestResponseCache.get(key);
+  if (!cached || Date.now() - cached.storedAt > latestResponseCacheTtlMs) {
+    latestResponseCache.delete(key);
+    return null;
+  }
+  return cached.body;
+}
+
+function writeLatestResponseCache(key, body) {
+  latestResponseCache.set(key, { storedAt: Date.now(), body });
+  if (latestResponseCache.size > 4) latestResponseCache.delete(latestResponseCache.keys().next().value);
+  return body;
+}
+
 function nextDrawAt(now = new Date()) {
   const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   const year = taipei.getUTCFullYear(); const month = taipei.getUTCMonth(); const day = taipei.getUTCDate();
@@ -1761,6 +1780,11 @@ const server = http.createServer(async (req, res) => {
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
       const castingAt = requestedCastingTime(requestUrl.searchParams.get('castingAt'));
+      const responseCacheKey = daysOverride === 1 ? 'latest-1' : '';
+      if (responseCacheKey) {
+        const cachedResponse = readLatestResponseCache(responseCacheKey);
+        if (cachedResponse) return send(res, 200, cachedResponse, req);
+      }
       const persisted = await readPersistedCached(daysOverride && daysOverride > 1 ? 10000 : persistedHistoryLimit);
       const cachedForecast = persisted[0]?.forecastCastingAt
         ? reproducibleCastingAt(persisted[0].forecastCastingAt, persisted[0].predictionTargetPeriod || '')
@@ -1770,8 +1794,15 @@ const server = http.createServer(async (req, res) => {
       if (persisted.length && daysOverride === 1) {
         // 最新開獎不可先回傳保存快取；否則新一期出現後畫面必然延遲一期。
         // 只有歷史查詢允許背景更新，days=1 必須先向官方來源確認最新期號。
-        const fresh = await latest(1, persisted, castingAt);
-        return send(res, 200, fresh, req);
+        const fresh = await latest(1, persisted, castingAt, { deferLatestModel: true });
+        refreshInBackground(persisted, 1);
+        return send(res, 200, writeLatestResponseCache(responseCacheKey, fresh), req);
+      }
+      // 冷啟動先查最新一期，完整 31 日資料與建庫交給背景工作，避免首屏等待歷史同步。
+      if (!persisted.length && daysOverride === 1) {
+        const fresh = await latest(1, [], castingAt, { deferLatestModel: true });
+        refreshInBackground([], retentionDays);
+        return send(res, 200, writeLatestResponseCache(responseCacheKey, fresh), req);
       }
       // 月份查詢優先使用已保存的近期資料；官方補同步在背景執行，避免 6000 筆保存集阻塞首屏。
       if (persisted.length && daysOverride && daysOverride > 1) {
@@ -1788,8 +1819,9 @@ const server = http.createServer(async (req, res) => {
         const cached = await persistedResponse(persisted, castingAt);
         return send(res, 200, { ...cached, history: selectRecentHistory(persisted, retentionDays), historyDays: retentionDays });
       }
-      const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
-      return send(res, 200, await latest(refreshDays, persisted, castingAt), req);
+      const refreshDays = daysOverride === 1 && !hasUsableHistory ? 1 : daysOverride;
+      const fresh = await latest(refreshDays, persisted, castingAt);
+      return send(res, 200, responseCacheKey ? writeLatestResponseCache(responseCacheKey, fresh) : fresh, req);
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }
   }
   send(res, 404, { error: 'Not found' });

@@ -11,9 +11,11 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-// 最新一筆是下一期預測基準；另外保留 60 筆已開獎期，讓回測樣本與歷史期數一致。
-const persistedHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v14-60-backtest-samples';
+// 資料保存至少涵蓋一個月；最新基準之外，模型回測仍維持 60 期。
+const retentionDays = 31;
+const persistedHistoryLimit = 6000;
+const fastResponseHistoryLimit = maxModelHistory + 1;
+const reproducibilityVersion = 'bingo-research-v15-month-retention';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -824,6 +826,15 @@ function nextPredictionPeriod(period) {
   return Number.isFinite(numeric) ? String(numeric + 1) : `${period}-next`;
 }
 
+function selectRecentHistory(history, days = retentionDays) {
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  const recent = history.filter((item) => {
+    const parsed = parseTaipeiDate(item.drawAt);
+    return Number.isFinite(parsed.getTime()) && parsed.getTime() >= cutoff;
+  });
+  return recent.length ? recent : history.slice(0, fastResponseHistoryLimit);
+}
+
 async function latest(daysOverride = null, existingHistory = []) {
   const health = [];
   const attempts = [{ name: '台灣彩券官方 API', run: () => fetchOfficial(daysOverride) }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
@@ -857,9 +868,11 @@ async function latest(daysOverride = null, existingHistory = []) {
         const modelCastingAt = isNextPrediction ? predictionCastingAt : castingAt;
         const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt, castingAt: modelCastingAt } : { ...item, castingAt };
         const modelHistory = rawHistory.slice(index + 1, index + maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
-        const models = index > 0 && item.models?.length
-          ? item.models
-          : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: isNextPrediction, castingAt: modelCastingAt });
+        const models = index > maxModelHistory
+          ? []
+          : index > 0 && item.models?.length
+            ? item.models
+            : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: isNextPrediction, castingAt: modelCastingAt });
         history.push({
           ...item,
           drawAt,
@@ -873,7 +886,10 @@ async function latest(daysOverride = null, existingHistory = []) {
       }
       await persistSnapshots(history);
       const backup = await backupModelProfile(history[0]);
-      return { ...history[0], history, historyDays: Math.max(result.historyDays || 1, existingHistory.length ? 30 : 1), sourceHealth: health, backup };
+      const responseHistory = daysOverride && daysOverride > 1
+        ? selectRecentHistory(history, retentionDays)
+        : history.slice(0, fastResponseHistoryLimit);
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, backup };
     } catch (error) {
       health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
     }
@@ -883,10 +899,11 @@ async function latest(daysOverride = null, existingHistory = []) {
 
 async function persistedResponse(persisted) {
   if (!persisted.length) return null;
-  const current = persisted[0];
+  const visible = persisted.slice(0, fastResponseHistoryLimit);
+  const current = visible[0];
   const targetPeriod = nextPredictionPeriod(current.period);
   const predictionCastingAt = nextDrawAt(new Date()).toISOString();
-  const modelHistory = persisted.slice(1, maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
+  const modelHistory = visible.slice(1, maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
   const modelSnapshot = {
     ...current,
     period: targetPeriod,
@@ -905,11 +922,11 @@ async function persistedResponse(persisted) {
     models,
     forecastCastingAt: predictionCastingAt,
     predictionTargetPeriod: targetPeriod,
-  }, ...persisted.slice(1)];
+  }, ...visible.slice(1)];
   return {
     ...history[0],
     history,
-    historyDays: Math.max(30, history.length),
+    historyDays: retentionDays,
     sourceHealth: current.sourceHealth || [],
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
   };
@@ -1000,7 +1017,7 @@ const server = http.createServer(async (req, res) => {
       }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
       const hasUsableHistory = persisted.length >= persistedHistoryLimit;
-      if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory && forecastFresh) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory && forecastFresh) return send(res, 200, { ...persisted[0], history: selectRecentHistory(persisted, retentionDays), historyDays: retentionDays, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
       return send(res, 200, await latest(refreshDays, persisted), req);
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }

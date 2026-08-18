@@ -562,7 +562,8 @@ export function BingoResearchView() {
     setSyncing(true);
     setError("");
     try {
-      const snapshot = await fetchLatest(1);
+      // 首次讀取與手動重新讀取都抓最近一個月，避免畫面只剩 60 期。
+      const snapshot = await fetchLatest(30);
       const records = snapshot.history?.length ? snapshot.history : [snapshot];
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");
@@ -680,6 +681,7 @@ export function BingoResearchView() {
                   )}
                 </section>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border border-border bg-background/70 px-3 py-2 text-[10px] leading-5 text-muted-foreground" role="status">
+                  <span>保留至少 {latest?.historyDays || 31} 日</span>
                   <span>歷史 {Math.max(0, sorted.length - 1)} 期</span>
                   <span>回測樣本 {bestPlays[0]?.best.samples || 0} 期</span>
                   <span>最新資料 {latest?.numbers.length || 0}/20 個號碼</span>

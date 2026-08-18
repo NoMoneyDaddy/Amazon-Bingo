@@ -2596,9 +2596,9 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     forecastCastingAt: predictionCastingAt,
     predictionTargetPeriod: targetPeriod,
   }, ...visible.slice(1)];
-  if ((!current.forecastEvaluation?.length || !hasCompleteProfitabilityEvaluation(current.profitabilityEvaluation))
+  if ((!current.models?.length || !current.forecastEvaluation?.length || !hasCompleteProfitabilityEvaluation(current.profitabilityEvaluation))
     && history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
-    await hydrateEvaluationModels(history);
+    if (!current.models?.length) await hydrateEvaluationModels(history);
   }
   const evaluationHistory = history;
   const hasStoredEvaluation = Boolean(current.forecastEvaluation?.length
@@ -2765,8 +2765,8 @@ const server = http.createServer(async (req, res) => {
       const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
       // days=1 是最新開獎讀取，必須即時確認官方期號；歷史查詢才可使用保存快取。
       if (persisted.length && daysOverride === 1) {
-        if (evaluationIncomplete && requestUrl.searchParams.get('recover') === '1') {
-          const recovered = await latest(1, persisted, castingAt, { deferEvaluationModels: false });
+        if (evaluationIncomplete) {
+          const recovered = await persistedResponse(persisted, castingAt);
           return send(res, 200, writeLatestResponseCache(responseCacheKey, recovered), req);
         }
         // 先回傳最近一次已保存的結果，官方期號確認與模型重算在背景執行；

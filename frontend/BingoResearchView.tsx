@@ -154,8 +154,52 @@ type DrawSnapshot = {
     caveat: string;
   };
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
+  profitabilityEvaluation?: ProfitabilityPlay[];
+  technicalAnalysis?: TechnicalAnalysisData;
 };
 type Page = "overview" | "technical" | "history";
+
+type ProfitabilityPlay = {
+  key: string;
+  label: string;
+  metricLabel: string;
+  best: {
+    model: string;
+    samples: number;
+    wins: number;
+    profit: number;
+    payoutTotal: number;
+    costTotal: number;
+    matches: number;
+    targetCount: number;
+    averageProfit: number | null;
+    positiveExpected: boolean;
+    profitRate: number | null;
+    estimatedRate?: number | null;
+    confidence?: number | null;
+    prediction: string;
+  };
+};
+
+type TechnicalAnalysisData = {
+  sampleSize: number;
+  hotNumbers: Array<[string, number]>;
+  zones: number[];
+  sizeCounts: Record<string, number>;
+  oddEvenCounts: Record<string, number>;
+  topSuper: Array<[string, number]>;
+  averageSum: number | null;
+  sumMinimum: number | null;
+  sumMaximum: number | null;
+  sumStandardDeviation: number | null;
+  rangeAverage: number | null;
+  repeatAverage: number | null;
+  consecutiveRate: number | null;
+  omissionNumbers: Array<{ number: string; count: number; omission: number }>;
+  trendNumbers: Array<{ number: string; count: number; omission: number; change: number }>;
+  sizePercentages: Record<string, string>;
+  oddEvenPercentages: Record<string, string>;
+};
 
 function normalizeModel(value: Partial<Model> | null | undefined): Model {
   const official = (value?.official || {}) as Partial<Model["official"]>;
@@ -220,6 +264,8 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     calibratedProbabilityEvaluation: Array.isArray(value.calibratedProbabilityEvaluation) ? value.calibratedProbabilityEvaluation : [],
     theoreticalRiskBaseline: value.theoreticalRiskBaseline,
     researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
+    profitabilityEvaluation: Array.isArray(value.profitabilityEvaluation) ? value.profitabilityEvaluation : [],
+    technicalAnalysis: value.technicalAnalysis,
   };
 }
 
@@ -503,6 +549,7 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
         averageProfit: trials ? profit / trials : null,
         positiveExpected: trials > 0 && profit / trials > 0,
         rate,
+        profitRate: rate,
         estimatedRate: trials ? (evolution?.estimatedRate ?? (wins + 1) / (trials + 2)) : null,
         confidence: trials ? (evolution?.confidence ?? (rate == null || trials < 8 ? -1 : wilsonLowerBound(rate, trials))) : -1,
         prediction: prediction || "—",
@@ -550,7 +597,7 @@ function BacktestEvidence({
 function ProfitabilityDetail({
   best,
 }: {
-  best: ReturnType<typeof bestPlayStats>[number]["best"];
+  best: ProfitabilityPlay["best"];
 }) {
   return (
     <div className="grid gap-1.5 border-t border-slate-800 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground sm:grid-cols-4">
@@ -711,11 +758,11 @@ export function BingoResearchView() {
     () => (latest ? parseModels(latest) : []),
     [latest],
   );
-  const bestPlays = useMemo(
-    () => bestPlayStats(sorted, latestModels),
-    [sorted, latestModels],
+  const bestPlays: ProfitabilityPlay[] = useMemo(
+    () => latest?.profitabilityEvaluation?.length ? latest.profitabilityEvaluation : bestPlayStats(sorted, latestModels),
+    [latest, sorted, latestModels],
   );
-  const technicalAnalysis = useMemo(() => {
+  const technicalAnalysisFallback = useMemo(() => {
     const draws = sorted.slice(0, 30);
     const frequency = new Map<string, number>();
     draws.forEach((draw) => draw.numbers.forEach((number) => frequency.set(normalizeNumber(number), (frequency.get(normalizeNumber(number)) || 0) + 1)));
@@ -774,6 +821,7 @@ export function BingoResearchView() {
       oddEvenPercentages: Object.fromEntries(Object.entries(oddEvenCounts).map(([key, value]) => [key, percentage(value, oddEvenTotal)])),
     };
   }, [sorted]);
+  const technicalAnalysis: TechnicalAnalysisData = latest?.technicalAnalysis || technicalAnalysisFallback;
 
   const sync = useCallback(async () => {
     if (syncing) return;

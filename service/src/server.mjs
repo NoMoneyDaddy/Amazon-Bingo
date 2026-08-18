@@ -950,6 +950,110 @@ function calibratedProbabilityEvaluation(history = []) {
   });
 }
 
+function backtestPayout(target, predicted, actual) {
+  if (target === 'size') return normalizeDrawCategory(predicted, 'size') === normalizeDrawCategory(actual.size, 'size') ? 150 : 0;
+  if (target === 'oddEven') return normalizeDrawCategory(predicted, 'oddEven') === normalizeDrawCategory(actual.oddEven, 'oddEven') ? 150 : 0;
+  if (target === 'superNumber') return String(predicted || '') === String(actual.superNumber || '') ? 1200 : 0;
+  const actualNumbers = new Set(actual.numbers || []);
+  const matches = (Array.isArray(predicted) ? predicted : []).filter((number) => actualNumbers.has(String(number).padStart(2, '0'))).length;
+  return basicPayouts[target]?.[matches] || 0;
+}
+
+function profitabilityEvaluation(history = []) {
+  const plays = [
+    { key: 'size', label: '猜大小' },
+    { key: 'oddEven', label: '猜單雙' },
+    { key: 'superNumber', label: '超級獎號' },
+    ...Array.from({ length: 10 }, (_, index) => ({ key: `${index + 1}星`, label: `${index + 1} 星` })),
+  ];
+  const currentModels = history[0]?.models || [];
+  return plays.map((play) => {
+    const candidates = currentModels.map((currentModel) => {
+      const rows = history.slice(1, maxModelHistory + 1).flatMap((actual) => {
+        const model = actual.models?.find((item) => item.name === currentModel.name);
+        return model ? [{ actual, model }] : [];
+      });
+      let wins = 0; let trials = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;
+      rows.forEach(({ actual, model }) => {
+        const predicted = play.key === 'size'
+          ? model.official?.size
+          : play.key === 'oddEven'
+            ? model.official?.oddEven
+            : play.key === 'superNumber'
+              ? model.official?.superNumber
+              : model.official?.basic?.[play.key] || [];
+        const payout = backtestPayout(play.key, predicted, actual);
+        const net = payout - singleBetCost;
+        wins += net > 0 ? 1 : 0;
+        payoutTotal += payout;
+        profit += net;
+        if (Array.isArray(predicted)) {
+          const actualNumbers = new Set(actual.numbers || []);
+          matches += predicted.filter((number) => actualNumbers.has(String(number).padStart(2, '0'))).length;
+          targetCount += predicted.length;
+        } else { matches += payout > 0 ? 1 : 0; targetCount += 1; }
+        trials += 1;
+      });
+      const evolution = currentModel.calculation?.evolution?.[play.key];
+      if (!trials && evolution) { trials = evolution.trials || evolution.validationSamples || 0; wins = evolution.wins || 0; }
+      const prediction = play.key === 'size'
+        ? currentModel.official?.size
+        : play.key === 'oddEven'
+          ? currentModel.official?.oddEven
+          : play.key === 'superNumber'
+            ? currentModel.official?.superNumber
+            : currentModel.official?.basic?.[play.key]?.join('、');
+      const profitRate = trials ? wins / trials : null;
+      const averageProfit = trials ? profit / trials : null;
+      return {
+        model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal: trials * singleBetCost,
+        matches, targetCount, averageProfit, positiveExpected: averageProfit != null && averageProfit > 0,
+        profitRate, estimatedRate: trials ? (evolution?.estimatedRate ?? (wins + 1) / (trials + 2)) : null,
+        confidence: evolution?.confidence ?? (profitRate == null ? -1 : profitRate), prediction: prediction || '—',
+      };
+    }).sort((a, b) => Number(b.positiveExpected) - Number(a.positiveExpected) || (b.confidence ?? -1) - (a.confidence ?? -1) || (b.profitRate ?? -1) - (a.profitRate ?? -1));
+    return { ...play, best: candidates[0] || { model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, prediction: '—' }, metricLabel: '盈利機率' };
+  });
+}
+
+function technicalAnalysis(history = []) {
+  const draws = history.slice(0, 30);
+  const frequency = new Map();
+  draws.forEach((draw) => (draw.numbers || []).forEach((number) => { const key = String(number).padStart(2, '0'); frequency.set(key, (frequency.get(key) || 0) + 1); }));
+  const zones = [0, 0, 0, 0];
+  draws.forEach((draw) => (draw.numbers || []).forEach((number) => { zones[Math.min(3, Math.floor((Number(number) - 1) / 20))] += 1; }));
+  const countBy = (field) => draws.reduce((result, draw) => { const key = normalizeDrawCategory(draw[field] || '', field); result[key] = (result[key] || 0) + 1; return result; }, {});
+  const sizeCounts = countBy('size'); const oddEvenCounts = countBy('oddEven');
+  const superNumbers = new Map();
+  draws.forEach((draw) => { const key = String(draw.superNumber || '').padStart(2, '0'); if (key !== '00') superNumbers.set(key, (superNumbers.get(key) || 0) + 1); });
+  const sums = draws.map((draw) => (draw.numbers || []).reduce((total, number) => total + Number(number), 0)).filter(Number.isFinite);
+  const averageSum = sums.length ? sums.reduce((total, value) => total + value, 0) / sums.length : null;
+  const variance = averageSum == null ? null : sums.reduce((total, value) => total + (value - averageSum) ** 2, 0) / sums.length;
+  const repeats = draws.slice(0, -1).reduce((total, draw, index) => total + (draw.numbers || []).filter((number) => new Set(draws[index + 1]?.numbers || []).has(number)).length, 0);
+  const consecutive = draws.filter((draw) => { const values = (draw.numbers || []).map(Number).sort((a, b) => a - b); return values.some((value, index) => index > 0 && value === values[index - 1] + 1); }).length;
+  const allNumbers = Array.from({ length: 80 }, (_, index) => String(index + 1).padStart(2, '0')).map((number) => { const lastSeen = draws.findIndex((draw) => (draw.numbers || []).map((value) => String(value).padStart(2, '0')).includes(number)); return { number, count: frequency.get(number) || 0, omission: lastSeen < 0 ? draws.length : lastSeen }; });
+  const short = draws.slice(0, 10); const prior = draws.slice(10, 30); const countWindow = (window) => { const result = new Map(); window.forEach((draw) => (draw.numbers || []).forEach((number) => { const key = String(number).padStart(2, '0'); result.set(key, (result.get(key) || 0) + 1); })); return result; };
+  const shortFrequency = countWindow(short); const priorFrequency = countWindow(prior);
+  const trendNumbers = allNumbers.map((item) => ({ ...item, change: (shortFrequency.get(item.number) || 0) / Math.max(1, short.length) - (priorFrequency.get(item.number) || 0) / Math.max(1, prior.length) })).sort((a, b) => b.change - a.change || b.count - a.count).slice(0, 8);
+  const percentage = (value, total) => total ? `${(value / total * 100).toFixed(1)}%` : '—';
+  const sizeTotal = Object.values(sizeCounts).reduce((total, value) => total + value, 0); const oddEvenTotal = Object.values(oddEvenCounts).reduce((total, value) => total + value, 0);
+  return {
+    sampleSize: draws.length,
+    hotNumbers: [...frequency.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 10),
+    zones, sizeCounts, oddEvenCounts,
+    topSuper: [...superNumbers.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 5),
+    averageSum, sumMinimum: sums.length ? Math.min(...sums) : null, sumMaximum: sums.length ? Math.max(...sums) : null,
+    sumStandardDeviation: variance == null ? null : Math.sqrt(variance),
+    rangeAverage: draws.length ? draws.reduce((total, draw) => { const values = (draw.numbers || []).map(Number); return total + Math.max(...values) - Math.min(...values); }, 0) / draws.length : null,
+    repeatAverage: draws.length > 1 ? repeats / (draws.length - 1) : null,
+    consecutiveRate: draws.length ? consecutive / draws.length : null,
+    omissionNumbers: allNumbers.sort((a, b) => b.omission - a.omission || a.count - b.count || Number(a.number) - Number(b.number)).slice(0, 10),
+    trendNumbers,
+    sizePercentages: Object.fromEntries(Object.entries(sizeCounts).map(([key, value]) => [key, percentage(value, sizeTotal)])),
+    oddEvenPercentages: Object.fromEntries(Object.entries(oddEvenCounts).map(([key, value]) => [key, percentage(value, oddEvenTotal)])),
+  };
+}
+
 function lowerConfidenceBound(rate, samples) {
   if (!samples) return 0;
   const z = 1.96;
@@ -1638,7 +1742,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const responseHistory = daysOverride && daysOverride > 1
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), profitabilityEvaluation: profitabilityEvaluation(history), technicalAnalysis: technicalAnalysis(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       const errorMessage = error instanceof Error ? error.message : '來源失敗';
@@ -1686,6 +1790,8 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     backtestIntegrity: leakageGuard(visible, targetPeriod),
     forecastEvaluation: forecastEvaluation([{ ...current, models }, ...visible.slice(1)]),
     calibratedProbabilityEvaluation: calibratedProbabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
+    profitabilityEvaluation: profitabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
+    technicalAnalysis: technicalAnalysis([{ ...current, models }, ...visible.slice(1)]),
     theoreticalRiskBaseline: theoreticalRiskBaseline(),
     researchEvidence: researchEvidenceRegistry,
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },

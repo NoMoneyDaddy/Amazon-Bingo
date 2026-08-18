@@ -348,6 +348,8 @@ function hasFormalModels(models: Model[]): boolean {
 
 const LATEST_REFRESH_MS = 30_000;
 const HISTORY_REFRESH_MS = 5 * 60_000;
+const LATEST_FETCH_TIMEOUT_MS = 8_000;
+const FORMAL_MODEL_FETCH_TIMEOUT_MS = 45_000;
 
 type BingoRuntimeState = {
   draws: DrawSnapshot[];
@@ -571,7 +573,7 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
     const controller = new AbortController();
     const timeout = window.setTimeout(
       () => controller.abort("資料服務逾時"),
-      8_000,
+      days > 1 ? FORMAL_MODEL_FETCH_TIMEOUT_MS : LATEST_FETCH_TIMEOUT_MS,
     );
     try {
       const response = await fetch(`${API_URL}?days=${days}&castingAt=${encodeURIComponent(castingAt)}`, {
@@ -1154,16 +1156,26 @@ export function BingoResearchView() {
       useBingoRuntimeStore.getState().markLatestSynced(Date.now());
       setLastSync(Date.now());
       if (shouldRefreshHistory) {
-        void new Promise((resolve) => window.setTimeout(resolve, 2000))
-          .then(() => fetchLatest(31, castingAt))
-          .then((fullSnapshot) => {
+        const refreshFormalHistory = async (attempt = 0): Promise<void> => {
+          try {
+            const fullSnapshot = await fetchLatest(31, castingAt);
             const fullRecords = fullSnapshot.history?.length
               ? [{ ...fullSnapshot, history: undefined }, ...fullSnapshot.history.slice(1)]
               : [fullSnapshot];
             const latestRuntime = useBingoRuntimeStore.getState();
             latestRuntime.setDraws(mergeDrawSnapshots(latestRuntime.draws, fullRecords));
-            latestRuntime.markHistorySynced(Date.now());
-          })
+            if (fullSnapshot.modelStatus === "formal" || attempt >= 2) {
+              latestRuntime.markHistorySynced(Date.now());
+              return;
+            }
+          } catch {
+            if (attempt >= 2) return;
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 5_000));
+          return refreshFormalHistory(attempt + 1);
+        };
+        void new Promise((resolve) => window.setTimeout(resolve, 2_000))
+          .then(() => refreshFormalHistory())
           .catch(() => undefined);
       }
     } catch (err) {

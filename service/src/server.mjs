@@ -2451,14 +2451,17 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     drawAt: formatTaipeiDateTime(new Date(predictionCastingAt)),
     castingAt: predictionCastingAt,
   };
-  // 快取只提供開獎資料；模型仍須重新執行 walk-forward 基線評估，不能用舊模型權重或跳過 baseline gate。
+  // 有正式持久化結果時直接提供；背景同步會負責在新一期出現後刷新。
+  // 只有冷資料沒有模型時才補算，避免歷史查詢每次重跑 worker。
   let models = current.models || [];
   let modelError = '';
-  try {
-    models = await buildModelsCached(modelSnapshot, modelHistory, { evolve: true, castingAt: predictionCastingAt });
-  } catch (error) {
-    modelError = error instanceof Error ? error.message : String(error);
-    console.error(JSON.stringify({ event: 'cached-prediction-recompute-failed', message: error instanceof Error ? error.message : String(error) }));
+  if (!models.length) {
+    try {
+      models = await buildModelsCached(modelSnapshot, modelHistory, { evolve: true, castingAt: predictionCastingAt });
+    } catch (error) {
+      modelError = error instanceof Error ? error.message : String(error);
+      console.error(JSON.stringify({ event: 'cached-prediction-recompute-failed', message: error instanceof Error ? error.message : String(error) }));
+    }
   }
   const history = [{
     ...current,
@@ -2466,7 +2469,13 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     forecastCastingAt: predictionCastingAt,
     predictionTargetPeriod: targetPeriod,
   }, ...visible.slice(1)];
-  await hydrateEvaluationModels(history);
+  if (!current.forecastEvaluation?.length && history.slice(1).some((item) => !Array.isArray(item.models) || !item.models.length)) await hydrateEvaluationModels(history);
+  const evaluationHistory = [{ ...current, models }, ...visible.slice(1)];
+  const storedForecast = current.forecastEvaluation?.length ? current.forecastEvaluation : forecastEvaluation(evaluationHistory);
+  const storedCalibrated = current.calibratedProbabilityEvaluation?.length ? current.calibratedProbabilityEvaluation : calibratedProbabilityEvaluation(evaluationHistory);
+  const storedProfitability = current.profitabilityEvaluation?.length ? current.profitabilityEvaluation : profitabilityEvaluation(evaluationHistory);
+  const storedZone = current.zoneProfitabilityEvaluation?.length ? current.zoneProfitabilityEvaluation : zoneProfitabilityEvaluation(evaluationHistory);
+  const storedTechnical = Object.keys(current.technicalAnalysis || {}).length ? current.technicalAnalysis : technicalAnalysis(evaluationHistory);
   return {
     ...history[0],
     history: compactHistoryForResponse(history.slice(0, responseHistoryLimit)),
@@ -2475,11 +2484,11 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     audit: researchAudit(visible.slice(1)),
     behaviorAudit: behaviorAudit(visible.slice(1)),
     backtestIntegrity: leakageGuard(visible, targetPeriod),
-    forecastEvaluation: forecastEvaluation([{ ...current, models }, ...visible.slice(1)]),
-    calibratedProbabilityEvaluation: calibratedProbabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
-    profitabilityEvaluation: profitabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
-    zoneProfitabilityEvaluation: zoneProfitabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
-    technicalAnalysis: technicalAnalysis([{ ...current, models }, ...visible.slice(1)]),
+    forecastEvaluation: storedForecast,
+    calibratedProbabilityEvaluation: storedCalibrated,
+    profitabilityEvaluation: storedProfitability,
+    zoneProfitabilityEvaluation: storedZone,
+    technicalAnalysis: storedTechnical,
     theoreticalRiskBaseline: theoreticalRiskBaseline(),
     researchEvidence: researchEvidenceRegistry,
     modelStatus: models.length ? 'formal' : 'error',

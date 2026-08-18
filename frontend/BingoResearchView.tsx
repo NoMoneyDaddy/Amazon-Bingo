@@ -538,26 +538,20 @@ export function BingoResearchView() {
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-x-hidden" aria-busy={syncing}>
         <CustomScrollbar orientation="vertical">
           <div className="mx-auto min-w-0 max-w-5xl space-y-4 overflow-x-hidden p-3 pb-24 sm:space-y-5 sm:p-5 sm:pb-6">
-            <header className="overflow-hidden rounded-3xl border border-border bg-card p-3 shadow-xl shadow-black/20 sm:p-4">
-              <div className="flex items-start justify-between gap-4">
-                <div>
-                  <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2.5 py-1 text-xs font-medium text-cyan-100">
-                    <span aria-hidden="true" className="h-2 w-2 rounded-full bg-cyan-300 motion-safe:animate-pulse" />
-                    即時研究看板 · 僅供研究
-                  </div>
-                  <div className="text-xs font-medium text-muted-foreground sm:text-sm">距離下期開獎</div>
-                  <div className="mt-0.5 tabular-nums text-2xl font-bold tracking-tight text-cyan-100 sm:text-3xl" aria-label={`距離下期開獎 ${formatCountdown(nextDraw.getTime() - now.getTime())}`}>
+            <header className="overflow-hidden rounded-xl border border-border bg-card px-2.5 py-2 shadow-lg shadow-black/15 sm:px-3">
+              <div className="flex min-w-0 items-center justify-between gap-2">
+                <div className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="shrink-0 text-[10px] font-medium text-muted-foreground">下期倒數</span>
+                  <span className="shrink-0 tabular-nums text-lg font-bold tracking-tight text-cyan-100 sm:text-xl" aria-label={`距離下期開獎 ${formatCountdown(nextDraw.getTime() - now.getTime())}`}>
                     {formatCountdown(nextDraw.getTime() - now.getTime())}
-                  </div>
+                  </span>
                 </div>
-                <div className="rounded-xl border border-border bg-background/70 px-2.5 py-1.5 text-right">
-                  <div className="text-xs text-muted-foreground">台北時間</div>
-                  <time className="text-xs font-medium text-foreground" dateTime={now.toISOString()}>{taipeiTime}</time>
-                  <div className="mt-0.5 text-[10px] text-cyan-200">{latest ? "資料已更新" : "等待資料"}</div>
+                <div className="shrink-0 text-right text-[10px] leading-4 text-muted-foreground">
+                  <time className="font-medium text-foreground" dateTime={now.toISOString()}>{taipeiTime}</time>
+                  <span className="ml-1 text-cyan-200">· {latest ? "已更新" : "等待"}</span>
                 </div>
               </div>
-              <p className="mt-2 max-w-2xl text-xs leading-5 text-muted-foreground">官方結果、研究預測、計算方法與歷史回測分層呈現；所有結果僅供研究。</p>
-              <nav aria-label="研究台頁面" className="mt-3 hidden flex-wrap gap-2 border-t border-slate-700/80 pt-3 sm:flex">
+              <nav aria-label="研究台頁面" className="mt-1.5 hidden flex-wrap gap-2 border-t border-slate-700/60 pt-1.5 sm:flex">
                 {pageButton("overview", "首頁")}
                 {pageButton("process", "計算過程")}
                 {pageButton("history", "歷史紀錄")}
@@ -573,68 +567,23 @@ export function BingoResearchView() {
             </div>
             {page === "overview" && (
               <>
-                <section aria-labelledby="latest-draw-heading" className="rounded-2xl border border-orange-300/30 bg-card p-3 shadow-lg shadow-orange-950/20 backdrop-blur transition-colors duration-300 sm:rounded-3xl sm:p-4">
-                  <div className="flex items-center justify-between gap-2">
-                    <div>
-                      <p className="text-xs font-semibold uppercase tracking-[0.18em] text-orange-200/80">01 · 官方結果</p>
-                      <h2 id="latest-draw-heading" className="mt-0.5 text-base font-bold text-orange-100 sm:text-lg">最新開獎號碼</h2>
-                    </div>
-                    <span className="shrink-0 text-base font-semibold tabular-nums text-orange-100 sm:text-lg" aria-label={latest ? `第 ${latest.period} 期` : "等待同步"}>
-                      {latest ? `第 ${latest.period} 期` : "等待同步"}
-                    </span>
-                  </div>
+                <section aria-labelledby="latest-draw-heading" className="rounded-xl border border-orange-300/25 bg-card px-2.5 py-2 shadow-md shadow-orange-950/15 backdrop-blur">
                   {latest ? (
-                    <>
-                      <div className="mt-1.5 flex flex-wrap gap-1" aria-label={`第 ${latest.period} 期大小、單雙、超級獎號結果`}>
-                        <span className="rounded-full border border-orange-300/40 bg-orange-300/10 px-2 py-0.5 text-[10px] font-semibold text-orange-100">
-                          大小：{latest.size || "—"}
-                        </span>
-                        <span className="rounded-full border border-cyan-300/40 bg-cyan-300/10 px-2 py-0.5 text-[10px] font-semibold text-cyan-100">
-                          單雙：{latest.oddEven || "—"}
-                        </span>
-                        <span className="rounded-full border border-red-300/40 bg-red-400/10 px-2 py-0.5 text-[10px] font-semibold tabular-nums text-red-100">
-                          超級獎號：{latest.superNumber || "—"}
-                        </span>
+                    <div className="flex min-w-0 items-center gap-2" aria-label={`第 ${latest.period} 期最新開獎結果`}>
+                      <div className="shrink-0">
+                        <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-200/80">最新開獎</p>
+                        <h2 id="latest-draw-heading" className="text-xs font-bold tabular-nums text-orange-100">第 {latest.period} 期</h2>
                       </div>
-                      <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[9px] text-muted-foreground" aria-label="號碼球顏色說明">
-                        <span className="font-medium text-muted-foreground">球色：</span>
-                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-orange-400" />一般</span>
-                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-pink-500" />熱號</span>
-                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-blue-500" />冷號</span>
-                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="h-2 w-2 rounded-full bg-red-500" />超級</span>
-                        <span className="inline-flex items-center gap-1"><i aria-hidden="true" className="flex h-3 min-w-3 items-center justify-center rounded-full bg-slate-800 px-0.5 text-[8px] text-white">2</i>連開</span>
+                      <div className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-slate-950/45 px-1.5 py-1 font-mono text-[11px] tracking-tight text-orange-50" aria-label={`第 ${latest.period} 期的 20 個開獎號碼`}>
+                        {latest.numbers.map((number) => normalizeNumber(number)).join(" ")}
                       </div>
-                      <div className="mt-2 grid grid-cols-5 justify-items-center gap-x-1 gap-y-2.5 rounded-xl border border-orange-200/10 bg-slate-950/40 px-2 py-3 sm:grid-cols-10 sm:gap-x-2 sm:gap-y-4 sm:px-3 sm:py-3.5" role="list" aria-label={`第 ${latest.period} 期的 20 個開獎號碼，附近 30 期冷熱與連開資訊`}>
-                        {latest.numbers.map((number, index) => {
-                          const normalized = normalizeNumber(number);
-                          const isSuperNumber = normalizeNumber(latest.superNumber) === normalized;
-                          const isHot = recentStats.hot.has(normalized);
-                          const isCold = recentStats.cold.has(normalized);
-                          const numberStat = recentStats.stats[Number(normalized) - 1];
-                          return (
-                          <div
-                            key={`${number}-${index}`}
-                            role="listitem"
-                            aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : isHot ? "，熱門號碼" : isCold ? "，冷門號碼" : ""}，近 ${recentStats.sampleSize} 期出現 ${numberStat?.count || 0} 次，連續開出 ${numberStat?.currentOpen || 0} 期`}
-                            className="flex min-w-0 flex-col items-center gap-1"
-                          >
-                            <span className={`relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-xs font-bold tabular-nums text-white transition-transform duration-300 hover:-translate-y-0.5 sm:h-11 sm:w-11 sm:text-sm ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_2px_10px_rgba(239,68,68,0.55)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800 shadow-[0_2px_12px_rgba(236,72,153,0.62)]" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800 shadow-[0_2px_12px_rgba(59,130,246,0.55)]" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600 shadow-[0_2px_8px_rgba(249,115,22,0.42)]"}`}>
-                              {normalized}
-                              {(numberStat?.currentOpen || 0) > 1 && (
-                                <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full border border-white/80 bg-slate-900/90 px-1 text-[9px] font-bold leading-none text-white shadow-[0_1px_5px_rgba(15,23,42,0.65)]">
-                                  {numberStat?.currentOpen}
-                                </span>
-                              )}
-                            </span>
-                          </div>
-                          );
-                        })}
+                      <div className="shrink-0 text-right text-[9px] leading-4 text-muted-foreground">
+                        <div>大{latest.size || "—"} · {latest.oddEven || "—"}</div>
+                        <div className="font-semibold text-red-200">超 {latest.superNumber || "—"}</div>
                       </div>
-                    </>
+                    </div>
                   ) : (
-                    <p className="mt-2 text-sm text-slate-400">
-                      等待首次同步。
-                    </p>
+                    <p id="latest-draw-heading" className="text-xs text-slate-400">最新開獎：等待首次同步</p>
                   )}
                 </section>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full rounded-3xl border border-amber-300/30 bg-card p-4 shadow-lg shadow-amber-950/20 backdrop-blur sm:p-5">

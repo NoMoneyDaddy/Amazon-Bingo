@@ -546,7 +546,7 @@ function evolveProfiles(history = []) {
         let wins = 0; let trials = 0;
         history.slice(0, validationWindow).forEach((actual, index) => {
           const training = history.slice(index + 1);
-          const predicted = buildModels(actual, training, { evolve: false, profiles: { [method]: { targets: { [target]: { empiricalWeight } } } } }).find((item) => item.name === method);
+          const predicted = buildModels(actual, training, { evolve: false, onlyMethod: method, profiles: { [method]: { targets: { [target]: { empiricalWeight } } } } }).find((item) => item.name === method);
           if (!predicted) return;
           const prediction = target === 'size'
             ? predicted.official.size
@@ -692,7 +692,7 @@ export function buildModels(snapshot, history = [], options = {}) {
     { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心＋目標玩法適配，非完整太乙排局', seedOffset: 97 },
     { name: '民俗統計基線', kind: 'statistics', status: '熱度／遺漏／和值／奇偶／區間統計基線，非因果預測', seedOffset: 113 },
     { name: '生肖五行研究版', kind: 'bazi', status: '農曆年干支／五行固定映射＋統計適配，非完整八字排盤', seedOffset: 127 },
-  ];
+  ].filter((method) => !options.onlyMethod || method.name === options.onlyMethod);
   const baseModels = methods.map((method) => {
     const profilesForMethod = profiles[method.name] || {};
     const weights = Object.fromEntries(predictionTargets.map((target) => [target, targetProfile(profiles, method.name, target).empiricalWeight ?? 0.32]));

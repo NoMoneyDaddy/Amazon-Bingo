@@ -767,8 +767,8 @@ function buildModelsInWorker(snapshot, history = [], options = {}) {
 async function fetchOfficial(daysOverride = null) {
   const requestedDays = daysOverride ?? Number(process.env.HISTORY_DAYS || defaultHistoryDays);
   const historyDays = daysOverride != null
-    ? Math.min(30, Math.max(1, daysOverride))
-    : Math.min(30, Math.max(10, Number.isFinite(requestedDays) ? requestedDays : defaultHistoryDays));
+    ? Math.min(retentionDays, Math.max(1, daysOverride))
+    : Math.min(retentionDays, Math.max(10, Number.isFinite(requestedDays) ? requestedDays : defaultHistoryDays));
   const openDates = Array.from({ length: historyDays }, (_, index) => taipeiDateKey(index));
   const dailyResults = await Promise.all(openDates.map(async (openDate) => {
     try {
@@ -833,6 +833,14 @@ function selectRecentHistory(history, days = retentionDays) {
     return Number.isFinite(parsed.getTime()) && parsed.getTime() >= cutoff;
   });
   return recent.length ? recent : history.slice(0, fastResponseHistoryLimit);
+}
+
+function hasRetentionCoverage(history, days = retentionDays) {
+  if (!history.length) return false;
+  const oldest = history[history.length - 1];
+  const parsed = parseTaipeiDate(oldest.drawAt);
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return Number.isFinite(parsed.getTime()) && parsed.getTime() <= cutoff + 24 * 60 * 60 * 1000;
 }
 
 async function latest(daysOverride = null, existingHistory = []) {
@@ -1018,7 +1026,7 @@ const server = http.createServer(async (req, res) => {
       // 月份查詢優先使用已保存的近期資料；官方補同步在背景執行，避免 6000 筆保存集阻塞首屏。
       if (persisted.length && daysOverride && daysOverride > 1) {
         const recent = selectRecentHistory(persisted, retentionDays);
-        if (recent.length > fastResponseHistoryLimit) {
+        if (recent.length > fastResponseHistoryLimit && hasRetentionCoverage(recent, retentionDays)) {
           const cached = await persistedResponse(recent.slice(0, fastResponseHistoryLimit));
           refreshInBackground(persisted);
           return send(res, 200, { ...cached, history: recent, historyDays: retentionDays }, req);

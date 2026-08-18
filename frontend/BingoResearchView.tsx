@@ -563,7 +563,7 @@ export function BingoResearchView() {
     setError("");
     try {
       // 首次讀取與手動重新讀取都抓最近一個月，避免畫面只剩 60 期。
-      const snapshot = await fetchLatest(30);
+      const snapshot = await fetchLatest(31);
       const records = snapshot.history?.length ? snapshot.history : [snapshot];
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");

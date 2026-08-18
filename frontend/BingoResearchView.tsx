@@ -329,7 +329,7 @@ function formatDisplayDate(value: string) {
     hour12: false,
   }).formatToParts(date);
   const get = (type: string) => parts.find((part) => part.type === type)?.value || "";
-  return `${get("year")}年${get("month")}月${get("day")}日（${get("weekday")}）${get("hour")}:${get("minute")}（台北時間）`;
+  return `${get("year")}年${get("month")}月${get("day")}日（${get("weekday")}）${get("hour")}:${get("minute")}`;
 }
 
 function numberSum(numbers: string[]) {

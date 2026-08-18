@@ -563,7 +563,7 @@ export function BingoResearchView() {
       />
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-x-hidden" aria-busy={syncing}>
         <CustomScrollbar orientation="vertical">
-          <div className="mx-auto min-w-0 max-w-xl space-y-2 overflow-x-hidden p-2 pb-3 sm:space-y-4 sm:p-5 sm:pb-6">
+          <div className="mx-auto min-w-0 max-w-xl space-y-2 overflow-x-hidden p-2 pb-20 sm:space-y-4 sm:p-5 sm:pb-6">
             <header className="overflow-hidden border border-primary/45 bg-card px-3 py-2 shadow-none sm:px-4">
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-baseline gap-1.5">
@@ -631,7 +631,7 @@ export function BingoResearchView() {
                       <span className="text-right sm:hidden">勝率</span>
                       <span className="hidden text-right sm:inline">預測號碼</span>
                     </div>
-                    {bestPlays.slice(0, 3).map((play) => (
+                    {bestPlays.map((play) => (
                       <div
                         key={play.key}
                         className="grid min-w-0 max-w-full grid-cols-[4.2rem_minmax(0,1fr)_4rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
@@ -802,6 +802,11 @@ export function BingoResearchView() {
             )}
           </div>
         </CustomScrollbar>
+        <nav aria-label="研究台頁面" className="fixed inset-x-0 bottom-0 z-20 flex gap-1 border-t border-primary/30 bg-background/95 p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] backdrop-blur sm:hidden">
+          {mobilePageButton("overview", "首頁")}
+          {mobilePageButton("process", "計算過程")}
+          {mobilePageButton("history", "歷史紀錄")}
+        </nav>
       </div>
     </div>
   );

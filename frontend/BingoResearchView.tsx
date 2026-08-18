@@ -82,7 +82,7 @@ type DrawSnapshot = {
   oddEven: string;
   source: string;
   sourceLabel: string;
-  sourceHealth: Array<{ name: string; ok: boolean; error?: string }>;
+  sourceHealth: Array<{ name: string; ok: boolean; error?: string; latencyMs?: number; records?: number }>;
   models: Model[];
   fetchedAt?: number;
   history?: DrawSnapshot[];
@@ -140,6 +140,12 @@ type DrawSnapshot = {
     baselineLogLoss: number;
     caveat: string;
   }>;
+  theoreticalRiskBaseline?: {
+    betCost: number;
+    model: string;
+    rows: Array<{ playtype: string; expectedGrossMultiple: number; expectedNetPerBet: number; houseEdgePct: number; recommendation: string }>;
+    caveat: string;
+  };
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
 };
 type Page = "overview" | "process" | "history";
@@ -204,6 +210,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     backtestIntegrity: value.backtestIntegrity,
     forecastEvaluation: Array.isArray(value.forecastEvaluation) ? value.forecastEvaluation : [],
     calibratedProbabilityEvaluation: Array.isArray(value.calibratedProbabilityEvaluation) ? value.calibratedProbabilityEvaluation : [],
+    theoreticalRiskBaseline: value.theoreticalRiskBaseline,
     researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
   };
 }
@@ -773,6 +780,7 @@ export function BingoResearchView() {
                   <span>最新資料 {latest?.numbers.length || 0}/20 個號碼</span>
                   <span>模型 {latestModels.length} 個</span>
                   <span>{latest?.sourceHealth?.some((item) => item.ok) ? "官方來源正常" : "來源狀態未知"}</span>
+                  <span>{latest?.sourceHealth?.find((item) => item.ok)?.latencyMs == null ? "來源延遲—" : `來源延遲 ${latest.sourceHealth.find((item) => item.ok)?.latencyMs}ms`}</span>
                 </div>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full border border-primary/40 bg-card p-3 shadow-none sm:p-4">
                   <div className="flex items-end justify-between gap-2">
@@ -840,6 +848,24 @@ export function BingoResearchView() {
                   <strong className="text-cyan-100">怎麼讀研究證據？</strong>
                   <p className="mt-1">權重是模型採用歷史訊號的比例；回測率是過往預測帶來正盈利的比例，打平不算勝利。兩者都不是下一期的機率或保證。</p>
                 </div>
+                {latest?.theoreticalRiskBaseline?.rows?.length ? (
+                  <div className="mt-3 rounded-2xl border border-rose-300/25 bg-rose-300/10 p-4 text-sm leading-6 text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-rose-100">玩法理論風險基線</strong>
+                      <span className="rounded-full bg-rose-300/15 px-2 py-1 text-xs text-rose-100">每注 {latest.theoreticalRiskBaseline.betCost} 元</span>
+                    </div>
+                    <p className="mt-1 text-xs text-muted-foreground">{latest.theoreticalRiskBaseline.model}；抽水率越低只代表「理論損失較小」，不代表具有正期望。</p>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                      {latest.theoreticalRiskBaseline.rows.slice(0, 6).map((row) => (
+                        <div key={row.playtype} className="rounded-xl border border-rose-200/15 bg-background/35 p-3 text-xs">
+                          <div className="flex items-center justify-between gap-2"><span className="font-semibold text-rose-100">{row.playtype}</span><span className="tabular-nums text-rose-200">抽水 {row.houseEdgePct.toFixed(1)}%</span></div>
+                          <div className="mt-1 text-muted-foreground">每注理論淨值 {row.expectedNetPerBet.toFixed(2)} 元</div>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="mt-2 text-[11px] text-muted-foreground">{latest.theoreticalRiskBaseline.caveat}</p>
+                  </div>
+                ) : null}
                 {latest?.audit && (
                   <div className="mt-3 rounded-2xl border border-violet-300/25 bg-violet-300/10 p-4 text-sm leading-6 text-slate-200">
                     <div className="flex flex-wrap items-center justify-between gap-2">

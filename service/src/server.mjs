@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v46-ml-prequential-evaluation';
+const reproducibilityVersion = 'bingo-research-v47-theoretical-risk-baseline';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -49,6 +49,58 @@ let refreshInFlight = false;
 const persistedCache = new Map();
 const persistedReadInFlight = new Map();
 const compressedPayloadCache = new Map();
+
+function logCombination(n, k) {
+  if (!Number.isInteger(n) || !Number.isInteger(k) || k < 0 || k > n) return -Infinity;
+  const r = Math.min(k, n - k);
+  let value = 0;
+  for (let index = 1; index <= r; index += 1) value += Math.log(n - r + index) - Math.log(index);
+  return value;
+}
+
+function hypergeometricProbability(population, successes, draws, hits) {
+  if (hits < 0 || hits > successes || draws - hits > population - successes || hits > draws) return 0;
+  return Math.exp(logCombination(successes, hits) + logCombination(population - successes, draws - hits) - logCombination(population, draws));
+}
+
+function theoreticalRiskBaseline() {
+  const rows = Object.entries(basicPayouts).map(([playtype, payoutTable]) => {
+    const star = Number(playtype.replace('星', ''));
+    const expectedGrossMultiple = Object.entries(payoutTable).reduce((sum, [hits, grossMultiple]) => (
+      sum + hypergeometricProbability(80, 20, star, Number(hits)) * (grossMultiple / singleBetCost)
+    ), 0);
+    return {
+      playtype,
+      expectedGrossMultiple: Number(expectedGrossMultiple.toFixed(6)),
+      expectedNetPerBet: Number(((expectedGrossMultiple - 1) * singleBetCost).toFixed(2)),
+      houseEdgePct: Number(((1 - expectedGrossMultiple) * 100).toFixed(3)),
+      recommendation: '研究用途：理論負期望，不建議下注',
+    };
+  });
+  const pBig = Array.from({ length: 21 }, (_, hits) => hypergeometricProbability(80, 40, 20, hits))
+    .slice(13).reduce((sum, value) => sum + value, 0);
+  rows.push({
+    playtype: '大小',
+    expectedGrossMultiple: Number((pBig * 6).toFixed(6)),
+    expectedNetPerBet: Number(((pBig * 6 - 1) * singleBetCost).toFixed(2)),
+    houseEdgePct: Number(((1 - pBig * 6) * 100).toFixed(3)),
+    recommendation: '研究用途：和局／未達門檻不計勝，不建議下注',
+  });
+  rows.push({
+    playtype: '超級獎號',
+    expectedGrossMultiple: 0.6,
+    expectedNetPerBet: -10,
+    houseEdgePct: 40,
+    recommendation: '研究用途：理論負期望，不建議下注',
+  });
+  rows.sort((a, b) => a.houseEdgePct - b.houseEdgePct);
+  return {
+    betCost: singleBetCost,
+    model: '80 選 20 超幾何分布／官方派彩表',
+    rows,
+    caveat: '這是玩法理論基線，不是個人化下注建議；歷史模型若看似優於基線，仍須以無洩漏樣本與信賴區間核驗。',
+  };
+}
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = upstreamTimeoutMs) {
   const controller = new AbortController();
@@ -1334,10 +1386,11 @@ async function latest(daysOverride = null, existingHistory = []) {
   const health = [];
   const attempts = [{ name: '台灣彩券官方 API', run: () => fetchOfficial(daysOverride) }, ...fallbackSources.map((source) => ({ name: source.name, run: () => fetchMirror(source) }))];
   for (const attempt of attempts) {
+    const startedAt = Date.now();
     try {
       const result = await attempt.run();
       const snapshot = result.snapshot || result;
-      health.push({ name: attempt.name, ok: true });
+      health.push({ name: attempt.name, ok: true, latencyMs: Date.now() - startedAt, records: (result.history || [snapshot]).length });
       const syncedAt = Date.now();
       const fetchedHistory = result.history || [snapshot];
       const historyByPeriod = new Map(existingHistory.map((item) => [String(item.period), item]));
@@ -1386,9 +1439,9 @@ async function latest(daysOverride = null, existingHistory = []) {
       const responseHistory = daysOverride && daysOverride > 1
         ? selectRecentHistory(history, retentionDays)
         : history.slice(0, fastResponseHistoryLimit);
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
-      health.push({ name: attempt.name, ok: false, error: error instanceof Error ? error.message : '來源失敗' });
+      health.push({ name: attempt.name, ok: false, latencyMs: Date.now() - startedAt, error: error instanceof Error ? error.message : '來源失敗' });
     }
   }
   throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);
@@ -1430,6 +1483,7 @@ async function persistedResponse(persisted) {
     backtestIntegrity: leakageGuard(visible, targetPeriod),
     forecastEvaluation: forecastEvaluation([{ ...current, models }, ...visible.slice(1)]),
     calibratedProbabilityEvaluation: calibratedProbabilityEvaluation([{ ...current, models }, ...visible.slice(1)]),
+    theoreticalRiskBaseline: theoreticalRiskBaseline(),
     researchEvidence: researchEvidenceRegistry,
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
   };

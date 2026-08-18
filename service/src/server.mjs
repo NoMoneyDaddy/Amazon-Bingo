@@ -11,11 +11,12 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
+const minimumValidationSamples = 24;
 // 資料保存至少涵蓋一個月；最新基準之外，模型回測仍維持 60 期。
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v15-month-retention';
+const reproducibilityVersion = 'bingo-research-v16-walkforward-wilson';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -524,20 +525,29 @@ function hasPositiveProfit(target, predicted, actual) {
   return payout - singleBetCost > 0;
 }
 
+function lowerConfidenceBound(rate, samples) {
+  if (!samples) return 0;
+  const z = 1.96;
+  const denominator = 1 + (z * z) / samples;
+  const centre = rate + (z * z) / (2 * samples);
+  const margin = z * Math.sqrt((rate * (1 - rate)) / samples + (z * z) / (4 * samples * samples));
+  return (centre - margin) / denominator;
+}
+
 function evolveProfiles(history = []) {
   const candidates = [0.16, 0.24, 0.32, 0.40, 0.48];
-  const validationWindow = Math.min(12, Math.max(0, history.length - 1));
+  // 使用完整可用窗口，並對每個 fold 等權；只看最近幾期會把偶然波動誤當成有效訊號。
+  const validationWindow = Math.min(maxModelHistory, Math.max(0, history.length - 1));
   const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線'];
   return Object.fromEntries(methods.map((method) => {
     const targets = Object.fromEntries(predictionTargets.map((target) => {
-      if (history.length < 8) return [target, { empiricalWeight: 0.32, validationSamples: validationWindow, score: null, status: '樣本不足，使用預設權重' }];
+      if (history.length < minimumValidationSamples + 1) return [target, { empiricalWeight: 0.32, validationSamples: validationWindow, score: null, status: `樣本不足（至少需要 ${minimumValidationSamples} 期），使用預設權重` }];
       const results = candidates.map((empiricalWeight) => {
-        let weightedHits = 0; let totalWeight = 0; let trials = 0;
+        let wins = 0; let trials = 0;
         history.slice(0, validationWindow).forEach((actual, index) => {
           const training = history.slice(index + 1);
           const predicted = buildModels(actual, training, { evolve: false, profiles: { [method]: { targets: { [target]: { empiricalWeight } } } } }).find((item) => item.name === method);
           if (!predicted) return;
-          const foldWeight = 1 / (index + 1);
           const prediction = target === 'size'
             ? predicted.official.size
             : target === 'oddEven'
@@ -546,14 +556,15 @@ function evolveProfiles(history = []) {
                 ? predicted.official.superNumber
                 : predicted.official.basic[target] || [];
           const foldScore = hasPositiveProfit(target, prediction, actual) ? 1 : 0;
-          weightedHits += foldScore * foldWeight;
-          totalWeight += foldWeight;
+          wins += foldScore;
           trials += 1;
         });
-        return { empiricalWeight, score: totalWeight ? weightedHits / totalWeight : 0, validationSamples: trials };
+        const rate = trials ? wins / trials : 0;
+        // 參數選擇採 Wilson 下限，避免 1 次偶然命中被選成最佳算法。
+        return { empiricalWeight, wins, score: rate, estimatedRate: trials ? (wins + 2) / (trials + 4) : 0, confidence: lowerConfidenceBound(rate, trials), validationSamples: trials };
       });
-      const best = results.sort((a, b) => b.score - a.score || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0];
-      return [target, { ...best, status: `walk-forward ${validationWindow} 期／分玩法自動選參數` }];
+      const best = results.sort((a, b) => b.confidence - a.confidence || b.estimatedRate - a.estimatedRate || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0];
+      return [target, { ...best, status: `walk-forward ${validationWindow} 期／等權重／Wilson 下限選參數` }];
     }));
     return [method, { targets }];
   }));
@@ -936,7 +947,7 @@ async function persistedResponse(persisted) {
     drawAt: formatTaipeiDateTime(new Date(predictionCastingAt)),
     castingAt: predictionCastingAt,
   };
-  // 快取回應路徑只做快速重算；完整 walk-forward 自動調權重交給背景同步，避免 API 被重運算卡住。
+  // 首屏只使用已保存的模型，完整 walk-forward 權重由背景同步產生，避免首屏超時。
   let models = current.models || [];
   try {
     models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, castingAt: predictionCastingAt });

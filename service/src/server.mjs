@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v18-60-backtest-selective-tuning';
+const reproducibilityVersion = 'bingo-research-v19-persisted-profile';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -949,10 +949,13 @@ async function persistedResponse(persisted) {
     drawAt: formatTaipeiDateTime(new Date(predictionCastingAt)),
     castingAt: predictionCastingAt,
   };
+  const savedProfiles = Object.fromEntries((current.models || []).filter((model) => model.name && model.calculation?.empiricalWeights).map((model) => [model.name, {
+    targets: Object.fromEntries(Object.entries(model.calculation.empiricalWeights).map(([target, empiricalWeight]) => [target, { empiricalWeight }])),
+  }]));
   // 首屏只使用已保存的模型，完整 walk-forward 權重由背景同步產生，避免首屏超時。
   let models = current.models || [];
   try {
-    models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, castingAt: predictionCastingAt });
+    models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, profiles: savedProfiles, castingAt: predictionCastingAt });
   } catch (error) {
     console.error(JSON.stringify({ event: 'cached-prediction-recompute-failed', message: error instanceof Error ? error.message : String(error) }));
   }

@@ -11,13 +11,14 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
+const profitabilityBacktestWindow = 10;
 const minimumValidationSamples = 30;
 const profileValidationWindow = 30;
 // 資料保存至少涵蓋一個月；最新基準之外，模型回測仍維持 60 期。
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v58-winwin-source-memory';
+const reproducibilityVersion = 'bingo-research-v59-profitability-10-periods';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -969,7 +970,7 @@ function profitabilityEvaluation(history = []) {
   const currentModels = history[0]?.models || [];
   return plays.map((play) => {
     const candidates = currentModels.map((currentModel) => {
-      const rows = history.slice(1, maxModelHistory + 1).flatMap((actual) => {
+      const rows = history.slice(1, profitabilityBacktestWindow + 1).flatMap((actual) => {
         const model = actual.models?.find((item) => item.name === currentModel.name);
         return model ? [{ actual, model }] : [];
       });

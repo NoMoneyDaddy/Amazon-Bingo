@@ -2567,7 +2567,8 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           }
         } else if (isNextPrediction && options.deferLatestModel) {
           // 優先同步只延後新模型計算；同期期號仍沿用已保存模型，避免首頁短暫變成空白。
-          models = previous?.models || item.models || [];
+          // 新期號也沿用上一期正式模型作暫時預測，背景完成後再替換為新模型。
+          models = previous?.models || item.models || existingHistory[0]?.models || [];
         }
         history.push({
           ...enrichedItem,
@@ -2843,7 +2844,7 @@ const server = http.createServer(async (req, res) => {
           profitabilityEvaluation: ensureFollowBacktestVisible(persisted[0].profitabilityEvaluation),
           history: compactHistoryForResponse(selectRecentHistory(persisted, retentionDays).slice(0, responseHistoryLimit)),
           historyDays: retentionDays,
-          modelStatus: persisted[0].models?.length ? 'formal' : 'queued',
+          modelStatus: persisted[0].models?.length && !evaluationIncomplete ? 'formal' : 'queued',
         };
         // 每次快取到期後都要在背景確認官方最新期號；正式模型存在不代表開獎資料已更新。
         refreshInBackground(persisted, 1);

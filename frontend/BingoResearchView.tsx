@@ -461,11 +461,13 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
       let wins = 0;
       let trials = 0;
       let profit = 0;
+      let payoutTotal = 0;
       let matches = 0;
       let targetCount = 0;
       rows.forEach(({ item, draw }) => {
         const result = settleSingleBet(play.key, item, draw);
         wins += result.won ? 1 : 0;
+        payoutTotal += result.payout;
         profit += result.profit;
         matches += result.matches;
         targetCount += result.targetCount || 1;
@@ -494,16 +496,19 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
         matches,
         targetCount,
         profit,
+        payoutTotal,
+        costTotal: trials * SINGLE_BET_COST,
         averageMatches: trials ? matches / trials : null,
         averageTargetCount: trials ? targetCount / trials : null,
         averageProfit: trials ? profit / trials : null,
+        positiveExpected: trials > 0 && profit / trials > 0,
         rate,
         estimatedRate: trials ? (evolution?.estimatedRate ?? (wins + 1) / (trials + 2)) : null,
         confidence: trials ? (evolution?.confidence ?? (rate == null || trials < 8 ? -1 : wilsonLowerBound(rate, trials))) : -1,
         prediction: prediction || "—",
       };
     }).sort((a, b) => b.confidence - a.confidence || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1));
-    return { ...play, best: candidates[0], metricLabel: "預估勝率" };
+    return { ...play, best: candidates[0], metricLabel: "盈利機率" };
   });
 }
 
@@ -521,18 +526,43 @@ function BacktestEvidence({
   matches,
   targetCount,
   profit,
+  payoutTotal,
+  costTotal,
+  positiveExpected,
 }: {
   wins: number;
   samples: number;
   matches: number;
   targetCount: number;
   profit: number;
+  payoutTotal: number;
+  costTotal: number;
+  positiveExpected: boolean;
 }) {
   return (
     <span className="block text-[10px] font-normal leading-4 text-muted-foreground">
-      {samples ? `樣本 ${samples} 期 · ${wins}/${samples} 正盈利 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}` : "尚無有效樣本"}
-      <span className="ml-1">· {formatNetProfit(profit)}</span>
+      {samples ? `${wins}/${samples} 盈利 · 機率 ${(wins / samples * 100).toFixed(1)}% · 淨賺賠 ${formatNetProfit(profit)}` : "尚無有效樣本"}
+      <span className={`ml-1 ${positiveExpected ? "text-emerald-300" : "text-rose-300"}`}>{positiveExpected ? "正期望" : "非正期望"}</span>
     </span>
+  );
+}
+
+function ProfitabilityDetail({
+  best,
+}: {
+  best: ReturnType<typeof bestPlayStats>[number]["best"];
+}) {
+  return (
+    <div className="grid gap-1.5 border-t border-slate-800 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground sm:grid-cols-4">
+      <span>回測期數 m：<strong className="tabular-nums text-slate-200">{best.samples}</strong></span>
+      <span>正盈利期數 n：<strong className="tabular-nums text-emerald-200">{best.wins}</strong></span>
+      <span>累計賺賠：<strong className={best.profit > 0 ? "tabular-nums text-emerald-200" : "tabular-nums text-rose-200"}>{formatNetProfit(best.profit)}</strong></span>
+      <span>平均／期：<strong className={best.averageProfit != null && best.averageProfit > 0 ? "tabular-nums text-emerald-200" : "tabular-nums text-rose-200"}>{formatNetProfit(best.averageProfit)}</strong></span>
+      <span>總派彩：<strong className="tabular-nums text-slate-200">{formatNetProfit(best.payoutTotal)}</strong></span>
+      <span>總成本：<strong className="tabular-nums text-slate-200">{formatNetProfit(-best.costTotal)}</strong></span>
+      <span>平均命中：<strong className="tabular-nums text-slate-200">{best.samples ? (best.matches / best.samples).toFixed(1) : "—"}{best.targetCount > 1 ? ` / ${(best.targetCount / best.samples).toFixed(0)}` : ""}</strong></span>
+      <span className={best.positiveExpected ? "text-emerald-300" : "text-rose-300"}>{best.positiveExpected ? "正期望：平均每期淨盈利" : "未達正期望：僅供比較"}</span>
+    </div>
   );
 }
 
@@ -636,6 +666,22 @@ function modelPlainLanguage(name: string) {
   if (name === "生肖五行研究版") return "以固定的農曆年干支、生肖支序與五行映射產生研究特徵，再與目標期前統計分開回算。";
   return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
+
+const UI_PREFERENCES_KEY = "bingoResearch.uiPreferences.v2";
+
+function readUiPreferences(): { expandedPlayDetails: string[]; technicalAnalysisExpanded: boolean } {
+  if (typeof window === "undefined") return { expandedPlayDetails: [], technicalAnalysisExpanded: false };
+  try {
+    const value = JSON.parse(window.localStorage.getItem(UI_PREFERENCES_KEY) || "{}");
+    return {
+      expandedPlayDetails: Array.isArray(value?.expandedPlayDetails) ? value.expandedPlayDetails : [],
+      technicalAnalysisExpanded: value?.technicalAnalysisExpanded === true,
+    };
+  } catch {
+    return { expandedPlayDetails: [], technicalAnalysisExpanded: false };
+  }
+}
+
 export function BingoResearchView() {
   const [draws, setDraws] = useState<DrawSnapshot[]>([]);
   const sorted = useMemo(
@@ -652,6 +698,15 @@ export function BingoResearchView() {
   const [now, setNow] = useState(() => new Date());
   const [page, setPage] = useState<Page>("overview");
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
+  const [expandedPlayDetails, setExpandedPlayDetails] = useState<string[]>(() => readUiPreferences().expandedPlayDetails);
+  const [technicalAnalysisExpanded, setTechnicalAnalysisExpanded] = useState(() => readUiPreferences().technicalAnalysisExpanded);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({ expandedPlayDetails, technicalAnalysisExpanded }));
+    } catch {
+      // 私密瀏覽或儲存空間受限時，維持當次畫面的狀態即可。
+    }
+  }, [expandedPlayDetails, technicalAnalysisExpanded]);
   const latest = sorted[0];
   const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
   const latestModels = useMemo(
@@ -885,33 +940,40 @@ export function BingoResearchView() {
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 預估勝率採中性先驗平滑，樣本越多越穩定，不代表實際中獎機率。
+                    {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 以下是「淨盈利大於 0」的回測統計，不是實際中獎機率。
                   </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_4.5rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_7.2rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_6.5rem_minmax(0,1fr)]">
                       <span>玩法</span>
                       <span className="sm:hidden">推薦</span>
-                      <span className="hidden sm:inline">預估勝率</span>
-                      <span className="text-right sm:hidden">勝率</span>
+                      <span className="hidden sm:inline">盈利回測</span>
+                      <span className="text-right sm:hidden">盈利</span>
                       <span className="hidden text-right sm:inline">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (
-                      <div
+                      <details
                         key={play.key}
-                        className="grid min-w-0 max-w-full grid-cols-[5rem_minmax(0,1fr)_4.5rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
+                        open={expandedPlayDetails.includes(play.key)}
+                        onToggle={(event) => {
+                          const open = event.currentTarget.open;
+                          setExpandedPlayDetails((current) => open
+                            ? current.includes(play.key) ? current : [...current, play.key]
+                            : current.filter((key) => key !== play.key));
+                        }}
+                        className="min-w-0 max-w-full border-b border-slate-800 last:border-b-0"
                       >
-                        <span className="min-w-0 shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
-                          {play.label}
-                        </span>
-                        <div className="order-2 min-w-0 max-w-full sm:order-3">
-                          <PredictionValue value={play.best.prediction} />
-                          <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">樣本 {play.best.samples} 期</span>
-                        </div>
-                        <span className="order-3 text-right text-xs font-semibold tabular-nums text-amber-200 sm:order-2 sm:text-sm">
-                          <Rate value={play.best.estimatedRate} label={play.metricLabel} />
-                          <span className="hidden sm:block"><BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} /></span>
-                        </span>
-                      </div>
+                        <summary className="grid min-w-0 max-w-full cursor-pointer list-none grid-cols-[5rem_minmax(0,1fr)_7.2rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_6.5rem_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
+                          <span className="min-w-0 shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">{play.label}</span>
+                          <div className="min-w-0 max-w-full">
+                            <PredictionValue value={play.best.prediction} />
+                            <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">點擊看回測</span>
+                          </div>
+                          <span className="text-right text-[10px] font-semibold leading-4 tabular-nums text-amber-200 sm:text-xs">
+                            {play.best.samples ? <>{play.best.wins}/{play.best.samples}<br /><span className="font-normal">{(play.best.wins / play.best.samples * 100).toFixed(1)}% · {formatNetProfit(play.best.profit)}</span></> : "—"}
+                          </span>
+                        </summary>
+                        <ProfitabilityDetail best={play.best} />
+                      </details>
                     ))}
                   </div>
                 </section>
@@ -919,9 +981,16 @@ export function BingoResearchView() {
             )}
             {page === "technical" && (
               <section aria-labelledby="technical-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
-                <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">以最近 {technicalAnalysis.sampleSize} 期實際開獎結果，檢查號碼頻率、區間分布、大小單雙、重複球與連號；這些是描述性分析，不代表能改變隨機開獎機率。</p>
+                <details open={technicalAnalysisExpanded} onToggle={(event) => setTechnicalAnalysisExpanded(event.currentTarget.open)}>
+                  <summary className="cursor-pointer list-none select-none [&::-webkit-details-marker]:hidden">
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      <h2 id="technical-heading" className="min-w-0 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
+                      <span className="shrink-0 rounded-full border border-amber-200/30 px-2 py-1 text-[10px] text-amber-100">{technicalAnalysisExpanded ? "收合" : "展開"}</span>
+                    </div>
+                  </summary>
+                  <div className="mt-3">
+                <p className="text-sm leading-6 text-muted-foreground">以最近 {technicalAnalysis.sampleSize} 期實際開獎結果，檢查號碼頻率、區間分布、大小單雙、重複球與連號；這些是描述性分析，不代表能改變隨機開獎機率。</p>
                 <div className="mt-4 grid gap-2 sm:grid-cols-4">
                   <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3"><div className="text-[10px] text-muted-foreground">平均和值</div><div className="mt-1 text-xl font-bold tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</div></div>
                   <div className="rounded-xl border border-violet-300/25 bg-violet-300/10 p-3"><div className="text-[10px] text-muted-foreground">跨期平均重複球</div><div className="mt-1 text-xl font-bold tabular-nums text-violet-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</div></div>
@@ -1138,8 +1207,10 @@ export function BingoResearchView() {
                   )}
                 </div>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
-                  勝率計算：淨盈利大於 0 的期數 ÷ 有效預測期數 × 100%；打平不算勝利。樣本不足或舊資料沒有保存細節時，畫面會顯示「—」，不把未知資料當成 0%。
+                  盈利機率：正盈利期數 n ÷ 有效回測期數 m × 100%；打平不算盈利。賺賠金額以每期 25 元成本、實際派彩計算；樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
                 </div>
+                  </div>
+                </details>
                   </div>
                 </details>
               </section>

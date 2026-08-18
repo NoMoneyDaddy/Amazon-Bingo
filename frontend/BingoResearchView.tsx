@@ -1219,7 +1219,16 @@ export function BingoResearchView() {
       oddEvenPercentages: Object.fromEntries(Object.entries(oddEvenCounts).map(([key, value]) => [key, percentage(value, oddEvenTotal)])),
     };
   }, [sorted]);
-  const technicalAnalysis: TechnicalAnalysisData = latest?.technicalAnalysis || technicalAnalysisFallback;
+  const technicalAnalysis: TechnicalAnalysisData = useMemo(() => {
+    const incoming = latest?.technicalAnalysis;
+    if (!incoming) return technicalAnalysisFallback;
+    return {
+      ...technicalAnalysisFallback,
+      ...incoming,
+      sizePercentages: { ...technicalAnalysisFallback.sizePercentages, ...(incoming.sizePercentages || {}) },
+      oddEvenPercentages: { ...technicalAnalysisFallback.oddEvenPercentages, ...(incoming.oddEvenPercentages || {}) },
+    };
+  }, [latest?.technicalAnalysis, technicalAnalysisFallback]);
   const backtestReady = hasBacktestEvaluation(latest);
 
   const sync = useCallback(async (forceHistory = false) => {

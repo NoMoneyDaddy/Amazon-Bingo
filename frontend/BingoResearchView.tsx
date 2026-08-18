@@ -338,7 +338,16 @@ const useBingoRuntimeStore = create((set: (partial: Partial<BingoRuntimeState>) 
 function mergeDrawSnapshots(current: DrawSnapshot[], incoming: DrawSnapshot[]) {
   const byPeriod = new Map<string, DrawSnapshot>();
   [...current, ...incoming].forEach((draw) => {
-    if (draw.period) byPeriod.set(draw.period, draw);
+    if (!draw.period) return;
+    const existing = byPeriod.get(draw.period);
+    const existingIsFormal = Boolean(existing?.models.length)
+      && !existing?.models.every((model) => model.calculation?.algorithmVersion === "bingo-local-fallback-v1");
+    const incomingIsLocalFallback = draw.models.length > 0
+      && draw.models.every((model) => model.calculation?.algorithmVersion === "bingo-local-fallback-v1");
+    // 最新一期快速回應可能只有本地備援；不能用它覆蓋已完成的正式模型與回測。
+    byPeriod.set(draw.period, existingIsFormal && incomingIsLocalFallback
+      ? { ...draw, models: existing!.models, profitabilityEvaluation: existing!.profitabilityEvaluation, zoneProfitabilityEvaluation: existing!.zoneProfitabilityEvaluation, forecastEvaluation: existing!.forecastEvaluation, calibratedProbabilityEvaluation: existing!.calibratedProbabilityEvaluation }
+      : draw);
   });
   return [...byPeriod.values()].sort(
     (a, b) => Number(b.period) - Number(a.period) || (b.fetchedAt || 0) - (a.fetchedAt || 0),
@@ -395,7 +404,7 @@ function localModel(history: DrawSnapshot[], targetPeriod: string): Model {
   const basic: Record<string, string[]> = {};
   for (let count = 1; count <= 10; count += 1) basic[`${count}星`] = localNumberPrediction(history, count);
   const prediction: Model = {
-    name: "民俗統計基線", status: "官方資料備援計算", rule: "只使用目標期以前的官方開獎資料；大小／單雙為二分類，不產生和局預測。",
+    name: "本地備援基線", status: "本地備援；正式模型同步中", rule: "只使用目標期以前的官方開獎資料；此為暫時顯示基線，不代表正式模型選擇。",
     sources: [{ name: "台灣彩券官方 API", url: OFFICIAL_API_URL }],
     calculation: { algorithmVersion: "bingo-local-fallback-v1", historySamples: history.length, predictionEligible: true },
     official: { size, oddEven, superNumber: localNumberPrediction(history, 1)[0] || "", basic },
@@ -471,11 +480,11 @@ function localProfitability(history: DrawSnapshot[]) {
         return { period: actual.period, prediction: Array.isArray(predicted) ? (predicted as string[]).join("、") : String(predicted), payout, net, profitable: net > 0 };
       });
       const profit = periods.reduce((sum, item) => sum + item.net, 0);
-      return { model: "民俗統計基線", samples: periods.length, wins: periods.filter((item) => item.profitable).length, profit, payoutTotal: periods.reduce((sum, item) => sum + item.payout, 0), costTotal: periods.length * play.cost, matches: 0, targetCount: 0, averageProfit: periods.length ? profit / periods.length : null, positiveExpected: profit > 0, profitRate: periods.length ? periods.filter((item) => item.profitable).length / periods.length : null, prediction: play.key === "size" ? localPrediction(mode === "fixed" ? frozenPrior : history, "size") : play.key === "oddEven" ? localPrediction(mode === "fixed" ? frozenPrior : history, "oddEven") : "—", periodResults: periods };
+      return { model: "本地備援基線", samples: periods.length, wins: periods.filter((item) => item.profitable).length, profit, payoutTotal: periods.reduce((sum, item) => sum + item.payout, 0), costTotal: periods.length * play.cost, matches: 0, targetCount: 0, averageProfit: periods.length ? profit / periods.length : null, positiveExpected: profit > 0, profitRate: periods.length ? periods.filter((item) => item.profitable).length / periods.length : null, prediction: play.key === "size" ? localPrediction(mode === "fixed" ? frozenPrior : history, "size") : play.key === "oddEven" ? localPrediction(mode === "fixed" ? frozenPrior : history, "oddEven") : "—", periodResults: periods };
     };
     const fixed = evaluate("fixed");
     const follow = evaluate("follow");
-    return { key: play.key, label: play.label, metricLabel: "官方資料備援逐期回測", best: fixed, fixed, follow };
+    return { key: play.key, label: play.label, metricLabel: "本地備援逐期回測", best: fixed, fixed, follow };
   });
 }
 

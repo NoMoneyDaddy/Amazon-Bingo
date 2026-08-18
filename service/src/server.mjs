@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v70-walk-forward-exclusion-filters';
+const reproducibilityVersion = 'bingo-research-v71-strict-recent-baseline-gate';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1835,8 +1835,8 @@ function aggregateModel(models, history) {
     const confidence = evolution?.confidence;
     const roi = evolution?.roi;
     const baselineRoi = evolution?.baselineRoi;
-    // 沒有任何模型通過驗證時，只保留超幾何模型作透明 fallback；不把文化規則硬湊成共識。
-    if (!hasValidatedWeight && model.calculation?.method === 'hypergeometric') return 1;
+    // 沒有任何模型通過近期驗證時，所有模型權重都維持 0；不把中性基準冒充有效預測。
+    if (!hasValidatedWeight) return 0;
     const recentGate = recentTargetGate(model.name, target, history);
     if (evolution?.eligible !== true || !recentGate.eligible || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
     // 聚合權重以 ROI 超額為主，再用命中率信賴下限與樣本量收縮，避免短樣本高派彩偶然主導共識。

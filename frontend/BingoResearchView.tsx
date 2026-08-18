@@ -1092,7 +1092,12 @@ export function BingoResearchView() {
                       </div>
                       <div className="mt-1.5 min-w-0 rounded-md bg-slate-950/45 px-1.5 py-1">
                         <DrawNumberBalls draw={draw} recentStats={recentStats} compact />
-                        <div className="mt-1 text-center text-[9px] leading-4 text-muted-foreground">總和 {numberSum(draw.numbers)} · 大小 {draw.size || "—"} · 單雙 {draw.oddEven || "—"} · 超 {draw.superNumber || "—"}</div>
+                        <div className="mt-1.5 grid grid-cols-3 gap-1.5" aria-label={`第 ${draw.period} 期開獎分類結果`}>
+                          <LatestResultTag label="大小" value={normalizeCategory(draw.size)} tone="cyan" />
+                          <LatestResultTag label="單雙" value={normalizeCategory(draw.oddEven)} tone="violet" />
+                          <LatestResultTag label="超級獎號" value={normalizeNumber(draw.superNumber)} tone="red" />
+                        </div>
+                        <div className="mt-1 text-center text-[9px] leading-4 text-muted-foreground">總和 {numberSum(draw.numbers)}</div>
                       </div>
                       {expandedHistory === draw.period && (
                         <div id={`history-detail-${draw.period}`} className="mt-2 border-t border-slate-800 pt-2">

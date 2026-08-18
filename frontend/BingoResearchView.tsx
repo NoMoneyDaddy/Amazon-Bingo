@@ -178,7 +178,7 @@ function recentNumberStats(draws: DrawSnapshot[]) {
 
 function DrawNumberBalls({ draw, recentStats, compact = false }: { draw: DrawSnapshot; recentStats: ReturnType<typeof recentNumberStats>; compact?: boolean }) {
   return (
-    <div className={compact ? "flex min-w-0 max-w-full gap-1 overflow-x-auto pb-0.5" : "grid grid-cols-10 gap-1"} role="list" aria-label={`第 ${draw.period} 期的 20 個開獎號碼`}>
+    <div className={compact ? "grid w-full min-w-0 grid-cols-10 gap-0.5 sm:gap-1" : "grid w-full min-w-0 grid-cols-10 gap-0.5 sm:gap-1"} role="list" aria-label={`第 ${draw.period} 期的 20 個開獎號碼`}>
       {draw.numbers.map((number, index) => {
         const normalized = normalizeNumber(number);
         const isSuperNumber = normalizeNumber(draw.superNumber) === normalized;
@@ -186,7 +186,7 @@ function DrawNumberBalls({ draw, recentStats, compact = false }: { draw: DrawSna
         const isHot = recentStats.hot.has(normalized);
         const isCold = recentStats.cold.has(normalized);
         return (
-          <span key={`${draw.period}-${number}-${index}`} role="listitem" aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : isHot ? "，熱門號碼" : isCold ? "，冷門號碼" : ""}`} className={`relative flex ${compact ? "h-6 w-6 shrink-0 text-[9px]" : "h-7 w-7 text-[10px]"} items-center justify-center rounded-full border font-bold tabular-nums text-white ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_1px_6px_rgba(239,68,68,0.5)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600"}`}>
+          <span key={`${draw.period}-${number}-${index}`} role="listitem" aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : isHot ? "，熱門號碼" : isCold ? "，冷門號碼" : ""}`} className={`relative mx-auto flex ${compact ? "h-5 w-5 text-[8px] sm:h-6 sm:w-6 sm:text-[9px]" : "h-6 w-6 text-[9px] sm:h-7 sm:w-7 sm:text-[10px]"} items-center justify-center rounded-full border font-bold tabular-nums text-white ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_1px_6px_rgba(239,68,68,0.5)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600"}`}>
             {normalized}
             {(numberStat?.currentOpen || 0) > 1 && <span className="absolute -right-1 -top-1 flex h-3 min-w-3 items-center justify-center rounded-full bg-slate-950 px-0.5 text-[7px] leading-none text-white">{numberStat?.currentOpen}</span>}
           </span>
@@ -564,15 +564,15 @@ export function BingoResearchView() {
               <>
                 <section aria-labelledby="latest-draw-heading" className="rounded-xl border border-orange-300/25 bg-card px-2.5 py-2 shadow-md shadow-orange-950/15 backdrop-blur">
                   {latest ? (
-                    <div className="flex min-w-0 items-center gap-2" aria-label={`第 ${latest.period} 期最新開獎結果`}>
-                      <div className="shrink-0">
+                    <div className="flex min-w-0 flex-col items-stretch gap-1.5 sm:flex-row sm:items-center sm:gap-2" aria-label={`第 ${latest.period} 期最新開獎結果`}>
+                      <div className="flex shrink-0 items-center justify-between sm:block">
                         <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-200/80">最新開獎</p>
                         <h2 id="latest-draw-heading" className="text-xs font-bold tabular-nums text-orange-100">第 {latest.period} 期</h2>
                       </div>
                       <div className="min-w-0 flex-1 overflow-hidden rounded-md bg-slate-950/45 px-1.5 py-1">
                         <DrawNumberBalls draw={latest} recentStats={recentStats} />
                       </div>
-                      <div className="shrink-0 text-right text-[9px] leading-4 text-muted-foreground">
+                      <div className="flex shrink-0 justify-end gap-2 text-right text-[9px] leading-4 text-muted-foreground sm:block">
                         <div>大{latest.size || "—"} · {latest.oddEven || "—"}</div>
                         <div className="font-semibold text-red-200">超 {latest.superNumber || "—"}</div>
                       </div>
@@ -732,14 +732,10 @@ export function BingoResearchView() {
                 <div className="mt-3 space-y-1.5">
                   {sorted.slice(1, 51).map((draw) => (
                     <article key={draw.period} className="rounded-xl border border-border bg-background/70 p-2 transition-colors hover:border-cyan-300/50 sm:p-2.5">
-                      <div className="flex min-w-0 items-center gap-2">
-                        <div className="w-[4.5rem] shrink-0">
+                      <div className="flex min-w-0 items-center justify-between gap-2">
+                        <div className="min-w-0">
                           <h3 className="text-xs font-bold tabular-nums text-white">第 {draw.period} 期</h3>
                           <div className="mt-0.5 truncate text-[9px] text-muted-foreground">{draw.drawAt || "時間未知"}</div>
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <DrawNumberBalls draw={draw} recentStats={recentStats} compact />
-                          <div className="mt-0.5 truncate text-[9px] text-muted-foreground">總和 {numberSum(draw.numbers)} · 大小 {draw.size || "—"} · 單雙 {draw.oddEven || "—"} · 超 {draw.superNumber || "—"}</div>
                         </div>
                         <button
                           type="button"
@@ -750,6 +746,10 @@ export function BingoResearchView() {
                         >
                           {expandedHistory === draw.period ? "收合" : "詳情"}
                         </button>
+                      </div>
+                      <div className="mt-1.5 min-w-0 rounded-md bg-slate-950/45 px-1.5 py-1">
+                        <DrawNumberBalls draw={draw} recentStats={recentStats} compact />
+                        <div className="mt-1 text-center text-[9px] leading-4 text-muted-foreground">總和 {numberSum(draw.numbers)} · 大小 {draw.size || "—"} · 單雙 {draw.oddEven || "—"} · 超 {draw.superNumber || "—"}</div>
                       </div>
                       {expandedHistory === draw.period && (
                         <div id={`history-detail-${draw.period}`} className="mt-2 border-t border-slate-800 pt-2">

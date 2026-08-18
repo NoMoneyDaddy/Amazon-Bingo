@@ -12,6 +12,8 @@ const MODEL_NAMES = [
   "生肖五行研究版",
   "民俗統計基線",
   "貝葉斯平滑基線",
+  "超幾何集合基線",
+  "多窗口穩定性基線",
   "多模型聚合",
 ];
 type Evolution = Record<
@@ -104,6 +106,14 @@ type DrawSnapshot = {
     verdict: string;
     caveat: string;
   };
+  behaviorAudit?: {
+    sampleDraws: number;
+    birthdayShare: number | null;
+    roundNumberShare: number | null;
+    consecutiveShare: number | null;
+    verdict: string;
+    caveat: string;
+  };
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
 };
 type Page = "overview" | "process" | "history";
@@ -164,6 +174,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     predictionTargetPeriod: value.predictionTargetPeriod || "",
     backup: value.backup,
     audit: value.audit,
+    behaviorAudit: value.behaviorAudit,
     researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
   };
 }
@@ -569,6 +580,8 @@ function modelPlainLanguage(name: string) {
   if (name === "多模型聚合") return "依各模型歷史回測表現加權整合，產生共識候選，不把共識當成保證。";
   if (name === "民俗統計基線") return "獨立計算熱度、遺漏、和值、奇偶與區間特徵，作為可比較的統計基線，不宣稱因果。";
   if (name === "貝葉斯平滑基線") return "用 Beta／Dirichlet 平滑處理稀疏頻率，降低短期熱冷號碼造成的過度反應；它是統計排序基線，不是提高真實機率。";
+  if (name === "超幾何集合基線") return "把每期視為 80 選 20 的不放回集合，避免把 20 個號碼誤當成彼此獨立；這是抽樣一致性的基線。";
+  if (name === "多窗口穩定性基線") return "同時看近 12、60、300 期，只有跨窗口較穩定的頻率才保留較高分，降低追逐短期熱號的風險。";
   if (name === "生肖五行研究版") return "以固定的農曆年干支、生肖支序與五行映射產生研究特徵，再與目標期前統計分開回算。";
   return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
@@ -810,6 +823,21 @@ export function BingoResearchView() {
                     </div>
                     <p className="mt-2 text-xs text-violet-100">判讀：{latest.audit.verdict}</p>
                     <p className="mt-1 text-[11px] text-muted-foreground">{latest.audit.caveat}</p>
+                  </div>
+                )}
+                {latest?.behaviorAudit && (
+                  <div className="mt-3 rounded-2xl border border-fuchsia-300/25 bg-fuchsia-300/10 p-4 text-sm leading-6 text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-fuchsia-100">行為特徵負對照</strong>
+                      <span className="rounded-full bg-fuchsia-300/15 px-2 py-1 text-xs tabular-nums text-fuchsia-100">{latest.behaviorAudit.sampleDraws} 期</span>
+                    </div>
+                    <div className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+                      <div className="rounded-lg bg-background/40 p-2"><span className="block text-muted-foreground">1–31 號占比</span><span className="font-semibold tabular-nums text-fuchsia-100">{latest.behaviorAudit.birthdayShare == null ? "—" : `${(latest.behaviorAudit.birthdayShare * 100).toFixed(1)}%`}</span></div>
+                      <div className="rounded-lg bg-background/40 p-2"><span className="block text-muted-foreground">整十號占比</span><span className="font-semibold tabular-nums text-fuchsia-100">{latest.behaviorAudit.roundNumberShare == null ? "—" : `${(latest.behaviorAudit.roundNumberShare * 100).toFixed(1)}%`}</span></div>
+                      <div className="rounded-lg bg-background/40 p-2"><span className="block text-muted-foreground">連號比例</span><span className="font-semibold tabular-nums text-fuchsia-100">{latest.behaviorAudit.consecutiveShare == null ? "—" : `${(latest.behaviorAudit.consecutiveShare * 100).toFixed(1)}%`}</span></div>
+                    </div>
+                    <p className="mt-2 text-xs text-fuchsia-100">判讀：{latest.behaviorAudit.verdict}</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{latest.behaviorAudit.caveat}</p>
                   </div>
                 )}
                 {latest?.researchEvidence?.length ? (

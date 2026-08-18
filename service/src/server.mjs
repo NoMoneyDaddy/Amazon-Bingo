@@ -876,7 +876,9 @@ async function latest(daysOverride = null, existingHistory = []) {
           ? { ...previous, ...item, superNumber: item.superNumber || previous.superNumber, size: item.size || previous.size, oddEven: item.oddEven || previous.oddEven }
           : item);
       });
-      const rawHistory = [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period));
+      const allHistory = [...historyByPeriod.values()].sort((a, b) => Number(b.period) - Number(a.period));
+      // 同步與模型只處理最近 31 日；更早資料已存在資料庫，不必每次重新計算。
+      const rawHistory = selectRecentHistory(allHistory, retentionDays);
       const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);
       // 歷史模型的起卦輸入以實際開獎時間為準；舊資料若曾保存錯誤 castingAt，不再優先採用。
       const previousCastingAt = reproducibleCastingAt(rawHistory[0]?.drawAt || rawHistory[0]?.castingAt, rawHistory[0]?.period);

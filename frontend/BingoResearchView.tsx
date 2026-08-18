@@ -348,6 +348,15 @@ function hasFormalModels(models: Model[]): boolean {
 
 const LATEST_REFRESH_MS = 30_000;
 const HISTORY_REFRESH_MS = 5 * 60_000;
+const SYNC_POLICY = {
+  overview: { latest: LATEST_REFRESH_MS, history: HISTORY_REFRESH_MS },
+  technical: { latest: 60_000, history: HISTORY_REFRESH_MS },
+  history: { latest: HISTORY_REFRESH_MS, history: HISTORY_REFRESH_MS },
+} as const;
+
+function syncPolicyForPage(page: Page) {
+  return SYNC_POLICY[page];
+}
 const LATEST_FETCH_TIMEOUT_MS = 8_000;
 const FORMAL_MODEL_FETCH_TIMEOUT_MS = 45_000;
 
@@ -1221,15 +1230,23 @@ export function BingoResearchView() {
 
   useEffect(() => {
     const runtime = useBingoRuntimeStore.getState();
-    const shouldRefreshLatest = !runtime.draws.length || Date.now() - runtime.latestSyncedAt >= LATEST_REFRESH_MS;
+    const policy = syncPolicyForPage(page);
+    const shouldRefreshLatest = !runtime.draws.length || Date.now() - runtime.latestSyncedAt >= policy.latest;
     if (shouldRefreshLatest) void sync();
-  }, []);
+  }, [page, sync]);
   useEffect(() => {
+    // 每 10 秒檢查一次「是否該同步」，但只有超過當前頁面的新鮮度門檻才真正請求。
+    // 首頁在開獎前後維持高優先級；技術頁與歷史頁降低頻率，避免搶占資料與 CPU。
     const timer = window.setInterval(() => {
-      void sync();
-    }, LATEST_REFRESH_MS);
+      const runtime = useBingoRuntimeStore.getState();
+      const policy = syncPolicyForPage(page);
+      const nowMs = Date.now();
+      const latestStale = !runtime.draws.length || nowMs - runtime.latestSyncedAt >= policy.latest;
+      const historyStale = !runtime.draws.length || nowMs - runtime.historySyncedAt >= policy.history;
+      if (latestStale || (page === "history" && historyStale)) void sync(false);
+    }, 10_000);
     return () => window.clearInterval(timer);
-  }, [sync]);
+  }, [page, sync]);
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(timer);

@@ -602,7 +602,7 @@ function officialFallbackDrawTime(period: string, date: string, firstPeriod: num
   return `${date} ${String(Math.floor(totalMinutes / 60)).padStart(2, "0")}:${String(totalMinutes % 60).padStart(2, "0")}`;
 }
 
-async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Promise<DrawSnapshot> {
+async function fetchLatest(days = 1, castingAt = new Date().toISOString(), priority = false): Promise<DrawSnapshot> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 1; attempt += 1) {
     const controller = new AbortController();
@@ -611,7 +611,7 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
       days > 1 ? FORMAL_MODEL_FETCH_TIMEOUT_MS : LATEST_FETCH_TIMEOUT_MS,
     );
     try {
-      const response = await fetch(`${API_URL}?days=${days}&castingAt=${encodeURIComponent(castingAt)}`, {
+      const response = await fetch(`${API_URL}?days=${days}&castingAt=${encodeURIComponent(castingAt)}${priority ? "&priority=1" : ""}`, {
         cache: "no-store",
         signal: controller.signal,
       });
@@ -1209,7 +1209,8 @@ export function BingoResearchView() {
         || nowMs - runtime.historySyncedAt >= HISTORY_REFRESH_MS;
       // 有快取時先保留舊資料，只確認最新一期；完整 31 日資料按間隔背景更新。
       const castingAt = new Date().toISOString();
-      const snapshot = await fetchLatest(1, castingAt);
+      // 插件剛開啟時先要求後端確認最新開獎；預測與回測由後端背景接續補齊。
+      const snapshot = await fetchLatest(1, castingAt, true);
       // 最新模型與回測摘要在回應根節點；歷史陣列只保留開獎折，不能直接丟掉根節點。
       const records = snapshot.history?.length
         ? [{ ...snapshot, history: undefined }, ...snapshot.history.slice(1)]

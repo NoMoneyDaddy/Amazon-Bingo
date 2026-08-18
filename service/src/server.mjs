@@ -2566,7 +2566,8 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
             console.error(JSON.stringify({ event: 'formal-model-build-failed', message: modelError }));
           }
         } else if (isNextPrediction && options.deferLatestModel) {
-          models = [];
+          // 優先同步只延後新模型計算；同期期號仍沿用已保存模型，避免首頁短暫變成空白。
+          models = previous?.models || item.models || [];
         }
         history.push({
           ...enrichedItem,
@@ -2809,7 +2810,19 @@ const server = http.createServer(async (req, res) => {
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
       const castingAt = requestedCastingTime(requestUrl.searchParams.get('castingAt'));
+      const priorityRefresh = requestUrl.searchParams.get('priority') === '1';
       const responseCacheKey = daysOverride === 1 ? 'latest-1' : '';
+      if (priorityRefresh && daysOverride === 1) {
+        const persistedForPriority = await readPersistedCached(persistedHistoryLimit);
+        const prioritySnapshot = await latest(1, persistedForPriority, castingAt, {
+          deferLatestModel: true,
+          deferEvaluationModels: true,
+        });
+        void readPersistedCached(persistedHistoryLimit)
+          .then((rows) => refreshInBackground(rows, 1))
+          .catch(() => undefined);
+        return send(res, 200, { ...prioritySnapshot, modelStatus: 'queued' }, req);
+      }
       if (responseCacheKey) {
         const cachedResponse = readLatestResponseCache(responseCacheKey);
         if (cachedResponse) return send(res, 200, cachedResponse, req);

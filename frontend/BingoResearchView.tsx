@@ -869,7 +869,6 @@ const TARGET_LABELS: Record<string, string> = {
   oddEven: "猜單雙",
   superNumber: "超級獎號",
 };
-const PRIMARY_PLAY_KEYS = new Set(["size", "oddEven", "superNumber", "10星"]);
 function targetLabel(target: string) {
   return TARGET_LABELS[target] || target.replace("星", " 星");
 }
@@ -923,7 +922,6 @@ export function BingoResearchView() {
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const [expandedPlayDetails, setExpandedPlayDetails] = useState<string[]>(() => readUiPreferences().expandedPlayDetails);
   const [profitStrategy, setProfitStrategy] = useState<ProfitStrategy>(() => readUiPreferences().profitStrategy);
-  const [showAllPlays, setShowAllPlays] = useState(false);
   useEffect(() => {
     try {
       window.localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({ expandedPlayDetails, profitStrategy }));
@@ -955,9 +953,6 @@ export function BingoResearchView() {
     },
     [latest, latestModels],
   );
-  const visiblePlays = showAllPlays
-    ? bestPlays
-    : bestPlays.filter((play) => PRIMARY_PLAY_KEYS.has(play.key));
   const technicalAnalysisFallback = useMemo(() => {
     const draws = sorted.slice(0, 30);
     const frequency = new Map<string, number>();
@@ -1226,12 +1221,10 @@ export function BingoResearchView() {
                   </div>
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-300/25 bg-amber-300/10 px-3 py-2.5">
                     <div className="min-w-0">
-                      <div className="text-xs font-semibold text-amber-100">核心玩法</div>
-                      <div className="mt-0.5 text-[10px] leading-4 text-muted-foreground">預設只顯示最值得先看的四項；完整玩法放在下方。</div>
+                      <div className="text-xs font-semibold text-amber-100">全部玩法</div>
+                      <div className="mt-0.5 text-[10px] leading-4 text-muted-foreground">所有玩法同時列出；點擊各列可查看預測與 10 期回測。</div>
                     </div>
-                    <button type="button" className="min-h-9 shrink-0 rounded-lg border border-cyan-300/35 bg-cyan-300/10 px-3 text-[11px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-300/20" onClick={() => setShowAllPlays((current) => !current)} aria-expanded={showAllPlays}>
-                      {showAllPlays ? "只看核心玩法" : `顯示全部玩法（${bestPlays.length}）`}
-                    </button>
+                    <span className="shrink-0 rounded-lg border border-cyan-300/35 bg-cyan-300/10 px-3 py-2 text-[11px] font-semibold text-cyan-100">共 {bestPlays.length} 種</span>
                   </div>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
                     <div className="hidden gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid sm:grid-cols-[6rem_8.5rem_7rem_minmax(0,1fr)]">
@@ -1244,7 +1237,7 @@ export function BingoResearchView() {
                     <div className="border-b border-slate-700 px-3 py-2 text-[10px] leading-4 text-muted-foreground sm:hidden">
                       每列依序顯示：玩法、使用算法、預測結果與盈利回測；點擊整列可查看詳細數據。
                     </div>
-                    {visiblePlays.map((play) => (
+                    {bestPlays.map((play) => (
                       <details
                         key={play.key}
                         open={expandedPlayDetails.includes(play.key)}

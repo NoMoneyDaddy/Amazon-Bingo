@@ -1351,12 +1351,22 @@ function profitabilityEvaluation(history = []) {
       }
       if (model) rows.push({ actual, model });
     }
-    evaluationRowsCache.set(cacheKey, rows);
-    return rows;
+    if (mode === 'follow' && !rows.length) {
+      // 舊資料庫可能只有最新模型，不能把整個跟買結果顯示成 0 期；
+      // 用同一算法的固定重建列作明確備援，並在結果帶出 fallback 標記。
+      const fallback = buildEvaluationRows(currentModel, 'fixed');
+      const result = { rows: fallback.rows, fallback: true };
+      evaluationRowsCache.set(cacheKey, result);
+      return result;
+    }
+    const result = { rows, fallback: false };
+    evaluationRowsCache.set(cacheKey, result);
+    return result;
   };
   return plays.map((play) => {
     const evaluate = (currentModel, mode) => {
-      const rows = buildEvaluationRows(currentModel, mode);
+      const rowResult = buildEvaluationRows(currentModel, mode);
+      const rows = rowResult.rows;
       let wins = 0; let trials = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;
       const periodResults = [];
       rows.forEach(({ actual, model }) => {
@@ -1418,6 +1428,7 @@ function profitabilityEvaluation(history = []) {
         profitRate, estimatedRate: evolution?.estimatedRate ?? null,
         confidence: evolution?.confidence ?? -1, validationProfit, validationTrials,
         prediction: prediction || '—', periodResults,
+        fallback: rowResult.fallback ? '缺少歷史模型，使用同算法重建備援' : '',
       };
     };
     // 模型必須在回測視窗開始前決定；不能看完這 10 期結果再挑最高盈利者。

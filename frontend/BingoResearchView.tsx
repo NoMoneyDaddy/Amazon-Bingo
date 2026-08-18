@@ -154,8 +154,52 @@ type DrawSnapshot = {
     caveat: string;
   };
   researchEvidence?: Array<{ name: string; status: string; source: string; url: string }>;
+  profitabilityEvaluation?: ProfitabilityPlay[];
+  technicalAnalysis?: TechnicalAnalysisData;
 };
 type Page = "overview" | "technical" | "history";
+
+type ProfitabilityPlay = {
+  key: string;
+  label: string;
+  metricLabel: string;
+  best: {
+    model: string;
+    samples: number;
+    wins: number;
+    profit: number;
+    payoutTotal: number;
+    costTotal: number;
+    matches: number;
+    targetCount: number;
+    averageProfit: number | null;
+    positiveExpected: boolean;
+    profitRate: number | null;
+    estimatedRate?: number | null;
+    confidence?: number | null;
+    prediction: string;
+  };
+};
+
+type TechnicalAnalysisData = {
+  sampleSize: number;
+  hotNumbers: Array<[string, number]>;
+  zones: number[];
+  sizeCounts: Record<string, number>;
+  oddEvenCounts: Record<string, number>;
+  topSuper: Array<[string, number]>;
+  averageSum: number | null;
+  sumMinimum: number | null;
+  sumMaximum: number | null;
+  sumStandardDeviation: number | null;
+  rangeAverage: number | null;
+  repeatAverage: number | null;
+  consecutiveRate: number | null;
+  omissionNumbers: Array<{ number: string; count: number; omission: number }>;
+  trendNumbers: Array<{ number: string; count: number; omission: number; change: number }>;
+  sizePercentages: Record<string, string>;
+  oddEvenPercentages: Record<string, string>;
+};
 
 function normalizeModel(value: Partial<Model> | null | undefined): Model {
   const official = (value?.official || {}) as Partial<Model["official"]>;
@@ -220,6 +264,8 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     calibratedProbabilityEvaluation: Array.isArray(value.calibratedProbabilityEvaluation) ? value.calibratedProbabilityEvaluation : [],
     theoreticalRiskBaseline: value.theoreticalRiskBaseline,
     researchEvidence: Array.isArray(value.researchEvidence) ? value.researchEvidence : [],
+    profitabilityEvaluation: Array.isArray(value.profitabilityEvaluation) ? value.profitabilityEvaluation : [],
+    technicalAnalysis: value.technicalAnalysis,
   };
 }
 
@@ -461,11 +507,13 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
       let wins = 0;
       let trials = 0;
       let profit = 0;
+      let payoutTotal = 0;
       let matches = 0;
       let targetCount = 0;
       rows.forEach(({ item, draw }) => {
         const result = settleSingleBet(play.key, item, draw);
         wins += result.won ? 1 : 0;
+        payoutTotal += result.payout;
         profit += result.profit;
         matches += result.matches;
         targetCount += result.targetCount || 1;
@@ -494,16 +542,20 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
         matches,
         targetCount,
         profit,
+        payoutTotal,
+        costTotal: trials * SINGLE_BET_COST,
         averageMatches: trials ? matches / trials : null,
         averageTargetCount: trials ? targetCount / trials : null,
         averageProfit: trials ? profit / trials : null,
+        positiveExpected: trials > 0 && profit / trials > 0,
         rate,
+        profitRate: rate,
         estimatedRate: trials ? (evolution?.estimatedRate ?? (wins + 1) / (trials + 2)) : null,
         confidence: trials ? (evolution?.confidence ?? (rate == null || trials < 8 ? -1 : wilsonLowerBound(rate, trials))) : -1,
         prediction: prediction || "—",
       };
     }).sort((a, b) => b.confidence - a.confidence || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1));
-    return { ...play, best: candidates[0], metricLabel: "預估勝率" };
+    return { ...play, best: candidates[0], metricLabel: "盈利機率" };
   });
 }
 
@@ -521,18 +573,43 @@ function BacktestEvidence({
   matches,
   targetCount,
   profit,
+  payoutTotal,
+  costTotal,
+  positiveExpected,
 }: {
   wins: number;
   samples: number;
   matches: number;
   targetCount: number;
   profit: number;
+  payoutTotal: number;
+  costTotal: number;
+  positiveExpected: boolean;
 }) {
   return (
     <span className="block text-[10px] font-normal leading-4 text-muted-foreground">
-      {samples ? `樣本 ${samples} 期 · ${wins}/${samples} 正盈利 · 平均命中 ${matches ? (matches / samples).toFixed(1) : "0"}${targetCount > 1 ? `/${(targetCount / samples).toFixed(0)}` : ""}` : "尚無有效樣本"}
-      <span className="ml-1">· {formatNetProfit(profit)}</span>
+      {samples ? `${wins}/${samples} 盈利 · 機率 ${(wins / samples * 100).toFixed(1)}% · 淨賺賠 ${formatNetProfit(profit)}` : "尚無有效樣本"}
+      <span className={`ml-1 ${positiveExpected ? "text-emerald-300" : "text-rose-300"}`}>{positiveExpected ? "正期望" : "非正期望"}</span>
     </span>
+  );
+}
+
+function ProfitabilityDetail({
+  best,
+}: {
+  best: ProfitabilityPlay["best"];
+}) {
+  return (
+    <div className="grid gap-1.5 border-t border-slate-800 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground sm:grid-cols-4">
+      <span>有效回測期數：<strong className="tabular-nums text-slate-200">{best.samples} 期</strong></span>
+      <span>正盈利期數：<strong className="tabular-nums text-emerald-200">{best.wins} 期</strong></span>
+      <span>累計賺賠：<strong className={best.profit > 0 ? "tabular-nums text-emerald-200" : "tabular-nums text-rose-200"}>{formatNetProfit(best.profit)}</strong></span>
+      <span>平均／期：<strong className={best.averageProfit != null && best.averageProfit > 0 ? "tabular-nums text-emerald-200" : "tabular-nums text-rose-200"}>{formatNetProfit(best.averageProfit)}</strong></span>
+      <span>總派彩：<strong className="tabular-nums text-slate-200">{formatNetProfit(best.payoutTotal)}</strong></span>
+      <span>總成本：<strong className="tabular-nums text-slate-200">{formatNetProfit(-best.costTotal)}</strong></span>
+      <span>平均命中：<strong className="tabular-nums text-slate-200">{best.samples ? (best.matches / best.samples).toFixed(1) : "—"}{best.targetCount > 1 ? ` / ${(best.targetCount / best.samples).toFixed(0)}` : ""}</strong></span>
+      <span className={best.positiveExpected ? "text-emerald-300" : "text-rose-300"}>{best.positiveExpected ? "正期望：平均每期淨盈利" : "未達正期望：僅供比較"}</span>
+    </div>
   );
 }
 
@@ -636,6 +713,21 @@ function modelPlainLanguage(name: string) {
   if (name === "生肖五行研究版") return "以固定的農曆年干支、生肖支序與五行映射產生研究特徵，再與目標期前統計分開回算。";
   return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
+
+const UI_PREFERENCES_KEY = "bingoResearch.uiPreferences.v2";
+
+function readUiPreferences(): { expandedPlayDetails: string[] } {
+  if (typeof window === "undefined") return { expandedPlayDetails: [] };
+  try {
+    const value = JSON.parse(window.localStorage.getItem(UI_PREFERENCES_KEY) || "{}");
+    return {
+      expandedPlayDetails: Array.isArray(value?.expandedPlayDetails) ? value.expandedPlayDetails : [],
+    };
+  } catch {
+    return { expandedPlayDetails: [] };
+  }
+}
+
 export function BingoResearchView() {
   const [draws, setDraws] = useState<DrawSnapshot[]>([]);
   const sorted = useMemo(
@@ -652,17 +744,25 @@ export function BingoResearchView() {
   const [now, setNow] = useState(() => new Date());
   const [page, setPage] = useState<Page>("overview");
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
+  const [expandedPlayDetails, setExpandedPlayDetails] = useState<string[]>(() => readUiPreferences().expandedPlayDetails);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({ expandedPlayDetails }));
+    } catch {
+      // 私密瀏覽或儲存空間受限時，維持當次畫面的狀態即可。
+    }
+  }, [expandedPlayDetails]);
   const latest = sorted[0];
   const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
   const latestModels = useMemo(
     () => (latest ? parseModels(latest) : []),
     [latest],
   );
-  const bestPlays = useMemo(
-    () => bestPlayStats(sorted, latestModels),
-    [sorted, latestModels],
+  const bestPlays: ProfitabilityPlay[] = useMemo(
+    () => latest?.profitabilityEvaluation?.length ? latest.profitabilityEvaluation : bestPlayStats(sorted, latestModels),
+    [latest, sorted, latestModels],
   );
-  const technicalAnalysis = useMemo(() => {
+  const technicalAnalysisFallback = useMemo(() => {
     const draws = sorted.slice(0, 30);
     const frequency = new Map<string, number>();
     draws.forEach((draw) => draw.numbers.forEach((number) => frequency.set(normalizeNumber(number), (frequency.get(normalizeNumber(number)) || 0) + 1)));
@@ -682,6 +782,25 @@ export function BingoResearchView() {
       const numbers = draw.numbers.map(Number).sort((a, b) => a - b);
       return numbers.some((number, index) => index > 0 && number === numbers[index - 1] + 1);
     }).length;
+    const allNumberStats = Array.from({ length: 80 }, (_, index) => {
+      const number = String(index + 1).padStart(2, "0");
+      const lastSeen = draws.findIndex((draw) => draw.numbers.map(normalizeNumber).includes(number));
+      return { number, count: frequency.get(number) || 0, omission: lastSeen < 0 ? draws.length : lastSeen };
+    });
+    const omissionNumbers = [...allNumberStats].sort((a, b) => b.omission - a.omission || a.count - b.count || Number(a.number) - Number(b.number)).slice(0, 10);
+    const shortDraws = draws.slice(0, Math.min(10, draws.length));
+    const priorDraws = draws.slice(10, Math.min(30, draws.length));
+    const shortFrequency = new Map<string, number>();
+    const priorFrequency = new Map<string, number>();
+    shortDraws.forEach((draw) => draw.numbers.forEach((number) => shortFrequency.set(normalizeNumber(number), (shortFrequency.get(normalizeNumber(number)) || 0) + 1)));
+    priorDraws.forEach((draw) => draw.numbers.forEach((number) => priorFrequency.set(normalizeNumber(number), (priorFrequency.get(normalizeNumber(number)) || 0) + 1)));
+    const trendNumbers = allNumberStats.map((item) => ({ ...item, change: (shortFrequency.get(item.number) || 0) / Math.max(1, shortDraws.length) - (priorFrequency.get(item.number) || 0) / Math.max(1, priorDraws.length) })).sort((a, b) => b.change - a.change || b.count - a.count).slice(0, 8);
+    const sumAverage = sums.length ? sums.reduce((total, value) => total + value, 0) / sums.length : null;
+    const sumVariance = sumAverage == null || !sums.length ? null : sums.reduce((total, value) => total + (value - sumAverage) ** 2, 0) / sums.length;
+    const rangeAverage = draws.length ? draws.reduce((total, draw) => { const values = draw.numbers.map(Number); return total + Math.max(...values) - Math.min(...values); }, 0) / draws.length : null;
+    const sizeTotal = Object.values(sizeCounts).reduce((total, value) => total + value, 0);
+    const oddEvenTotal = Object.values(oddEvenCounts).reduce((total, value) => total + value, 0);
+    const percentage = (value: number, total: number) => total ? `${(value / total * 100).toFixed(1)}%` : "—";
     return {
       sampleSize: draws.length,
       hotNumbers,
@@ -689,11 +808,20 @@ export function BingoResearchView() {
       sizeCounts,
       oddEvenCounts,
       topSuper: [...superNumbers.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 5),
-      averageSum: sums.length ? sums.reduce((total, value) => total + value, 0) / sums.length : null,
+      averageSum: sumAverage,
+      sumMinimum: sums.length ? Math.min(...sums) : null,
+      sumMaximum: sums.length ? Math.max(...sums) : null,
+      sumStandardDeviation: sumVariance == null ? null : Math.sqrt(sumVariance),
+      rangeAverage,
       repeatAverage: draws.length > 1 ? repeats / (draws.length - 1) : null,
       consecutiveRate: draws.length ? consecutiveDraws / draws.length : null,
+      omissionNumbers,
+      trendNumbers,
+      sizePercentages: Object.fromEntries(Object.entries(sizeCounts).map(([key, value]) => [key, percentage(value, sizeTotal)])),
+      oddEvenPercentages: Object.fromEntries(Object.entries(oddEvenCounts).map(([key, value]) => [key, percentage(value, oddEvenTotal)])),
     };
   }, [sorted]);
+  const technicalAnalysis: TechnicalAnalysisData = latest?.technicalAnalysis || technicalAnalysisFallback;
 
   const sync = useCallback(async () => {
     if (syncing) return;
@@ -703,7 +831,10 @@ export function BingoResearchView() {
       // 首屏先取最新一期；歷史 31 日由後端背景建庫，稍後再補到畫面。
       const castingAt = new Date().toISOString();
       const snapshot = await fetchLatest(1, castingAt);
-      const records = snapshot.history?.length ? snapshot.history : [snapshot];
+      // 最新模型與回測摘要在回應根節點；歷史陣列只保留開獎折，不能直接丟掉根節點。
+      const records = snapshot.history?.length
+        ? [{ ...snapshot, history: undefined }, ...snapshot.history.slice(1)]
+        : [snapshot];
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");
       }
@@ -712,7 +843,9 @@ export function BingoResearchView() {
       void new Promise((resolve) => window.setTimeout(resolve, 2000))
         .then(() => fetchLatest(31, castingAt))
         .then((fullSnapshot) => {
-          const fullRecords = fullSnapshot.history?.length ? fullSnapshot.history : [fullSnapshot];
+          const fullRecords = fullSnapshot.history?.length
+            ? [{ ...fullSnapshot, history: undefined }, ...fullSnapshot.history.slice(1)]
+            : [fullSnapshot];
           if (fullRecords.length > records.length) setDraws(fullRecords);
         })
         .catch(() => undefined);
@@ -885,33 +1018,40 @@ export function BingoResearchView() {
                     </span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                    {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 預估勝率採中性先驗平滑，樣本越多越穩定，不代表實際中獎機率。
+                    {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 以下是「淨盈利大於 0」的回測統計，不是實際中獎機率。
                   </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_4.5rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_5rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)]">
                       <span>玩法</span>
                       <span className="sm:hidden">推薦</span>
-                      <span className="hidden sm:inline">預估勝率</span>
-                      <span className="text-right sm:hidden">勝率</span>
+                      <span className="hidden sm:inline">盈利回測</span>
+                      <span className="text-right sm:hidden">盈利</span>
                       <span className="hidden text-right sm:inline">預測號碼</span>
                     </div>
                     {bestPlays.map((play) => (
-                      <div
+                      <details
                         key={play.key}
-                        className="grid min-w-0 max-w-full grid-cols-[5rem_minmax(0,1fr)_4.5rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_5rem_minmax(0,1fr)]"
+                        open={expandedPlayDetails.includes(play.key)}
+                        onToggle={(event) => {
+                          const open = event.currentTarget.open;
+                          setExpandedPlayDetails((current) => open
+                            ? current.includes(play.key) ? current : [...current, play.key]
+                            : current.filter((key) => key !== play.key));
+                        }}
+                        className="min-w-0 max-w-full border-b border-slate-800 last:border-b-0"
                       >
-                        <span className="min-w-0 shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">
-                          {play.label}
-                        </span>
-                        <div className="order-2 min-w-0 max-w-full sm:order-3">
-                          <PredictionValue value={play.best.prediction} />
-                          <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">樣本 {play.best.samples} 期</span>
-                        </div>
-                        <span className="order-3 text-right text-xs font-semibold tabular-nums text-amber-200 sm:order-2 sm:text-sm">
-                          <Rate value={play.best.estimatedRate} label={play.metricLabel} />
-                          <span className="hidden sm:block"><BacktestEvidence wins={play.best.wins} samples={play.best.samples} matches={play.best.matches} targetCount={play.best.targetCount} profit={play.best.profit} /></span>
-                        </span>
-                      </div>
+                        <summary className="grid min-w-0 max-w-full cursor-pointer list-none grid-cols-[5rem_minmax(0,1fr)_8.3rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
+                          <span className="min-w-0 shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">{play.label}</span>
+                          <div className="min-w-0 max-w-full">
+                            <PredictionValue value={play.best.prediction} />
+                            <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">點擊看回測</span>
+                          </div>
+                          <span className="text-right text-[10px] font-semibold leading-4 text-amber-200 sm:text-xs">
+                            {play.best.samples ? <><span className="block">盈利機率 {(play.best.wins / play.best.samples * 100).toFixed(1)}%</span><span className="block font-normal tabular-nums text-slate-300">正盈利 {play.best.wins} 期／共 {play.best.samples} 期</span><span className={`block font-normal tabular-nums ${play.best.profit > 0 ? "text-emerald-300" : "text-rose-300"}`}>累計賺賠 {formatNetProfit(play.best.profit)}</span></> : "尚無回測資料"}
+                          </span>
+                        </summary>
+                        <ProfitabilityDetail best={play.best} />
+                      </details>
                     ))}
                   </div>
                 </section>
@@ -919,14 +1059,21 @@ export function BingoResearchView() {
             )}
             {page === "technical" && (
               <section aria-labelledby="technical-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
+                <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">以最近 {technicalAnalysis.sampleSize} 期實際開獎結果，檢查號碼頻率、區間分布、大小單雙、重複球與連號；這些是描述性分析，不代表能改變隨機開獎機率。</p>
+                <p className="text-sm leading-6 text-muted-foreground">以最近 {technicalAnalysis.sampleSize} 期實際開獎結果，檢查號碼頻率、區間分布、大小單雙、重複球與連號；這些是描述性分析，不代表能改變隨機開獎機率。</p>
                 <div className="mt-4 grid gap-2 sm:grid-cols-4">
                   <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3"><div className="text-[10px] text-muted-foreground">平均和值</div><div className="mt-1 text-xl font-bold tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</div></div>
                   <div className="rounded-xl border border-violet-300/25 bg-violet-300/10 p-3"><div className="text-[10px] text-muted-foreground">跨期平均重複球</div><div className="mt-1 text-xl font-bold tabular-nums text-violet-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</div></div>
                   <div className="rounded-xl border border-amber-300/25 bg-amber-300/10 p-3"><div className="text-[10px] text-muted-foreground">含連號期數</div><div className="mt-1 text-xl font-bold tabular-nums text-amber-100">{technicalAnalysis.consecutiveRate == null ? "—" : `${(technicalAnalysis.consecutiveRate * 100).toFixed(1)}%`}</div></div>
                   <div className="rounded-xl border border-emerald-300/25 bg-emerald-300/10 p-3"><div className="text-[10px] text-muted-foreground">分析樣本</div><div className="mt-1 text-xl font-bold tabular-nums text-emerald-100">{technicalAnalysis.sampleSize} 期</div></div>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                  <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-3"><div className="text-[10px] text-muted-foreground">和值範圍</div><div className="mt-1 font-bold tabular-nums text-cyan-100">{technicalAnalysis.sumMinimum == null ? "—" : technicalAnalysis.sumMinimum + "–" + technicalAnalysis.sumMaximum}</div><div className="mt-1 text-[10px] text-muted-foreground">標準差 {technicalAnalysis.sumStandardDeviation == null ? "—" : technicalAnalysis.sumStandardDeviation.toFixed(1)}</div></div>
+                  <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3"><div className="text-[10px] text-muted-foreground">平均號碼跨度</div><div className="mt-1 font-bold tabular-nums text-amber-100">{technicalAnalysis.rangeAverage == null ? "—" : technicalAnalysis.rangeAverage.toFixed(1)}</div><div className="mt-1 text-[10px] text-muted-foreground">每期最大號 − 最小號</div></div>
+                  <div className="rounded-xl border border-orange-300/20 bg-orange-300/5 p-3"><div className="text-[10px] text-muted-foreground">大小比例</div><div className="mt-1 font-semibold tabular-nums text-orange-100">大 {technicalAnalysis.sizePercentages["大"] || "—"} · 小 {technicalAnalysis.sizePercentages["小"] || "—"}</div><div className="mt-1 text-[10px] text-muted-foreground">依開獎期數統計</div></div>
+                  <div className="rounded-xl border border-violet-300/20 bg-violet-300/5 p-3"><div className="text-[10px] text-muted-foreground">單雙比例</div><div className="mt-1 font-semibold tabular-nums text-violet-100">單 {technicalAnalysis.oddEvenPercentages["單"] || "—"} · 雙 {technicalAnalysis.oddEvenPercentages["雙"] || "—"}</div><div className="mt-1 text-[10px] text-muted-foreground">和局不列入偏向</div></div>
                 </div>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">
                   <div className="rounded-2xl border border-orange-300/25 bg-orange-300/10 p-4">
@@ -942,6 +1089,10 @@ export function BingoResearchView() {
                   <div className="rounded-2xl border border-border bg-background/50 p-3"><strong className="text-xs text-amber-100">大小結構</strong><div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(technicalAnalysis.sizeCounts).map(([key, value]) => <span key={key} className="rounded-full bg-amber-300/10 px-2 py-1 text-xs text-amber-100">{key} {value} 期</span>)}</div></div>
                   <div className="rounded-2xl border border-border bg-background/50 p-3"><strong className="text-xs text-violet-100">單雙結構</strong><div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(technicalAnalysis.oddEvenCounts).map(([key, value]) => <span key={key} className="rounded-full bg-violet-300/10 px-2 py-1 text-xs text-violet-100">{key} {value} 期</span>)}</div></div>
                   <div className="rounded-2xl border border-border bg-background/50 p-3"><strong className="text-xs text-rose-100">超級獎號排行</strong><div className="mt-2 flex flex-wrap gap-1.5">{technicalAnalysis.topSuper.length ? technicalAnalysis.topSuper.map(([number, count]) => <span key={number} className="rounded-full bg-rose-300/10 px-2 py-1 text-xs text-rose-100">{number} × {count}</span>) : <span className="text-xs text-muted-foreground">—</span>}</div></div>
+                </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-rose-300/25 bg-rose-300/10 p-4"><div className="flex items-center justify-between gap-2"><strong className="text-rose-100">目前遺漏較久號碼</strong><span className="text-[10px] text-muted-foreground">距離最近一次開出</span></div><div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-5">{technicalAnalysis.omissionNumbers.map((item) => <div key={item.number} className="rounded-lg bg-background/45 px-2 py-1.5 text-center"><div className="font-bold tabular-nums text-rose-100">{item.number}</div><div className="text-[10px] text-muted-foreground">{item.omission === 0 ? "剛開出" : "已 " + item.omission + " 期"}</div></div>)}</div></div>
+                  <div className="rounded-2xl border border-emerald-300/25 bg-emerald-300/10 p-4"><div className="flex items-center justify-between gap-2"><strong className="text-emerald-100">短期升溫號碼</strong><span className="text-[10px] text-muted-foreground">近 10 期對比前段</span></div><div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-4">{technicalAnalysis.trendNumbers.map((item) => <div key={item.number} className="rounded-lg bg-background/45 px-2 py-1.5 text-center"><div className="font-bold tabular-nums text-emerald-100">{item.number}</div><div className="text-[10px] tabular-nums text-muted-foreground">{item.change >= 0 ? "+" : ""}{(item.change * 100).toFixed(0)}%</div></div>)}</div></div>
                 </div>
                 <div className="mt-3 rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3 text-xs leading-5 text-cyan-50">分析原則：先看實際開獎資料，再看頻率與結構；短期熱號、冷號、連號與區間偏移都只作比較，不宣稱能突破隨機基線。</div>
                 <details className="mt-4 rounded-2xl border border-border bg-background/40 p-3">
@@ -1138,10 +1289,11 @@ export function BingoResearchView() {
                   )}
                 </div>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
-                  勝率計算：淨盈利大於 0 的期數 ÷ 有效預測期數 × 100%；打平不算勝利。樣本不足或舊資料沒有保存細節時，畫面會顯示「—」，不把未知資料當成 0%。
+                  盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。賺賠金額以每期 25 元成本、實際派彩計算；樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
                 </div>
                   </div>
                 </details>
+                </div>
               </section>
             )}
             {page === "history" && (

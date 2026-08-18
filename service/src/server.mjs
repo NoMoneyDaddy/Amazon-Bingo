@@ -940,10 +940,10 @@ async function persistedResponse(persisted) {
   };
 }
 
-function refreshInBackground(persisted) {
+function refreshInBackground(persisted, days = 1) {
   if (refreshInFlight) return;
   refreshInFlight = true;
-  void latest(1, persisted)
+  void latest(days, persisted)
     .catch((error) => console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' })))
     .finally(() => { refreshInFlight = false; });
 }
@@ -961,7 +961,7 @@ function nextDrawAt(now = new Date()) {
 async function scheduledSync(forceRepair = false) {
   try {
     const persisted = await readPersistedCached(persistedHistoryLimit);
-    const requestedDays = forceRepair || !persisted.length ? 30 : 1;
+    const requestedDays = forceRepair || !persisted.length || !hasRetentionCoverage(persisted, retentionDays) ? retentionDays : 1;
     const refreshDays = requestedDays === 1 && persisted.length < persistedHistoryLimit ? 30 : requestedDays;
     const result = await latest(refreshDays, persisted);
     console.log(JSON.stringify({ event: 'sync-ok', period: result.period, historyDays: result.historyDays, persisted: Boolean(pool) }));
@@ -1026,9 +1026,9 @@ const server = http.createServer(async (req, res) => {
       // 月份查詢優先使用已保存的近期資料；官方補同步在背景執行，避免 6000 筆保存集阻塞首屏。
       if (persisted.length && daysOverride && daysOverride > 1) {
         const recent = selectRecentHistory(persisted, retentionDays);
-        if (recent.length > fastResponseHistoryLimit && hasRetentionCoverage(recent, retentionDays)) {
+        if (recent.length > fastResponseHistoryLimit) {
           const cached = await persistedResponse(recent.slice(0, fastResponseHistoryLimit));
-          refreshInBackground(persisted);
+          refreshInBackground(persisted, hasRetentionCoverage(recent, retentionDays) ? 1 : retentionDays);
           return send(res, 200, { ...cached, history: recent, historyDays: retentionDays }, req);
         }
       }

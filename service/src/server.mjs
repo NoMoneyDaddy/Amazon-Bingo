@@ -2319,6 +2319,46 @@ function evaluateInWorker(history = []) {
   });
 }
 
+function evaluateInWorkerWithTimeout(history = [], timeoutMs = 5000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`回測 Worker 超時（${timeoutMs}ms）`)), timeoutMs);
+  });
+  return Promise.race([evaluateInWorker(history), timeout]).finally(() => clearTimeout(timer));
+}
+
+function fastProfitabilityEvaluation(history = []) {
+  const plays = [
+    { key: 'size', label: '猜大小' }, { key: 'oddEven', label: '猜單雙' }, { key: 'superNumber', label: '超級獎號' },
+    ...Array.from({ length: 10 }, (_, index) => ({ key: `${index + 1}星`, label: `${index + 1} 星` })),
+  ];
+  const currentModels = (history[0]?.models || []).filter((model) => model.name !== '多模型聚合');
+  const bestModelFor = (key) => [...currentModels].sort((a, b) => {
+    const aa = a.calculation?.evolution?.[key] || {}; const bb = b.calculation?.evolution?.[key] || {};
+    return Number(bb.profit || -Infinity) - Number(aa.profit || -Infinity) || String(a.name).localeCompare(String(b.name));
+  })[0] || currentModels[0];
+  const predictionFor = (model, key) => key === 'size' ? model?.official?.size : key === 'oddEven' ? model?.official?.oddEven : key === 'superNumber' ? model?.official?.superNumber : model?.official?.basic?.[key] || [];
+  const evaluate = (play, mode) => {
+    const anchor = bestModelFor(play.key);
+    const periodResults = history.slice(0, profitabilityBacktestWindow).map((actual, index) => {
+      const historical = (history[index + 1]?.models || []).find((model) => model.name === anchor?.name);
+      const model = historical || anchor;
+      const predicted = predictionFor(model, play.key);
+      const payout = backtestPayout(play.key, predicted, actual);
+      const net = payout - betCostForTarget(play.key);
+      const predictedNumbers = Array.isArray(predicted) ? predicted : [];
+      const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
+      const matches = Array.isArray(predicted) ? predictedNumbers.filter((number) => actualNumbers.has(normalizeNumberValue(number))).length : (payout > 0 ? 1 : 0);
+      return { period: String(actual.period || ''), drawAt: actual.drawAt || '', prediction: Array.isArray(predicted) ? predicted.join('、') : String(predicted || '—'), matches, targetCount: Array.isArray(predicted) ? predictedNumbers.length : 1, payout, net, profitable: net > 0 };
+    });
+    const profit = periodResults.reduce((sum, item) => sum + item.net, 0);
+    const wins = periodResults.filter((item) => item.profitable).length;
+    const result = { mode, model: anchor?.name || '—', samples: periodResults.length, wins, profit, payoutTotal: periodResults.reduce((sum, item) => sum + item.payout, 0), costTotal: periodResults.length * betCostForTarget(play.key), matches: periodResults.reduce((sum, item) => sum + item.matches, 0), targetCount: periodResults.reduce((sum, item) => sum + item.targetCount, 0), averageProfit: periodResults.length ? profit / periodResults.length : null, positiveExpected: periodResults.length > 0 && profit / periodResults.length > 0, profitRate: periodResults.length ? wins / periodResults.length : null, prediction: predictionFor(anchor, play.key), periodResults, fallback: '快速回測：Worker 超時，先使用已保存模型快照' };
+    return result;
+  };
+  return plays.map((play) => { const fixed = evaluate(play, 'fixed'); const follow = evaluate(play, 'follow'); return { ...play, metricLabel: '盈利機率', best: fixed, fixed, follow }; });
+}
+
 function formalModelCacheKey(snapshot, history = [], options = {}) {
   const castingAt = reproducibleCastingAt(options.castingAt || snapshot.castingAt, snapshot.period);
   // 模型使用日期／時辰等可重現特徵；秒數不應造成同一分鐘重算。
@@ -2707,7 +2747,21 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     && hasCompleteProfitabilityEvaluation(current.profitabilityEvaluation)
     && current.zoneProfitabilityEvaluation?.length
     && Object.keys(current.technicalAnalysis || {}).length);
-  const computedEvaluation = hasStoredEvaluation ? null : await evaluateInWorker(evaluationHistory);
+  let computedEvaluation = null;
+  if (!hasStoredEvaluation) {
+    try {
+      computedEvaluation = await evaluateInWorkerWithTimeout(evaluationHistory, 5000);
+    } catch (error) {
+      console.error(JSON.stringify({ event: 'evaluation-timeout-fast-fallback', message: error instanceof Error ? error.message : '回測 Worker 超時' }));
+      computedEvaluation = {
+        forecastEvaluation: [],
+        calibratedProbabilityEvaluation: [],
+        profitabilityEvaluation: fastProfitabilityEvaluation(evaluationHistory),
+        zoneProfitabilityEvaluation: [],
+        technicalAnalysis: technicalAnalysis(evaluationHistory),
+      };
+    }
+  }
   const storedForecast = current.forecastEvaluation?.length ? current.forecastEvaluation : computedEvaluation.forecastEvaluation;
   const storedCalibrated = current.calibratedProbabilityEvaluation?.length ? current.calibratedProbabilityEvaluation : computedEvaluation.calibratedProbabilityEvaluation;
   const hydratedProfitability = hydrateStoredPeriodMatches(current.profitabilityEvaluation, visible);

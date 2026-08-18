@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v48-baseline-gated-weights';
+const reproducibilityVersion = 'bingo-research-v49-baseline-gated-cache-fix';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -1485,10 +1485,10 @@ async function persistedResponse(persisted) {
     drawAt: formatTaipeiDateTime(new Date(predictionCastingAt)),
     castingAt: predictionCastingAt,
   };
-  // 快取只提供開獎資料；不讀取舊模型權重，避免歷史版本把目標期或未來資料帶入預測。
+  // 快取只提供開獎資料；模型仍須重新執行 walk-forward 基線評估，不能用舊模型權重或跳過 baseline gate。
   let models = current.models || [];
   try {
-    models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, profiles: {}, castingAt: predictionCastingAt });
+    models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: predictionCastingAt });
   } catch (error) {
     console.error(JSON.stringify({ event: 'cached-prediction-recompute-failed', message: error instanceof Error ? error.message : String(error) }));
   }

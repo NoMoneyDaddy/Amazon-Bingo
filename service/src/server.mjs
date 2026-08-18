@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v61-forward-bet-strategies';
+const reproducibilityVersion = 'bingo-research-v62-forward-bet-strategies';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1005,13 +1005,16 @@ function profitabilityEvaluation(history = []) {
       });
       const evolution = currentModel.calculation?.evolution?.[play.key];
       if (!trials && evolution) { trials = evolution.trials || evolution.validationSamples || 0; wins = evolution.wins || 0; }
+      const predictionSource = mode === 'fixed'
+        ? history[profitabilityBacktestWindow]?.models?.find((item) => item.name === currentModel.name) || currentModel
+        : currentModel;
       const prediction = play.key === 'size'
-        ? currentModel.official?.size
+        ? predictionSource.official?.size
         : play.key === 'oddEven'
-          ? currentModel.official?.oddEven
+          ? predictionSource.official?.oddEven
           : play.key === 'superNumber'
-            ? currentModel.official?.superNumber
-            : currentModel.official?.basic?.[play.key]?.join('、');
+            ? predictionSource.official?.superNumber
+            : predictionSource.official?.basic?.[play.key]?.join('、');
       const profitRate = trials ? wins / trials : null;
       const averageProfit = trials ? profit / trials : null;
       return {

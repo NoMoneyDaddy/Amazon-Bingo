@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v8-draw-time-only';
+const reproducibilityVersion = 'bingo-research-v9-taipei-time';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -198,9 +198,34 @@ function seededRandom(seed) {
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
+function parseTaipeiDate(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return new Date();
+  // 官方資料常用民國年／未附時區；這類字串一律明確視為台北時間。
+  const local = raw.replace(/\([^)]*\)/g, '').replace(/\s+/g, ' ').trim();
+  const match = local.match(/^(\d{3,4})[\/-](\d{1,2})[\/-](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?/);
+  if (match) {
+    const year = Number(match[1]) < 1911 ? Number(match[1]) + 1911 : Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    const hour = Number(match[4]);
+    const minute = Number(match[5]);
+    const second = Number(match[6] || 0);
+    return new Date(Date.UTC(year, month - 1, day, hour - 8, minute, second));
+  }
+  // 已含 Z／時區偏移的 ISO 時間直接保留其絕對時刻。
+  if (/[zZ]|[+-]\d{2}:?\d{2}$/.test(raw)) return new Date(raw);
+  const isoLocal = raw.match(/^(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})(?:[ T](\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (isoLocal) {
+    const [, year, month, day, hour = '0', minute = '0', second = '0'] = isoLocal;
+    return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour) - 8, Number(minute), Number(second)));
+  }
+  return new Date(raw);
+}
+
 function reproducibleCastingAt(value, period = '') {
   const raw = String(value || '').trim();
-  const fullDate = new Date(raw.replace(/\//g, '-'));
+  const fullDate = parseTaipeiDate(raw);
   if (raw && Number.isFinite(fullDate.getTime())) return fullDate.toISOString();
   const dateOnly = raw.match(/^(\d{4}-\d{2}-\d{2})$/);
   if (dateOnly) return new Date(`${dateOnly[1]}T04:00:00.000Z`).toISOString();
@@ -210,13 +235,13 @@ function reproducibleCastingAt(value, period = '') {
 }
 
 function parseTaipeiParts(value) {
-  const date = value ? new Date(value.replace(/\//g, '-')) : new Date();
+  const date = parseTaipeiDate(value);
   const parts = new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false }).formatToParts(date);
   return Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, Number(part.value)]));
 }
 
 function parseChineseCalendarParts(value) {
-  const date = value ? new Date(value.replace(/\//g, '-')) : new Date();
+  const date = parseTaipeiDate(value);
   const parts = new Intl.DateTimeFormat('zh-TW-u-ca-chinese', { timeZone: 'Asia/Taipei', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', hour12: false }).formatToParts(date);
   const monthNames = ['正月', '二月', '三月', '四月', '五月', '六月', '七月', '八月', '九月', '十月', '十一月', '十二月'];
   const monthPart = parts.find((part) => part.type === 'month')?.value || '';

@@ -487,7 +487,7 @@ function settleSingleBet(key: string, item: Model, draw: DrawSnapshot) {
 }
 
 function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
-  const backtestDraws = draws.slice(1);
+  const backtestDraws = draws.slice(1, 11);
   const plays = [
     { key: "size", label: "猜大小" },
     { key: "oddEven", label: "猜單雙" },

@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v68-valid-category-settlement';
+const reproducibilityVersion = 'bingo-research-v69-predictions-exclude-draw';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -919,6 +919,12 @@ function categoryPrediction(seed, traditional, history, field, empiricalWeight) 
   return empirical || fallback;
 }
 
+function validPredictionCategory(value, field) {
+  const normalized = normalizeDrawCategory(value, field);
+  const allowed = field === 'size' ? new Set(['大', '小']) : new Set(['單', '雙']);
+  return allowed.has(normalized) ? normalized : '';
+}
+
 function normalizeDrawCategory(value, field = '') {
   const text = String(value || '').trim().replace(/[\s:：]/g, '');
   if (field === 'size') {
@@ -1679,8 +1685,10 @@ function aggregateModel(models, history) {
   };
   const weightedCategory = (target) => {
     const totals = new Map();
+    const field = target === 'size' ? 'size' : 'oddEven';
     eligibleModels.forEach((model) => {
-      const value = target === 'size' ? model.official.size : model.official.oddEven;
+      // 「和」只代表開獎後未達投注門檻，禁止進入預測投票。
+      const value = validPredictionCategory(model.official?.[field], field);
       const weight = weightFor(model, target);
       if (value && weight > 0) totals.set(value, (totals.get(value) || 0) + weight);
     });
@@ -1811,8 +1819,8 @@ export function buildModels(snapshot, history = [], options = {}) {
         return [target, casting.digits.join('、')];
       })) },
       official: {
-        size: categoryPrediction(modelSeed, targetTraditionalCategory(targetCastings.size, 'size', modelSeed), history, 'size', weights.size),
-        oddEven: categoryPrediction(modelSeed, targetTraditionalCategory(targetCastings.oddEven, 'oddEven', modelSeed), history, 'oddEven', weights.oddEven),
+        size: validPredictionCategory(categoryPrediction(modelSeed, targetTraditionalCategory(targetCastings.size, 'size', modelSeed), history, 'size', weights.size), 'size'),
+        oddEven: validPredictionCategory(categoryPrediction(modelSeed, targetTraditionalCategory(targetCastings.oddEven, 'oddEven', modelSeed), history, 'oddEven', weights.oddEven), 'oddEven'),
         superNumber: (picksByTarget.superNumber || picks)[modelSeed % (picksByTarget.superNumber || picks).length],
         basic: Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
           const target = `${index + 1}星`;

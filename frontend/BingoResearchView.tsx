@@ -642,8 +642,8 @@ const HISTORY_PLAYS = [
 ];
 
 function predictionForPlay(model: Model, key: string) {
-  if (key === "size") return model.official.size || "—";
-  if (key === "oddEven") return model.official.oddEven || "—";
+  if (key === "size") return ["大", "小"].includes(model.official.size) ? model.official.size : "—";
+  if (key === "oddEven") return ["單", "雙"].includes(model.official.oddEven) ? model.official.oddEven : "—";
   if (key === "superNumber") return model.official.superNumber || "—";
   return model.official.basic[key]?.join("、") || "—";
 }

@@ -24,6 +24,10 @@ type Evolution = Record<
     castingSource?: string;
     validationSamples?: number;
     score?: number | null;
+    wins?: number;
+    trials?: number;
+    estimatedRate?: number | null;
+    confidence?: number | null;
     baselineRate?: number | null;
     eligible?: boolean;
     status?: string;
@@ -466,6 +470,12 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
         trials += 1;
       });
       const latest = latestModels.find((item) => item.name === model);
+      const evolution = latest?.calculation?.evolution?.[play.key];
+      // 歷史期的完整模型為了同步效能不隨回應傳送；改用最新模型保存的 walk-forward 樣本。
+      if (!trials && evolution) {
+        trials = evolution.trials || evolution.validationSamples || 0;
+        wins = evolution.wins || 0;
+      }
       const prediction =
         play.key === "size"
           ? latest?.official.size
@@ -474,7 +484,7 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
             : play.key === "superNumber"
               ? latest?.official.superNumber
               : latest?.official.basic[play.key]?.join("、");
-      const rate = trials ? wins / trials : null;
+      const rate = trials ? (evolution?.score ?? wins / trials) : null;
       return {
         model,
         samples: trials,
@@ -486,8 +496,8 @@ function bestPlayStats(draws: DrawSnapshot[], latestModels: Model[]) {
         averageTargetCount: trials ? targetCount / trials : null,
         averageProfit: trials ? profit / trials : null,
         rate,
-        estimatedRate: trials ? (wins + 1) / (trials + 2) : null,
-        confidence: rate == null || trials < 8 ? -1 : wilsonLowerBound(rate, trials),
+        estimatedRate: trials ? (evolution?.estimatedRate ?? (wins + 1) / (trials + 2)) : null,
+        confidence: trials ? (evolution?.confidence ?? (rate == null || trials < 8 ? -1 : wilsonLowerBound(rate, trials))) : -1,
         prediction: prediction || "—",
       };
     }).sort((a, b) => b.confidence - a.confidence || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1));
@@ -715,7 +725,7 @@ export function BingoResearchView() {
   return (
     <div
       className="relative flex h-full min-h-0 min-w-0 max-w-full flex-col overflow-x-hidden bg-background font-mono text-foreground antialiased"
-      style={{ textWrap: "pretty", overflowWrap: "break-word" }}
+      style={{ textWrap: "pretty" }}
     >
       <PluginTopbar
         title="賓果玄學研究台"
@@ -792,12 +802,12 @@ export function BingoResearchView() {
                   <span className="whitespace-nowrap">{latest?.sourceHealth?.find((item) => item.ok)?.latencyMs == null ? "來源延遲—" : `來源延遲 ${latest.sourceHealth.find((item) => item.ok)?.latencyMs}ms`}</span>
                 </div>
                 <section aria-labelledby="prediction-heading" className="min-w-0 max-w-full border border-primary/40 bg-card p-3 shadow-none sm:p-4">
-                  <div className="flex items-end justify-between gap-2">
-                    <div>
+                  <div className="flex min-w-0 items-end justify-between gap-2">
+                    <div className="min-w-0">
                       <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">02 · 研究預測</p>
                       <h2 id="prediction-heading" className="mt-1 text-lg font-bold text-amber-100" style={{ textWrap: "balance" }}>下一期各玩法與星級預測</h2>
                     </div>
-                    <span className="shrink-0 rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">資料證據</span>
+                    <span className="shrink-0 whitespace-nowrap rounded-full border border-slate-600 bg-slate-950/50 px-2.5 py-1 text-xs text-slate-300">資料證據</span>
                   </div>
                   <p className="mt-2 text-sm leading-6 text-muted-foreground">
                     {latest?.predictionTargetPeriod ? `預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 預估勝率採中性先驗平滑，樣本越多越穩定，不代表實際中獎機率。

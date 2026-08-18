@@ -2513,7 +2513,9 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       }
       // 首屏快速路徑只確認最新開獎資料；模型補建與 GitHub 備份交給背景同步，
       // 不得因慢來源、worker 或備份服務讓 /api/latest?days=1 長時間沒有回應。
-      const shouldComputeEvaluation = !options.deferEvaluationModels || latestDrawChanged;
+      const shouldComputeEvaluation = !options.deferEvaluationModels
+        || latestDrawChanged
+        || !hasCompleteProfitabilityEvaluation(existingHistory[0]?.profitabilityEvaluation);
       if (shouldComputeEvaluation && history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
         await hydrateEvaluationModels(history);
       }

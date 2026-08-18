@@ -869,6 +869,7 @@ const TARGET_LABELS: Record<string, string> = {
   oddEven: "猜單雙",
   superNumber: "超級獎號",
 };
+const PRIMARY_PLAY_KEYS = new Set(["size", "oddEven", "superNumber", "10星"]);
 function targetLabel(target: string) {
   return TARGET_LABELS[target] || target.replace("星", " 星");
 }
@@ -922,6 +923,7 @@ export function BingoResearchView() {
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const [expandedPlayDetails, setExpandedPlayDetails] = useState<string[]>(() => readUiPreferences().expandedPlayDetails);
   const [profitStrategy, setProfitStrategy] = useState<ProfitStrategy>(() => readUiPreferences().profitStrategy);
+  const [showAllPlays, setShowAllPlays] = useState(false);
   useEffect(() => {
     try {
       window.localStorage.setItem(UI_PREFERENCES_KEY, JSON.stringify({ expandedPlayDetails, profitStrategy }));
@@ -953,6 +955,9 @@ export function BingoResearchView() {
     },
     [latest, latestModels],
   );
+  const visiblePlays = showAllPlays
+    ? bestPlays
+    : bestPlays.filter((play) => PRIMARY_PLAY_KEYS.has(play.key));
   const technicalAnalysisFallback = useMemo(() => {
     const draws = sorted.slice(0, 30);
     const frequency = new Map<string, number>();
@@ -1225,6 +1230,15 @@ export function BingoResearchView() {
                       </div>
                     </div>
                   </div>
+                  <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-cyan-300/20 bg-cyan-300/5 px-3 py-2.5">
+                    <div className="min-w-0">
+                      <div className="text-xs font-semibold text-cyan-100">核心預測</div>
+                      <div className="mt-0.5 text-[10px] leading-4 text-muted-foreground">先看大小、單雙、超級獎號與 10 星；其他玩法可再展開。</div>
+                    </div>
+                    <button type="button" className="min-h-9 shrink-0 rounded-lg border border-cyan-300/35 bg-cyan-300/10 px-3 text-[11px] font-semibold text-cyan-100 transition-colors hover:bg-cyan-300/20" onClick={() => setShowAllPlays((current) => !current)} aria-expanded={showAllPlays}>
+                      {showAllPlays ? "只看核心玩法" : `顯示全部玩法（${bestPlays.length}）`}
+                    </button>
+                  </div>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
                     <div className="hidden gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid sm:grid-cols-[6rem_8.5rem_7rem_minmax(0,1fr)]">
                       <span className="text-center">玩法</span>
@@ -1236,7 +1250,7 @@ export function BingoResearchView() {
                     <div className="border-b border-slate-700 px-3 py-2 text-[10px] leading-4 text-muted-foreground sm:hidden">
                       每列依序顯示：玩法、使用算法、預測結果與盈利回測；點擊整列可查看詳細數據。
                     </div>
-                    {bestPlays.map((play) => (
+                    {visiblePlays.map((play) => (
                       <details
                         key={play.key}
                         open={expandedPlayDetails.includes(play.key)}
@@ -1430,7 +1444,14 @@ export function BingoResearchView() {
                     </div>
                   </div>
                 ) : null}
-                <div className="mt-3 space-y-3">
+                <details className="mt-4 rounded-2xl border border-border bg-background/40 p-3">
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200">
+                    <span className="flex items-center justify-between gap-2">
+                      <span>模型與計算細節</span>
+                      <span className="text-[10px] font-normal text-muted-foreground">{latestModels.length} 個模型・點擊展開</span>
+                    </span>
+                  </summary>
+                  <div className="mt-3 space-y-3">
                   {latestModels.length ? latestModels.map((model) => (
                     <article key={model.name} className="min-w-0 rounded-2xl border border-border bg-background/70 p-4 shadow-lg shadow-black/10 transition-transform duration-300 hover:-translate-y-0.5">
                       <div className="flex min-w-0 items-center justify-between gap-2">
@@ -1534,7 +1555,8 @@ export function BingoResearchView() {
                       目前開獎資料已載入，但模型預測尚未回傳；請按右上角重新讀取，或等待背景同步完成。
                     </div>
                   )}
-                </div>
+                  </div>
+                </details>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
                   盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。模型在回測視窗開始前決定，不看完 10 期結果才挑選。賺賠金額以每期 25 元成本、名目單注派彩計算；官方均分制需要同期期中獎注數，故不把研究值當成保證實領額。樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
                 </div>

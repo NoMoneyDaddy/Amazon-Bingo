@@ -2827,6 +2827,7 @@ const server = http.createServer(async (req, res) => {
         // 避免官方來源短暫逾時時，前端完全拿不到正式預測。
         const cached = {
           ...persisted[0],
+          profitabilityEvaluation: ensureFollowBacktestVisible(persisted[0].profitabilityEvaluation),
           history: compactHistoryForResponse(selectRecentHistory(persisted, retentionDays).slice(0, responseHistoryLimit)),
           historyDays: retentionDays,
           modelStatus: persisted[0].models?.length ? 'formal' : 'queued',

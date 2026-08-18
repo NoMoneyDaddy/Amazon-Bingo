@@ -436,24 +436,6 @@ function modelPlainLanguage(name: string) {
   if (name === "多模型聚合") return "依各模型歷史回測表現加權整合，產生共識候選，不把共識當成保證。";
   return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
-function ScoreBar({
-  value,
-  tone = "bg-cyan-300",
-}: {
-  value: number | null | undefined;
-  tone?: string;
-}) {
-  const percent = value == null ? 0 : Math.max(0, Math.min(100, value * 100));
-  return (
-    <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-slate-700">
-      <div
-        className={`h-full rounded-full ${tone}`}
-        style={{ width: `${percent}%` }}
-      />
-    </div>
-  );
-}
-
 export function BingoResearchView() {
   const [draws, setDraws] = useState<DrawSnapshot[]>([]);
   const sorted = useMemo(
@@ -738,36 +720,12 @@ export function BingoResearchView() {
                           ))}
                         </div>
                       </div>
-                      <div className="mt-3">
-                        <div className="mb-2 text-xs font-medium text-amber-200">各玩法／星級的歷史權重</div>
-                        <div className="grid min-w-0 gap-x-3 gap-y-2 sm:grid-cols-2">
-                          {Object.entries(model.calculation?.empiricalWeights || {}).map(([target, weight]) => (
-                            <div key={target} className="grid min-w-0 grid-cols-[4.5rem_minmax(0,1fr)_2.5rem] items-center gap-2 text-xs">
-                              <span className="truncate text-slate-300">{targetLabel(target)}</span>
-                              <ScoreBar value={weight} tone="bg-amber-300" />
-                              <span className="text-right tabular-nums text-amber-200">{(weight * 100).toFixed(0)}%</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="mt-3">
-                        <div className="mb-2 text-xs font-medium text-cyan-200">各玩法／星級的歷史回測率</div>
-                        <div className="grid min-w-0 gap-x-3 gap-y-2 sm:grid-cols-2">
-                          {Object.entries(model.calculation?.evolution || {}).map(([target, profile]) => (
-                            <div key={target} className="grid min-w-0 grid-cols-[4.5rem_minmax(0,1fr)_2.8rem] items-center gap-2 text-xs">
-                              <span className="truncate text-slate-300">{targetLabel(target)}</span>
-                              <ScoreBar value={profile.score} />
-                              <span className="text-right tabular-nums text-cyan-200">{profile.score == null ? "—" : `${(profile.score * 100).toFixed(1)}%`}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
                       <div className="mt-3 border-t border-slate-800 pt-2 text-xs leading-5 text-slate-300">
                         本模型候選：{model.research.numberPicks.join("、")} · 區間：{model.research.zones.join("、")} · 總和：{model.research.sumBand}
                       </div>
                       {model.research.targetResearch && (
                         <div className="mt-3 border-t border-border pt-3">
-                          <div className="mb-2 text-xs font-semibold text-amber-200">各玩法／星級專屬輸出</div>
+                          <div className="mb-2 text-xs font-semibold text-amber-200">各玩法／星級差異摘要</div>
                           <div className="grid gap-2 sm:grid-cols-2">
                             {Object.entries(model.research.targetResearch).map(([target, result]) => {
                               const prediction = target === "size"
@@ -775,15 +733,23 @@ export function BingoResearchView() {
                                 : target === "oddEven"
                                   ? model.official.oddEven
                                   : target === "superNumber"
-                                    ? model.official.superNumber
-                                    : result.numberPicks.join("、");
+                                  ? model.official.superNumber
+                                  : result.numberPicks.join("、");
+                              const weight = model.calculation?.empiricalWeights?.[target];
+                              const score = model.calculation?.evolution?.[target]?.score;
+                              const castingValue = model.calculation?.targetCastingValues?.[target];
                               return (
-                                <div key={target} className="rounded-lg border border-border bg-card/70 px-2.5 py-2 text-[11px]">
+                                <div key={target} className="rounded-xl border border-amber-300/20 bg-card/70 px-2.5 py-2.5 text-[11px]">
                                   <div className="flex items-center justify-between gap-2">
-                                    <span className="font-semibold text-foreground">{targetLabel(target)}</span>
-                                    <span className="font-bold tabular-nums text-cyan-200">{prediction || "—"}</span>
+                                    <span className="rounded-md bg-amber-300/15 px-1.5 py-0.5 font-semibold text-amber-100">{targetLabel(target)}</span>
+                                    <span className="max-w-[70%] truncate text-right font-bold tabular-nums text-cyan-200">{prediction || "—"}</span>
                                   </div>
-                                  <div className="mt-1 text-muted-foreground">{result.sumBand} · {result.oddEvenCount} · {result.highLowCount}</div>
+                                  <div className="mt-2 grid grid-cols-3 gap-1.5 text-[10px]">
+                                    <div className="rounded-md bg-amber-300/10 px-1.5 py-1"><span className="block text-muted-foreground">歷史權重</span><span className="font-semibold tabular-nums text-amber-200">{weight == null ? "—" : `${(weight * 100).toFixed(0)}%`}</span></div>
+                                    <div className="rounded-md bg-cyan-300/10 px-1.5 py-1"><span className="block text-muted-foreground">正盈利率</span><span className="font-semibold tabular-nums text-cyan-200">{score == null ? "—" : `${(score * 100).toFixed(1)}%`}</span></div>
+                                    <div className="rounded-md bg-slate-700/40 px-1.5 py-1"><span className="block text-muted-foreground">卦象結果</span><span className="block truncate font-semibold text-slate-200">{castingValue || "—"}</span></div>
+                                  </div>
+                                  <div className="mt-1.5 text-muted-foreground">{result.sumBand} · {result.oddEvenCount} · {result.highLowCount}</div>
                                 </div>
                               );
                             })}

@@ -451,6 +451,7 @@ export function BingoResearchView() {
   const [lastSync, setLastSync] = useState<number | null>(null);
   const [now, setNow] = useState(() => new Date());
   const [page, setPage] = useState<Page>("overview");
+  const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const latest = sorted[0];
   const latestModels = useMemo(
     () => (latest ? parseModels(latest) : []),
@@ -792,11 +793,28 @@ export function BingoResearchView() {
                         <h3 className="text-base font-bold text-white">第 {draw.period} 期</h3>
                         <span className="rounded-full border border-border bg-card px-2 py-1 text-[10px] font-semibold text-muted-foreground">已結算</span>
                       </div>
-                        <div className="mt-1 text-xs leading-6 text-slate-300">
+                      <div className="mt-1 text-xs leading-6 text-slate-300">
                           開獎時間 {draw.drawAt || "未知"} · 資料來源{" "}
                           {draw.sourceLabel || "未知"}
                         </div>
-                      <div className="mt-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3 text-sm leading-6 text-slate-200">
+                      <div className="mt-2 flex flex-wrap gap-1 text-[10px]" aria-label={`第 ${draw.period} 期摘要`}>
+                        <span className="rounded-full border border-violet-300/30 bg-violet-300/10 px-2 py-0.5 tabular-nums text-violet-100">總和 {numberSum(draw.numbers)}</span>
+                        <span className="rounded-full border border-orange-300/30 bg-orange-300/10 px-2 py-0.5 text-orange-100">大小 {draw.size || "—"}</span>
+                        <span className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-2 py-0.5 text-cyan-100">單雙 {draw.oddEven || "—"}</span>
+                        <span className="rounded-full border border-red-300/30 bg-red-400/10 px-2 py-0.5 tabular-nums text-red-100">超級 {draw.superNumber || "—"}</span>
+                      </div>
+                      <div className="mt-1 truncate text-[10px] text-muted-foreground">號碼：{draw.numbers.join("、")}</div>
+                      <button
+                        type="button"
+                        className="mt-2 min-h-9 w-full rounded-lg border border-cyan-300/25 bg-cyan-300/5 px-3 py-1.5 text-left text-xs font-semibold text-cyan-100 transition-colors hover:bg-cyan-300/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-200"
+                        aria-expanded={expandedHistory === draw.period}
+                        aria-controls={`history-detail-${draw.period}`}
+                        onClick={() => setExpandedHistory((current) => current === draw.period ? null : draw.period)}
+                      >
+                        {expandedHistory === draw.period ? "收合完整紀錄 ↑" : "展開完整紀錄 ↓"}
+                      </button>
+                      {expandedHistory === draw.period && (
+                        <div id={`history-detail-${draw.period}`} className="mt-3 rounded-xl border border-slate-800 bg-slate-900/80 p-3 text-sm leading-6 text-slate-200">
                         <div className="mb-3 flex flex-wrap gap-1.5" aria-label={`第 ${draw.period} 期總和、大小、單雙結果`}>
                           <span className="rounded-full border border-violet-300/30 bg-violet-300/10 px-2 py-0.5 text-[11px] font-semibold tabular-nums text-violet-100">
                             總和：{numberSum(draw.numbers)}
@@ -835,10 +853,11 @@ export function BingoResearchView() {
                           .map((model) => model.name)
                           .join("、") || "—"}
                         </div>
-                      </div>
-                      {parseModels(draw).map((model) => (
-                        <HistoricalModelDetails key={model.name} model={model} draw={draw} />
-                      ))}
+                          {parseModels(draw).map((model) => (
+                            <HistoricalModelDetails key={model.name} model={model} draw={draw} />
+                          ))}
+                        </div>
+                      )}
                     </article>
                   ))}
                   {sorted.length <= 1 && (

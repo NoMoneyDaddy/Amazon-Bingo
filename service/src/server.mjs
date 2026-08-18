@@ -1,5 +1,6 @@
 import http from 'node:http';
 import { createHash } from 'node:crypto';
+import { isMainThread, Worker } from 'node:worker_threads';
 import { gzipSync } from 'node:zlib';
 import pg from 'pg';
 
@@ -503,7 +504,7 @@ function aggregateModel(models, history) {
   };
 }
 
-function buildModels(snapshot, history = [], options = {}) {
+export function buildModels(snapshot, history = [], options = {}) {
   const profiles = options.profiles || (options.evolve === false ? {} : evolveProfiles(history));
   const castingAt = options.castingAt || snapshot.castingAt || snapshot.drawAt || new Date().toISOString();
   const methods = [
@@ -575,6 +576,22 @@ function buildModels(snapshot, history = [], options = {}) {
     };
   });
   return [...baseModels, aggregateModel(baseModels, history)];
+}
+
+function buildModelsInWorker(snapshot, history = [], options = {}) {
+  return new Promise((resolve, reject) => {
+    const worker = new Worker(new URL('./model-worker.mjs', import.meta.url), {
+      workerData: { snapshot, history, options },
+    });
+    worker.once('message', (message) => {
+      if (message?.error) reject(new Error(message.error));
+      else resolve(message.models || []);
+    });
+    worker.once('error', reject);
+    worker.once('exit', (code) => {
+      if (code !== 0) reject(new Error(`模型 Worker 結束碼 ${code}`));
+    });
+  });
 }
 
 async function fetchOfficial(daysOverride = null) {
@@ -665,9 +682,10 @@ async function latest(daysOverride = null, existingHistory = []) {
         const drawAt = formatTaipeiDateTime(new Date(syncedAt - index * 5 * 60 * 1000));
         const isNextPrediction = index === 0;
         const modelSnapshot = isNextPrediction ? { ...item, period: nextPeriod, drawAt } : item;
+        const modelHistory = rawHistory.slice(index + 1, index + maxModelHistory + 1).map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
         const models = index > 0 && item.models?.length
           ? item.models
-          : buildModels(modelSnapshot, rawHistory.slice(index + 1, index + maxModelHistory + 1), { evolve: isNextPrediction, castingAt: new Date(syncedAt - index * 5 * 60 * 1000).toISOString() });
+          : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: isNextPrediction, castingAt: new Date(syncedAt - index * 5 * 60 * 1000).toISOString() });
         history.push({
           ...item,
           drawAt,
@@ -787,8 +805,10 @@ const server = http.createServer(async (req, res) => {
   send(res, 404, { error: 'Not found' });
 });
 
-server.listen(port, '0.0.0.0', () => {
-  console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
-  const firstWakeAt = nextDrawAt(new Date()).getTime() - Date.now() - 30_000;
-  scheduledTimer = setTimeout(() => void scheduledSync(false), Math.max(60_000, firstWakeAt));
-});
+if (isMainThread) {
+  server.listen(port, '0.0.0.0', () => {
+    console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
+    const firstWakeAt = nextDrawAt(new Date()).getTime() - Date.now() - 30_000;
+    scheduledTimer = setTimeout(() => void scheduledSync(false), Math.max(60_000, firstWakeAt));
+  });
+}

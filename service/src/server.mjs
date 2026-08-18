@@ -18,7 +18,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v71-strict-recent-baseline-gate';
+const reproducibilityVersion = 'bingo-research-v72-consensus-super-number-gate';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1812,6 +1812,18 @@ function recentTargetGate(modelName, target, history = []) {
     }).length;
     const rate = valid.length ? wins / valid.length : 0;
     return { eligible: valid.length >= 20 && rate >= 0.55, samples: valid.length, rate, baseline: 0.5 };
+  }
+  if (target === 'superNumber') {
+    // 超級獎號是單一號碼，不是「星級」號碼集合；不能讀 official.basic["superNumber"]。
+    // 這裡沿用回測的「淨利大於 0 才算勝利」定義，命中一般 20 號只損益打平，不算勝利。
+    const valid = rows.filter((item) => normalizeNumberValue(item.superNumber));
+    const wins = valid.filter((item) => {
+      const model = item.models.find((candidate) => candidate.name === modelName);
+      return hasPositiveProfit(target, model?.official?.superNumber, item);
+    }).length;
+    const rate = valid.length ? wins / valid.length : 0;
+    const baseline = 1 / 80;
+    return { eligible: valid.length >= 20 && rate > baseline, samples: valid.length, wins, rate, baseline };
   }
   const count = Number(String(target).replace('星', '')) || 10;
   const matches = rows.map((item) => {

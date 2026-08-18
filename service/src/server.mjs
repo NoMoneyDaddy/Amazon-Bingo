@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v12-cache-first-fallback';
+const reproducibilityVersion = 'bingo-research-v13-safe-cache-recompute';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -892,7 +892,12 @@ async function persistedResponse(persisted) {
     castingAt: predictionCastingAt,
   };
   // 快取回應路徑只做快速重算；完整 walk-forward 自動調權重交給背景同步，避免 API 被重運算卡住。
-  const models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, castingAt: predictionCastingAt });
+  let models = current.models || [];
+  try {
+    models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: false, castingAt: predictionCastingAt });
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'cached-prediction-recompute-failed', message: error instanceof Error ? error.message : String(error) }));
+  }
   const history = [{
     ...current,
     models,

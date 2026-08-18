@@ -422,6 +422,15 @@ function mergeDrawSnapshots(current: DrawSnapshot[], incoming: DrawSnapshot[]) {
   );
 }
 
+function hasDrawInformationChanged(previous: DrawSnapshot | undefined, next: DrawSnapshot) {
+  if (!previous) return true;
+  return String(previous.period || '') !== String(next.period || '')
+    || (previous.numbers || []).map(normalizeNumber).join(',') !== (next.numbers || []).map(normalizeNumber).join(',')
+    || normalizeNumber(previous.superNumber) !== normalizeNumber(next.superNumber)
+    || normalizeCategory(previous.size) !== normalizeCategory(next.size)
+    || normalizeCategory(previous.oddEven) !== normalizeCategory(next.oddEven);
+}
+
 function normalizeNumber(value: string | number) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? String(parsed).padStart(2, "0") : String(value);
@@ -1181,7 +1190,7 @@ export function BingoResearchView() {
     try {
       const runtime = useBingoRuntimeStore.getState();
       const nowMs = Date.now();
-      const shouldRefreshHistory = forceHistory
+      const shouldRefreshHistoryByAge = forceHistory
         || !runtime.draws.length
         || nowMs - runtime.historySyncedAt >= HISTORY_REFRESH_MS;
       // 有快取時先保留舊資料，只確認最新一期；完整 31 日資料按間隔背景更新。
@@ -1194,6 +1203,9 @@ export function BingoResearchView() {
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");
       }
+      const latestRecord = records[0];
+      const drawInformationChanged = hasDrawInformationChanged(runtime.draws[0], latestRecord);
+      const shouldRefreshHistory = shouldRefreshHistoryByAge || drawInformationChanged;
       useBingoRuntimeStore.getState().setDraws(mergeDrawSnapshots(runtime.draws, records));
       useBingoRuntimeStore.getState().markLatestSynced(Date.now());
       setLastSync(Date.now());

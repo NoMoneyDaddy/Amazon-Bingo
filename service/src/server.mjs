@@ -61,6 +61,9 @@ const persistedReadInFlight = new Map();
 const compressedPayloadCache = new Map();
 const latestResponseCache = new Map();
 const latestResponseCacheTtlMs = 5_000;
+const formalModelCache = new Map();
+const formalModelInFlight = new Map();
+const formalModelCacheTtlMs = 15 * 60 * 1000;
 const sourceRuntimeStats = new Map();
 
 function sourceStat(name) {
@@ -1406,7 +1409,7 @@ async function hydrateEvaluationModels(history = []) {
     const modelHistory = history.slice(index + 1, index + maxModelHistory + 1)
       .map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
     try {
-      history[index].models = await buildModelsInWorker(item, modelHistory, {
+      history[index].models = await buildModelsCached(item, modelHistory, {
         evolve: false,
         castingAt: reproducibleCastingAt(item.castingAt || item.drawAt, item.period),
       });
@@ -2152,6 +2155,44 @@ function buildModelsInWorker(snapshot, history = [], options = {}) {
   });
 }
 
+function formalModelCacheKey(snapshot, history = [], options = {}) {
+  const castingAt = reproducibleCastingAt(options.castingAt || snapshot.castingAt, snapshot.period);
+  // 模型使用日期／時辰等可重現特徵；秒數不應造成同一分鐘重算。
+  const castingMinute = castingAt.slice(0, 16);
+  const historyFingerprint = history.slice(0, maxModelHistory).map((item) => ({
+    period: item.period,
+    numbers: item.numbers,
+    superNumber: item.superNumber,
+    size: item.size,
+    oddEven: item.oddEven,
+  }));
+  return createHash('sha1').update(JSON.stringify({
+    version: reproducibilityVersion,
+    targetPeriod: snapshot.period,
+    castingMinute,
+    history: historyFingerprint,
+    onlyMethod: options.onlyMethod || '',
+    evolve: options.evolve !== false,
+  })).digest('hex');
+}
+
+async function buildModelsCached(snapshot, history = [], options = {}) {
+  const key = formalModelCacheKey(snapshot, history, options);
+  const cached = formalModelCache.get(key);
+  if (cached && Date.now() - cached.createdAt < formalModelCacheTtlMs) return cached.models;
+  const inFlight = formalModelInFlight.get(key);
+  if (inFlight) return inFlight;
+  const promise = buildModelsInWorker(snapshot, history, options)
+    .then((models) => {
+      formalModelCache.set(key, { createdAt: Date.now(), models });
+      while (formalModelCache.size > 8) formalModelCache.delete(formalModelCache.keys().next().value);
+      return models;
+    })
+    .finally(() => formalModelInFlight.delete(key));
+  formalModelInFlight.set(key, promise);
+  return promise;
+}
+
 async function fetchOfficial(daysOverride = null) {
   const requestedDays = daysOverride ?? Number(process.env.HISTORY_DAYS || defaultHistoryDays);
   const historyDays = daysOverride != null
@@ -2308,7 +2349,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         let modelError = '';
         if (isNextPrediction && !options.deferLatestModel) {
           try {
-            models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt });
+            models = await buildModelsCached(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt });
           } catch (error) {
             modelError = error instanceof Error ? error.message : String(error);
             models = [];
@@ -2369,7 +2410,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   let models = current.models || [];
   let modelError = '';
   try {
-    models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: predictionCastingAt });
+    models = await buildModelsCached(modelSnapshot, modelHistory, { evolve: true, castingAt: predictionCastingAt });
   } catch (error) {
     modelError = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({ event: 'cached-prediction-recompute-failed', message: error instanceof Error ? error.message : String(error) }));

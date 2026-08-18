@@ -22,7 +22,7 @@ const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
-const reproducibilityVersion = 'bingo-research-v76-layered-out-of-sample-engine';
+const reproducibilityVersion = 'bingo-research-v77-validation-profit-model-selection';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1375,18 +1375,27 @@ function profitabilityEvaluation(history = []) {
             : predictionSource.official?.basic?.[play.key]?.join('、');
       const profitRate = trials ? wins / trials : null;
       const averageProfit = trials ? profit / trials : null;
+      const validationEvidence = currentModel.calculation?.evolution?.[play.key] || {};
+      const validationTrials = Number(validationEvidence.trials || validationEvidence.validationSamples || 0);
+      const validationProfit = validationTrials >= minimumValidationSamples && Number.isFinite(Number(validationEvidence.profit))
+        ? Number(validationEvidence.profit)
+        : null;
       return {
         mode, model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal: trials * betCostForTarget(play.key),
         matches, targetCount, averageProfit, positiveExpected: averageProfit != null && averageProfit > 0,
         profitRate, estimatedRate: evolution?.estimatedRate ?? null,
-        confidence: evolution?.confidence ?? -1, prediction: prediction || '—', periodResults,
+        confidence: evolution?.confidence ?? -1, validationProfit, validationTrials,
+        prediction: prediction || '—', periodResults,
       };
     };
     // 模型必須在回測視窗開始前決定；不能看完這 10 期結果再挑最高盈利者。
-    const rank = (a, b) => (b.confidence ?? -1) - (a.confidence ?? -1)
+    // 先用更早校準窗的實際淨利選模；該欄位不包含本次固定 10 期。
+    const rank = (a, b) => (b.validationProfit ?? -Infinity) - (a.validationProfit ?? -Infinity)
+      || (b.validationTrials ?? 0) - (a.validationTrials ?? 0)
+      || (b.confidence ?? -1) - (a.confidence ?? -1)
       || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1)
       || String(a.model).localeCompare(String(b.model));
-    const empty = (mode) => ({ mode, model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, prediction: '—', periodResults: [] });
+    const empty = (mode) => ({ mode, model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, validationProfit: null, validationTrials: 0, prediction: '—', periodResults: [] });
     const candidateModels = (selectionModels.length ? selectionModels : currentModels).filter((model) => model.name !== '多模型聚合');
     const fixed = candidateModels.map((model) => evaluate(model, 'fixed')).sort(rank)[0] || empty('fixed');
     const follow = candidateModels.map((model) => evaluate(model, 'follow')).sort(rank)[0] || empty('follow');

@@ -11,7 +11,9 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v13-safe-cache-recompute';
+// 最新一筆是下一期預測基準；另外保留 60 筆已開獎期，讓回測樣本與歷史期數一致。
+const persistedHistoryLimit = maxModelHistory + 1;
+const reproducibilityVersion = 'bingo-research-v14-60-backtest-samples';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -149,7 +151,7 @@ async function persistSnapshots(snapshots) {
     }
     await client.query('COMMIT');
     lastPersistedPeriod = snapshots[0]?.period || lastPersistedPeriod;
-    persistedCache.set(maxModelHistory, { rows: snapshots, storedAt: Date.now() });
+    persistedCache.set(persistedHistoryLimit, { rows: snapshots, storedAt: Date.now() });
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -165,15 +167,15 @@ async function readPersisted(limit = 6000) {
   return result.rows.map((row) => ({ ...row, numbers: Array.isArray(row.numbers) ? row.numbers : [], sourceHealth: row.sourceHealth || [], models: row.models || [] }));
 }
 
-async function readPersistedCached(limit = maxModelHistory) {
-  const cacheKey = limit <= maxModelHistory ? maxModelHistory : limit;
+async function readPersistedCached(limit = persistedHistoryLimit) {
+  const cacheKey = limit <= persistedHistoryLimit ? persistedHistoryLimit : limit;
   const cached = persistedCache.get(cacheKey);
   if (cached && Date.now() - cached.storedAt < persistedCacheTtlMs) return cached.rows;
   const inFlight = persistedReadInFlight.get(cacheKey);
   if (inFlight) return inFlight;
   const read = readPersisted(limit)
     .then((rows) => {
-      if (cacheKey === maxModelHistory) persistedCache.set(cacheKey, { rows, storedAt: Date.now() });
+      if (cacheKey === persistedHistoryLimit) persistedCache.set(cacheKey, { rows, storedAt: Date.now() });
       return rows;
     })
     .finally(() => persistedReadInFlight.delete(cacheKey));
@@ -864,7 +866,7 @@ async function latest(daysOverride = null, existingHistory = []) {
           castingAt: modelCastingAt,
           forecastCastingAt: isNextPrediction ? predictionCastingAt : item.forecastCastingAt,
           predictionTargetPeriod: isNextPrediction ? nextPeriod : item.period,
-          models: index < maxModelHistory ? models : [],
+          models: index <= maxModelHistory ? models : [],
           fetchedAt: syncedAt,
           sourceHealth: health,
         });
@@ -933,9 +935,9 @@ function nextDrawAt(now = new Date()) {
 
 async function scheduledSync(forceRepair = false) {
   try {
-    const persisted = await readPersistedCached(maxModelHistory);
+    const persisted = await readPersistedCached(persistedHistoryLimit);
     const requestedDays = forceRepair || !persisted.length ? 30 : 1;
-    const refreshDays = requestedDays === 1 && persisted.length < maxModelHistory ? 30 : requestedDays;
+    const refreshDays = requestedDays === 1 && persisted.length < persistedHistoryLimit ? 30 : requestedDays;
     const result = await latest(refreshDays, persisted);
     console.log(JSON.stringify({ event: 'sync-ok', period: result.period, historyDays: result.historyDays, persisted: Boolean(pool) }));
   } catch (error) {
@@ -985,7 +987,7 @@ const server = http.createServer(async (req, res) => {
       const requestUrl = new URL(req.url, 'http://localhost');
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
-      const persisted = await readPersistedCached(daysOverride && daysOverride > 1 ? 10000 : maxModelHistory);
+      const persisted = await readPersistedCached(daysOverride && daysOverride > 1 ? 10000 : persistedHistoryLimit);
       const cachedForecast = persisted[0]?.forecastCastingAt
         ? reproducibleCastingAt(persisted[0].forecastCastingAt, persisted[0].predictionTargetPeriod || '')
         : '';
@@ -997,7 +999,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, cached, req);
       }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
-      const hasUsableHistory = persisted.length >= maxModelHistory;
+      const hasUsableHistory = persisted.length >= persistedHistoryLimit;
       if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory && forecastFresh) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
       return send(res, 200, await latest(refreshDays, persisted), req);

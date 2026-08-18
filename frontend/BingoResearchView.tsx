@@ -680,7 +680,8 @@ export function BingoResearchView() {
                   )}
                 </section>
                 <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border border-border bg-background/70 px-3 py-2 text-[10px] leading-5 text-muted-foreground" role="status">
-                  <span>已載入 {sorted.length} 期</span>
+                  <span>歷史 {Math.max(0, sorted.length - 1)} 期</span>
+                  <span>回測樣本 {bestPlays[0]?.best.samples || 0} 期</span>
                   <span>最新資料 {latest?.numbers.length || 0}/20 個號碼</span>
                   <span>模型 {latestModels.length}/9 個</span>
                   <span>{latest?.sourceHealth?.some((item) => item.ok) ? "官方來源正常" : "來源狀態未知"}</span>

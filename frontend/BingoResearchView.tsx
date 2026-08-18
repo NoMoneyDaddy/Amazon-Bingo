@@ -104,6 +104,8 @@ type DrawSnapshot = {
   fetchedAt?: number;
   history?: DrawSnapshot[];
   historyDays?: number;
+  modelStatus?: "formal" | "queued" | "error" | "unavailable";
+  modelError?: string;
   predictionTargetPeriod?: string;
   backup?: {
     enabled: boolean;
@@ -297,6 +299,8 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     models: Array.isArray(value.models) ? value.models.map(normalizeModel) : [],
     fetchedAt: value.fetchedAt || 0,
     historyDays: value.historyDays,
+    modelStatus: value.modelStatus,
+    modelError: value.modelError,
     predictionTargetPeriod: value.predictionTargetPeriod || "",
     backup: value.backup,
     audit: value.audit,
@@ -581,10 +585,12 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
         ? payload.history.map((item) => normalizeSnapshot(item))
         : [normalizeSnapshot(payload)];
       const latest = normalizeSnapshot({ ...payload, history });
-      // 模型與回測是兩個獨立生命週期；回測尚未完成時仍保留正式模型。
-      return hasFormalModels(latest.models)
-        ? { ...latest, history }
-        : enrichLocalFallback(history);
+      // 模型、回測、資料同步是三個獨立生命週期；沒有正式模型時顯示狀態，禁止偽造本地預測。
+      return {
+        ...latest,
+        history,
+        modelStatus: hasFormalModels(latest.models) ? "formal" : (latest.modelStatus || "queued"),
+      };
     } catch (error) {
       lastError = new Error(
         error instanceof Error && /abort|signal/i.test(error.message)
@@ -625,7 +631,12 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString()): Prom
     const firstPeriod = Math.min(...rawRows.map((row) => Number(row.period)).filter(Number.isFinite));
     const rows = rawRows.map((row) => ({ ...row, drawAt: officialFallbackDrawTime(row.period, taipeiDate, firstPeriod) }));
     if (!rows.length) throw new Error("官方資料格式不完整");
-    return enrichLocalFallback(rows);
+    return {
+      ...rows[0],
+      history: rows,
+      modelStatus: "unavailable",
+      modelError: "模型服務目前無法取得正式結果；僅顯示官方開獎資料。",
+    };
   } catch {
     throw lastError instanceof Error ? lastError : new Error("資料暫時無法更新");
   }
@@ -1320,6 +1331,11 @@ export function BingoResearchView() {
                     {!hasConsensusWeight && latestModels.length ? (
                       <div className="mb-2 rounded border border-amber-300/25 bg-amber-300/10 px-2 py-1.5 text-amber-100">
                         十期樣本尚未證明模型超越基準；以下是研究候選，不代表提高中獎機率。
+                      </div>
+                    ) : null}
+                    {latest?.modelStatus !== "formal" ? (
+                      <div className="mb-2 rounded border border-rose-300/25 bg-rose-300/10 px-2 py-1.5 text-rose-100">
+                        正式模型狀態：{latest?.modelStatus === "queued" ? "計算中，尚未產生預測" : latest?.modelStatus === "error" ? "計算失敗，未使用備援號碼" : "尚未取得"}；目前只顯示官方開獎資料。
                       </div>
                     ) : null}
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

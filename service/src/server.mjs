@@ -13,14 +13,14 @@ const defaultHistoryDays = 30;
 const maxModelHistory = 300;
 const profitabilityBacktestWindow = 10;
 // 顯示回測維持 10 期；模型調參另用較長樣本，並保留最新 10 期作為未參與調參的隔離窗口。
-const minimumValidationSamples = 15;
-const profileValidationWindow = 20;
+const minimumValidationSamples = 18;
+const profileValidationWindow = 18;
 const profileHoldoutWindow = profitabilityBacktestWindow;
 // 資料保存至少涵蓋一個月；最新基準之外，模型選擇使用較長 walk-forward。
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v75-robust-walk-forward-ensemble';
+const reproducibilityVersion = 'bingo-research-v76-layered-out-of-sample-engine';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1405,10 +1405,18 @@ async function hydrateEvaluationModels(history = []) {
     if (!item) continue;
     const modelHistory = history.slice(index + 1, index + maxModelHistory + 1)
       .map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
-    history[index].models = await buildModelsInWorker(item, modelHistory, {
-      evolve: false,
-      castingAt: reproducibleCastingAt(item.castingAt || item.drawAt, item.period),
-    });
+    try {
+      history[index].models = await buildModelsInWorker(item, modelHistory, {
+        evolve: false,
+        castingAt: reproducibleCastingAt(item.castingAt || item.drawAt, item.period),
+      });
+      history[index].modelStatus = history[index].models.length ? 'formal' : 'error';
+    } catch (error) {
+      history[index].models = [];
+      history[index].modelStatus = 'error';
+      history[index].modelError = error instanceof Error ? error.message : String(error);
+      console.error(JSON.stringify({ event: 'historical-model-build-failed', period: history[index].period, message: history[index].modelError }));
+    }
   }
   return history;
 }
@@ -1564,60 +1572,79 @@ function researchAudit(draws = []) {
 }
 
 function evolveProfiles(history = []) {
-  // 0 是純基線；其餘只允許小幅候選，避免人工權重跳躍造成過擬合。
-  const candidates = [0, 0.16, 0.32];
-  // 最新 10 期只留給近期績效檢視；調參使用更早的 40 折 walk-forward，
-  // 避免模型剛好適配最近幾期後又被同一批結果選出。
+  // 只用最新 10 期以外的逐期樣本；每一折只計算一次 10 星排序，再取前綴供各星級使用。
+  // 這避免舊版「每個方法／玩法／權重都重建整套模型」造成 Worker 超時，超時後前端才會誤用備援。
+  const candidates = [0.08, 0.24];
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - profileHoldoutWindow - 1));
   const validationRows = history.slice(profileHoldoutWindow, profileHoldoutWindow + validationWindow);
-  // 所有玩法都使用同一套 walk-forward + Wilson 下限規則，不讓 4～10 星退回固定權重。
   const tunableTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
-  const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線', '貝葉斯平滑基線', '超幾何集合基線', '多窗口穩定性基線', '排除濾網基線', '趨勢加權回歸基線'];
+  const methods = [
+    ['梅花易數', 'meihua', 11], ['六爻八卦', 'sixyao', 37], ['河圖洛書', 'luoshu', 61],
+    ['數字卦（楚簡研究版）', 'numeral-gua', 73], ['奇門遁甲（九宮研究版）', 'qimen', 89],
+    ['太乙九宮（研究版）', 'taiyi', 97], ['民俗統計基線', 'statistics', 113],
+    ['生肖五行研究版', 'bazi', 127], ['貝葉斯平滑基線', 'bayesian', 149],
+    ['超幾何集合基線', 'hypergeometric', 163], ['多窗口穩定性基線', 'multiscale', 179],
+    ['排除濾網基線', 'exclusion', 191], ['趨勢加權回歸基線', 'regression', 223],
+  ];
   if (validationRows.length < minimumValidationSamples) {
-    return Object.fromEntries(methods.map((method) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0, validationSamples: validationWindow, score: null, baselineRate: null, eligible: false, status: `樣本不足（至少需要 ${minimumValidationSamples} 期），不納入聚合權重` }])) }]));
+    return Object.fromEntries(methods.map(([method]) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0, validationSamples: validationRows.length, score: null, baselineRate: null, qualityScore: 0, eligible: false, status: `樣本不足（需要 ${minimumValidationSamples} 期），只保留研究結果` }])) }]));
   }
-  // 批次化 walk-forward：每個方法／權重／折只建一次模型，並由外層快取避免同一歷史重複計算。
-  const scores = Object.fromEntries(methods.map((method) => [method, Object.fromEntries(tunableTargets.map((target) => [target, []]))]));
-  methods.forEach((method) => candidates.forEach((empiricalWeight) => {
-    const profileTargets = Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight }]));
-    validationRows.forEach((actual) => {
-      const index = history.indexOf(actual);
-      const training = history.slice(index + 1);
-      const predicted = buildModels(actual, training, { evolve: false, onlyMethod: method, profiles: { [method]: { targets: profileTargets } } }).find((item) => item.name === method);
-      if (!predicted) return;
-      tunableTargets.forEach((target) => {
-        const prediction = target === 'size' ? predicted.official.size : target === 'oddEven' ? predicted.official.oddEven : target === 'superNumber' ? predicted.official.superNumber : predicted.official.basic[target] || [];
-        const bucket = scores[method][target].find((item) => item.empiricalWeight === empiricalWeight) || { empiricalWeight, wins: 0, trials: 0, payout: 0, profit: 0, baselineSum: 0, baselineTrials: 0 };
-        bucket.wins += hasPositiveProfit(target, prediction, actual) ? 1 : 0;
-        bucket.trials += 1;
-        const payout = backtestPayout(target, prediction, actual);
-        bucket.payout += payout;
-        bucket.profit += payout - betCostForTarget(target);
-        const baselineRate = positiveProfitBaseline(target, training);
-        if (baselineRate != null) {
-          bucket.baselineSum += baselineRate;
-          bucket.baselineTrials += 1;
+  const scores = Object.fromEntries(methods.map(([method]) => [method, Object.fromEntries(tunableTargets.map((target) => [target, candidates.map((empiricalWeight) => ({ empiricalWeight, wins: 0, trials: 0, profit: 0, payout: 0, matches: 0, baselineMatches: 0, baselineSum: 0 }))]))]));
+  for (const [method, kind, seedOffset] of methods) {
+    for (const empiricalWeight of candidates) {
+      for (const actual of validationRows) {
+        const index = history.indexOf(actual);
+        const training = history.slice(index + 1, index + maxModelHistory + 1);
+        const castingAt = reproducibleCastingAt(actual.drawAt, actual.period);
+        const snapshot = { ...actual, period: actual.period, castingAt };
+        const casting = castingFor(kind === 'regression' ? 'statistics' : kind, snapshot, '10星', castingAt);
+        const tradition = traditionFor(kind === 'regression' ? 'statistics' : kind, casting);
+        let tenStar;
+        if (kind === 'regression') {
+          tenStar = frequencyBaselinePrediction(training, 10);
+        } else if (kind === 'exclusion') {
+          tenStar = exclusionPrediction(`${castingAt}|${actual.period}|${seedOffset}`, 10, training, '10星').numbers;
+        } else {
+          tenStar = scoreNumbers(`${castingAt}|${actual.period}|${kind}|${seedOffset}`, 10, tradition, training, empiricalWeight, '10星');
         }
-        if (!scores[method][target].includes(bucket)) scores[method][target].push(bucket);
-      });
-    });
-  }));
-  return Object.fromEntries(methods.map((method) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => {
+        const predictions = { size: categoryPrediction(seedOffset, targetTraditionalCategory(casting, 'size', seedOffset), training, 'size', empiricalWeight), oddEven: categoryPrediction(seedOffset, targetTraditionalCategory(casting, 'oddEven', seedOffset), training, 'oddEven', empiricalWeight), superNumber: tenStar[0] || '' };
+        for (let star = 1; star <= 10; star += 1) predictions[`${star}星`] = tenStar.slice(0, star);
+        for (const target of tunableTargets) {
+          const prediction = predictions[target];
+          const payout = backtestPayout(target, prediction, actual);
+          const positive = payout - betCostForTarget(target) > 0;
+          const item = scores[method][target].find((candidate) => candidate.empiricalWeight === empiricalWeight);
+          item.trials += 1;
+          item.wins += positive ? 1 : 0;
+          item.profit += payout - betCostForTarget(target);
+          item.payout += payout;
+          if (target.endsWith('星')) {
+            item.matches += (prediction || []).filter((number) => (actual.numbers || []).includes(number)).length;
+            item.baselineMatches += Number(target.replace('星', '')) * 20 / 80;
+          }
+          const baselineRate = positiveProfitBaseline(target, training);
+          if (baselineRate != null) item.baselineSum += baselineRate;
+        }
+      }
+    }
+  }
+  return Object.fromEntries(methods.map(([method]) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => {
     const results = scores[method][target].map((item) => {
       const rate = item.trials ? item.wins / item.trials : 0;
-      const baselineRate = item.baselineTrials ? item.baselineSum / item.baselineTrials : null;
-      const targetCost = betCostForTarget(target);
-      const cost = item.trials * targetCost;
-      const roi = cost ? item.profit / cost : null;
-      const baselineNetPerBet = theoreticalNetPerBet(target);
-      const baselineRoi = baselineNetPerBet / targetCost;
-      return { ...item, score: rate, estimatedRate: item.trials ? (item.wins + 2) / (item.trials + 4) : 0, confidence: lowerConfidenceBound(rate, item.trials), baselineRate, baselineNetPerBet, baselineRoi, averageProfit: item.trials ? item.profit / item.trials : null, roi, validationSamples: item.trials };
+      const baselineRate = item.trials ? item.baselineSum / item.trials : null;
+      const confidence = lowerConfidenceBound(rate, item.trials);
+      const meanMatches = item.trials ? item.matches / item.trials : null;
+      const baselineMatches = item.trials ? item.baselineMatches / item.trials : null;
+      const matchLift = meanMatches != null && baselineMatches != null ? meanMatches - baselineMatches : 0;
+      const confidenceLift = baselineRate == null ? 0 : confidence - baselineRate;
+      const qualityScore = Number(clamp(Math.max(0, confidenceLift) * 5 + Math.max(0, matchLift) * 0.12, 0, 1).toFixed(6));
+      const eligible = item.trials >= minimumValidationSamples && (confidenceLift > 0 || matchLift > 0.35);
+      return { ...item, score: rate, estimatedRate: (item.wins + 2) / (item.trials + 4), confidence, baselineRate, meanMatches, baselineMatches, qualityScore, validationSamples: item.trials, eligible };
     });
-    const best = results.sort((a, b) => (b.roi ?? -Infinity) - (a.roi ?? -Infinity) || b.confidence - a.confidence || Math.abs(a.empiricalWeight - 0.32) - Math.abs(b.empiricalWeight - 0.32))[0] || { empiricalWeight: 0, wins: 0, trials: 0, score: null, baselineRate: null, estimatedRate: 0, confidence: 0, roi: null, baselineRoi: null, validationSamples: 0 };
-    const eligible = best.roi != null && best.baselineRoi != null && best.roi > best.baselineRoi && best.profit > 0 && best.confidence > (best.baselineRate ?? 0);
-    const evidenceShrink = eligible ? clamp((best.validationSamples - minimumValidationSamples) / Math.max(1, profileValidationWindow - minimumValidationSamples), 0.25, 1) : 0;
-    const effectiveWeight = eligible ? Number((best.empiricalWeight * evidenceShrink).toFixed(4)) : 0;
-    return [target, { ...best, empiricalWeight: effectiveWeight, selectedWeight: best.empiricalWeight, evidenceShrink, eligible, status: eligible ? `walk-forward ${validationWindow} 期／ROI ${(best.roi * 100).toFixed(1)}%，證據收縮 ${(evidenceShrink * 100).toFixed(0)}%，納入有限權重` : `walk-forward ${validationWindow} 期／淨利／ROI 未可靠超過理論基線，不納入權重` }];
+    const best = results.sort((a, b) => b.qualityScore - a.qualityScore || b.confidence - a.confidence || b.score - a.score)[0];
+    const evidenceShrink = best?.eligible ? clamp((best.validationSamples - minimumValidationSamples + 1) / Math.max(1, profileValidationWindow - minimumValidationSamples + 1), 0.25, 1) : 0;
+    const effectiveWeight = best?.eligible ? Number((best.empiricalWeight * evidenceShrink).toFixed(4)) : 0;
+    return [target, { ...(best || { empiricalWeight: 0, trials: 0, score: null, confidence: 0, qualityScore: 0 }), empiricalWeight: effectiveWeight, selectedWeight: best?.empiricalWeight || 0, evidenceShrink, eligible: Boolean(best?.eligible), status: best?.eligible ? `逐期樣本外 ${validationWindow} 期／品質分數 ${best.qualityScore.toFixed(3)}／納入收縮權重` : `逐期樣本外 ${validationWindow} 期／未通過超額閘門，只作研究比較` }];
   })) }]));
 }
 
@@ -1861,7 +1888,7 @@ function aggregateModel(models, history) {
   const ensembleModels = quantitativeModels.length ? quantitativeModels : eligibleModels;
   const hasValidatedWeight = ensembleModels.some((model) => predictionTargets.some((target) => {
     const evolution = model.calculation?.evolution?.[target];
-    return evolution?.eligible === true && Number(evolution?.empiricalWeight) > 0;
+    return evolution?.eligible === true && Number(evolution?.qualityScore) > 0;
   }));
   const hasFallbackEvidence = (target) => ensembleModels.some((model) => {
     const evolution = model.calculation?.evolution?.[target];
@@ -1869,55 +1896,69 @@ function aggregateModel(models, history) {
   });
   const weightFor = (model, target) => {
     const evolution = model.calculation?.evolution?.[target];
-    const score = evolution?.score;
-    const baselineRate = evolution?.baselineRate;
-    const confidence = evolution?.confidence;
-    const roi = evolution?.roi;
-    const baselineRoi = evolution?.baselineRoi;
-    // 最新十期只作績效檢視；若沒有模型通過長窗口超額閘門，
-    // 仍以完成隔離後 walk-forward 的統計模型建立有限樣本共識。
+    const qualityScore = Number(evolution?.qualityScore || 0);
+    const samples = Number(evolution?.trials || evolution?.validationSamples || 0);
+    // 最新十期只作獨立檢視；長窗口品質分數才是主要權重來源。
     if (!hasValidatedWeight) {
-      return hasFallbackEvidence(target) && Number(evolution?.trials || evolution?.validationSamples || 0) >= minimumValidationSamples ? 1 : 0;
+      return hasFallbackEvidence(target) && samples >= minimumValidationSamples ? 1 : 0;
     }
+    if (evolution?.eligible !== true || qualityScore <= 0 || samples < minimumValidationSamples) return 0;
     const recentGate = recentTargetGate(model.name, target, history);
-    // walk-forward 演化已是主要證據；只有歷史模型列完整到足以驗證時，才讓近期閘門否決。
-    // 快取或部分同步可能只有開獎資料，未知的近期閘門不能被誤判成「未通過」而把共識權重全歸零。
-    const hasRecentGateEvidence = Number(recentGate.samples || 0) >= minimumValidationSamples;
-    if (evolution?.eligible !== true || (hasRecentGateEvidence && !recentGate.eligible) || score == null || baselineRate == null || confidence == null || roi == null || baselineRoi == null || roi <= baselineRoi || confidence <= baselineRate) return 0;
-    // 聚合權重以 ROI 超額為主，再用命中率信賴下限與樣本量收縮，避免短樣本高派彩偶然主導共識。
-    const roiUplift = Math.max(0, Math.min(1, roi - baselineRoi));
-    const confidenceUplift = Math.max(0, Math.min(1, confidence - baselineRate));
-    const samples = evolution?.trials || evolution?.validationSamples || 0;
-    const sampleFactor = clamp(samples / profileValidationWindow, 0.25, 1);
-    return roiUplift * confidenceUplift * sampleFactor;
+    const recentFactor = Number(recentGate.samples || 0) >= minimumValidationSamples
+      ? (recentGate.eligible ? 1 : 0.25)
+      : 1;
+    const sampleFactor = clamp(samples / profileValidationWindow, 0.35, 1);
+    return qualityScore * sampleFactor * recentFactor;
   };
   const weightedCategory = (target) => {
     const totals = new Map();
     const field = target === 'size' ? 'size' : 'oddEven';
-    ensembleModels.forEach((model) => {
+    const addVotes = (fallback = false) => ensembleModels.forEach((model) => {
       // 「和」只代表開獎後未達投注門檻，禁止進入預測投票。
       const value = validPredictionCategory(model.official?.[field], field);
-      const weight = weightFor(model, target);
+      const weight = fallback ? 1 : weightFor(model, target);
       if (value && weight > 0) totals.set(value, (totals.get(value) || 0) + weight);
     });
+    addVotes();
+    // 某一玩法沒有模型通過品質閘門時，仍從「正式統計模型」做等權投票，
+    // 不把空值或本地備援冒充成預測，也不讓整個正式結果變成空白。
+    if (!totals.size) addVotes(true);
     return [...totals.entries()].sort((a, b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])))[0]?.[0] || '';
   };
   const weightedNumbers = (target) => {
     const size = Number(String(target).replace('星', ''));
     const totals = new Map();
-    ensembleModels.forEach((model) => {
-      const weight = weightFor(model, target);
+    const addNumbers = (fallback = false) => ensembleModels.forEach((model) => {
+      const weight = fallback ? 1 : weightFor(model, target);
       if (weight <= 0) return;
-      (model.official.basic[target] || []).forEach((number) => totals.set(number, (totals.get(number) || 0) + weight));
+      (model.official.basic?.[target] || []).forEach((rawNumber) => {
+        const number = normalizeNumberValue(rawNumber);
+        if (Number(number) >= 1 && Number(number) <= 80) totals.set(number, (totals.get(number) || 0) + weight);
+      });
     });
-    return [...totals.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, size).map(([number]) => number);
+    addNumbers();
+    if (!totals.size) addNumbers(true);
+    const selected = [...totals.entries()]
+      .sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0]))
+      .slice(0, size)
+      .map(([number]) => number);
+    // 防止某些正式模型輸出不完整，最後仍補足合法且不重複的號碼。
+    if (selected.length < size) {
+      for (let number = 1; number <= 80 && selected.length < size; number += 1) {
+        const value = String(number).padStart(2, '0');
+        if (!selected.includes(value)) selected.push(value);
+      }
+    }
+    return selected.sort((a, b) => Number(a) - Number(b));
   };
   const superVotes = new Map();
-  ensembleModels.forEach((model) => {
-    const number = model.official.superNumber;
-    const weight = weightFor(model, 'superNumber');
-    if (number && weight > 0) superVotes.set(number, (superVotes.get(number) || 0) + weight);
+  const addSuperVotes = (fallback = false) => ensembleModels.forEach((model) => {
+    const number = normalizeNumberValue(model.official?.superNumber);
+    const weight = fallback ? 1 : weightFor(model, 'superNumber');
+    if (Number(number) >= 1 && Number(number) <= 80 && weight > 0) superVotes.set(number, (superVotes.get(number) || 0) + weight);
   });
+  addSuperVotes();
+  if (!superVotes.size) addSuperVotes(true);
   const superNumber = [...superVotes.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0]))[0]?.[0] || '';
   const basic = Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
     const target = `${index + 1}星`;
@@ -1936,8 +1977,8 @@ function aggregateModel(models, history) {
   const weightedModelCount = ensembleModels.filter((model) => predictionTargets.some((target) => weightFor(model, target) > 0)).length;
   return {
     name: '多模型聚合',
-    status: hasValidatedWeight ? '依統計／回歸模型 walk-forward 表現加權的共識模型' : '隔離近期十期；統計基線有限樣本共識，尚未證明超越基準',
-    rule: hasValidatedWeight ? '多模型聚合；只讓可檢驗統計／回歸模型依隔離後 walk-forward 表現加權，不保證提升下一期命中。' : '玄學模型保留作研究比較；正式共識只使用可檢驗統計／回歸基線，並隔離最近十期避免調參與近期績效互相污染。',
+    status: hasValidatedWeight ? '依樣本外品質分數與近期閘門加權的統計共識' : '完成樣本外評估的統計模型等權共識；尚未證明超越基準',
+    rule: hasValidatedWeight ? '先通過資料與樣本外閘門，再以信賴下限超額、命中提升與樣本收縮加權；ROI 只作展示，不直接決定權重。' : '玄學模型保留作研究比較；正式共識只使用可檢驗統計／回歸基線，資料不足時不製造虛假權重。',
     sources: [],
     calculation: {
       algorithmVersion: algorithmVersion(),
@@ -1945,7 +1986,7 @@ function aggregateModel(models, history) {
       castingSource: 'weighted-model-consensus',
       castingAt: models[0]?.calculation?.castingAt || '',
       historySamples: history.length,
-      aggregation: hasValidatedWeight ? '只有統計／回歸模型通過隔離後 walk-forward 超額閘門才有權重；其餘模型權重為 0' : '沒有統計／回歸模型通過嚴格超額閘門；已完成長窗口無洩漏驗證的統計基線採等權研究共識，不代表超越基準',
+      aggregation: hasValidatedWeight ? '品質分數 × 樣本收縮 × 近期閘門；不以單一期高 ROI 主導' : '已完成長窗口無洩漏驗證的統計基線採等權研究共識，不代表超越基準',
       weightedModelCount,
       ensembleUniverse: ensembleModels.map((model) => model.name),
       commonCasting: '多模型聚合不另起卦；它整合各子模型在同一固定輸入下的結果。',
@@ -1984,7 +2025,8 @@ export function buildModels(snapshot, history = [], options = {}) {
     { name: '多窗口穩定性基線', kind: 'multiscale', status: '近 12／60／300 期多時間窗；對短期訊號施加穩定性懲罰', seedOffset: 179 },
     { name: '排除濾網基線', kind: 'exclusion', status: 'walk-forward 排除驗證；只啟用樣本外顯著低於 25% 基準的濾網', seedOffset: 191 },
   ].filter((method) => !options.onlyMethod || method.name === options.onlyMethod);
-  const baseModels = methods.map((method) => {
+  const baseModels = methods.flatMap((method) => {
+    try {
     const profilesForMethod = profiles[method.name] || {};
     const weights = Object.fromEntries(predictionTargets.map((target) => [target, targetProfile(profiles, method.name, target).empiricalWeight ?? 0.32]));
     // 起卦只做一次。玩法／星級是下游適配器，不再重複製造看似不同的起卦結果。
@@ -2020,9 +2062,10 @@ export function buildModels(snapshot, history = [], options = {}) {
       status: method.status,
       rule: `${method.status}；歷史資料只允許用於目標期以前的排序與回測，不宣稱因果預測`,
       sources: modelSources[method.name] || [],
-      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, evidenceTier: ['bayesian', 'statistics', 'hypergeometric', 'multiscale', 'exclusion'].includes(method.kind) ? '可檢驗統計基線' : '文化／文本特徵適配，非已證實預測法', predictionEligible: true, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, exclusionFilters: exclusionDetails, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : method.kind === 'statistics' ? '統計基線：熱度／遺漏／和值／奇偶／區間' : method.kind === 'bayesian' ? 'Beta／Dirichlet 平滑：避免零頻率與過度追逐短期波動' : method.kind === 'hypergeometric' ? '超幾何集合：每期 80 選 20、不放回，不把號碼誤當獨立抽樣' : method.kind === 'multiscale' ? '多窗口頻率：12／60／300 期加權，偏離穩定性時降權' : method.kind === 'exclusion' ? '排除濾網：逐濾網 walk-forward 驗證，低於 25% 基準且樣本足夠才啟用' : commonCasting.digits.join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
+      calculation: { algorithmVersion: algorithmVersion(), method: method.kind, evidenceTier: ['bayesian', 'statistics', 'hypergeometric', 'multiscale', 'exclusion'].includes(method.kind) ? '可檢驗統計基線' : '文化／文本特徵適配，非已證實預測法', predictionEligible: true, castingSource: 'prediction-time-common', castingAt, historySamples: history.length, empiricalWeight: history.length ? weights['10星'] : 0, empiricalWeights: weights, evolution: profilesForMethod.targets || null, exclusionFilters: exclusionDetails, commonCasting: commonCasting.formula, commonCastingValue: method.kind === 'meihua' ? `上卦${commonCasting.upper}／下卦${commonCasting.lower}／動爻${commonCasting.moving}` : method.kind === 'sixyao' ? commonCasting.lines.map((line) => line.value).join('、') : method.kind === 'qimen' ? `九宮${commonCasting.palace}／九星${commonCasting.star}／八門${commonCasting.door}` : method.kind === 'taiyi' ? `行宮${commonCasting.palace}／循環${commonCasting.cycle}` : method.kind === 'luoshu' ? `宮位${commonCasting.palace}／數${commonCasting.center}` : method.kind === 'bazi' ? `年元素${commonCasting.element}／生肖支序${commonCasting.branch + 1}` : method.kind === 'statistics' ? '統計基線：熱度／遺漏／和值／奇偶／區間' : method.kind === 'bayesian' ? 'Beta／Dirichlet 平滑：避免零頻率與過度追逐短期波動' : method.kind === 'hypergeometric' ? '超幾何集合：每期 80 選 20、不放回，不把號碼誤當獨立抽樣' : method.kind === 'multiscale' ? '多窗口頻率：12／60／300 期加權，偏離穩定性時降權' : method.kind === 'exclusion' ? '排除濾網：逐濾網 walk-forward 驗證，低於 25% 基準且樣本足夠才啟用' : (commonCasting.digits || []).join('、'), targetRules: Object.fromEntries(predictionTargets.map((target) => [target, targetRule(target)])), targetCastings: Object.fromEntries(predictionTargets.map((target) => [target, targetCastings[target].formula])), targetCastingValues: Object.fromEntries(predictionTargets.map((target) => {
         const casting = targetCastings[target];
         if (method.kind === 'sixyao') return [target, casting.lines.map((line) => line.value).join('、')];
+        if (method.kind === 'numeral-gua') return [target, casting.digits.join('、')];
         if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];
         if (method.kind === 'qimen') return [target, `九宮${casting.palace}／九星${casting.star}／八門${casting.door}`];
         if (method.kind === 'taiyi') return [target, `行宮${casting.palace}／循環${casting.cycle}`];
@@ -2030,6 +2073,7 @@ export function buildModels(snapshot, history = [], options = {}) {
         if (method.kind === 'bayesian') return [target, 'Beta／Dirichlet 平滑窗口 60 期／目標期前資料'];
         if (method.kind === 'hypergeometric') return [target, '80 選 20 不放回集合包含率／目標期前資料'];
         if (method.kind === 'multiscale') return [target, '12／60／300 期頻率與跨窗口穩定性／目標期前資料'];
+        if (method.kind === 'exclusion') return [target, '逐濾網 walk-forward 驗證／目標期前資料'];
         if (method.kind === 'bazi') return [target, `年元素${casting.element}／生肖支序${casting.branch + 1}`];
         if (method.kind === 'luoshu') return [target, `宮位${casting.palace}／數${casting.center}`];
         return [target, casting.digits.join('、')];
@@ -2055,10 +2099,20 @@ export function buildModels(snapshot, history = [], options = {}) {
         targetResearch,
       },
     };
+    } catch (error) {
+      // 單一研究方法的欄位／起卦錯誤不能讓整批正式模型回傳空陣列。
+      console.error(JSON.stringify({ event: 'model-method-failed', method: method.name, message: error instanceof Error ? error.message : String(error) }));
+      return [];
+    }
   });
-  const regressionModel = !options.onlyMethod || options.onlyMethod === '趨勢加權回歸基線'
-    ? [buildWeightedRegressionModel(snapshot, history, castingAt)]
-    : [];
+  let regressionModel = [];
+  if (!options.onlyMethod || options.onlyMethod === '趨勢加權回歸基線') {
+    try {
+      regressionModel = [buildWeightedRegressionModel(snapshot, history, castingAt)];
+    } catch (error) {
+      console.error(JSON.stringify({ event: 'model-method-failed', method: '趨勢加權回歸基線', message: error instanceof Error ? error.message : String(error) }));
+    }
+  }
   const allModels = [...baseModels, ...regressionModel];
   return [...allModels, aggregateModel(allModels, history)];
 }
@@ -2250,11 +2304,19 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         // 同步只重新計算最新一期的「當期 → 下一期」模型。
         // 舊歷史模型若已存在就保留；同步歷史資料不應逐期重新啟動 worker，否則 31 日查詢會阻塞首屏。
         const previous = historyByPeriod.get(String(item.period));
-        const models = isNextPrediction
-          ? options.deferLatestModel
-            ? []
-            : await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt })
-          : previous?.models || item.models || [];
+        let models = previous?.models || item.models || [];
+        let modelError = '';
+        if (isNextPrediction && !options.deferLatestModel) {
+          try {
+            models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt });
+          } catch (error) {
+            modelError = error instanceof Error ? error.message : String(error);
+            models = [];
+            console.error(JSON.stringify({ event: 'formal-model-build-failed', message: modelError }));
+          }
+        } else if (isNextPrediction && options.deferLatestModel) {
+          models = [];
+        }
         history.push({
           ...item,
           drawAt,
@@ -2262,13 +2324,15 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           forecastCastingAt: isNextPrediction ? predictionCastingAt : item.forecastCastingAt,
           predictionTargetPeriod: isNextPrediction ? nextPeriod : item.period,
           models: index <= maxModelHistory ? models : [],
+          modelStatus: isNextPrediction ? (models.length ? 'formal' : options.deferLatestModel ? 'queued' : 'error') : (models.length ? 'formal' : 'unavailable'),
+          modelError: isNextPrediction ? modelError : '',
           fetchedAt: syncedAt,
           sourceHealth: health,
         });
       }
       // 首屏快速路徑只確認最新開獎資料；模型補建與 GitHub 備份交給背景同步，
       // 不得因慢來源、worker 或備份服務讓 /api/latest?days=1 長時間沒有回應。
-      if (!options.deferLatestModel) await hydrateEvaluationModels(history);
+      if (!options.deferLatestModel && !options.deferEvaluationModels) await hydrateEvaluationModels(history);
       await persistSnapshots(history);
       const backup = options.deferLatestModel
         ? { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath, deferred: true }
@@ -2276,7 +2340,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const responseHistory = daysOverride && daysOverride > 1
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), profitabilityEvaluation: profitabilityEvaluation(history), zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history), technicalAnalysis: technicalAnalysis(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, modelStatus: history[0].modelStatus, modelError: history[0].modelError, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), forecastEvaluation: forecastEvaluation(history), calibratedProbabilityEvaluation: calibratedProbabilityEvaluation(history), profitabilityEvaluation: profitabilityEvaluation(history), zoneProfitabilityEvaluation: zoneProfitabilityEvaluation(history), technicalAnalysis: technicalAnalysis(history), theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       const errorMessage = error instanceof Error ? error.message : '來源失敗';
@@ -2303,9 +2367,11 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   };
   // 快取只提供開獎資料；模型仍須重新執行 walk-forward 基線評估，不能用舊模型權重或跳過 baseline gate。
   let models = current.models || [];
+  let modelError = '';
   try {
     models = await buildModelsInWorker(modelSnapshot, modelHistory, { evolve: true, castingAt: predictionCastingAt });
   } catch (error) {
+    modelError = error instanceof Error ? error.message : String(error);
     console.error(JSON.stringify({ event: 'cached-prediction-recompute-failed', message: error instanceof Error ? error.message : String(error) }));
   }
   const history = [{
@@ -2330,6 +2396,8 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     technicalAnalysis: technicalAnalysis([{ ...current, models }, ...visible.slice(1)]),
     theoreticalRiskBaseline: theoreticalRiskBaseline(),
     researchEvidence: researchEvidenceRegistry,
+    modelStatus: models.length ? 'formal' : 'error',
+    modelError,
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
   };
 }
@@ -2462,7 +2530,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, { ...cached, history: selectRecentHistory(persisted, retentionDays), historyDays: retentionDays });
       }
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 1 : daysOverride;
-      const fresh = await latest(refreshDays, persisted, castingAt);
+      const fresh = await latest(refreshDays, persisted, castingAt, { deferEvaluationModels: Boolean(daysOverride && daysOverride > 1) });
       return send(res, 200, responseCacheKey ? writeLatestResponseCache(responseCacheKey, fresh) : fresh, req);
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }
   }

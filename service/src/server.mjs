@@ -17,7 +17,7 @@ const profileValidationWindow = 30;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v55-conservative-weight-cache';
+const reproducibilityVersion = 'bingo-research-v56-fresh-latest-draw';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1655,11 +1655,12 @@ const server = http.createServer(async (req, res) => {
         ? reproducibleCastingAt(persisted[0].forecastCastingAt, persisted[0].predictionTargetPeriod || '')
         : '';
       const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
-      // 非開獎時段不應被官方 API 的空回應或逾時清空畫面；先回傳最近一筆已確認開獎資料，更新在背景完成。
+      // days=1 是最新開獎讀取，必須即時確認官方期號；歷史查詢才可使用保存快取。
       if (persisted.length && daysOverride === 1) {
-        const cached = await persistedResponse(persisted, castingAt);
-        refreshInBackground(persisted);
-        return send(res, 200, cached, req);
+        // 最新開獎不可先回傳保存快取；否則新一期出現後畫面必然延遲一期。
+        // 只有歷史查詢允許背景更新，days=1 必須先向官方來源確認最新期號。
+        const fresh = await latest(1, persisted, castingAt);
+        return send(res, 200, fresh, req);
       }
       // 月份查詢優先使用已保存的近期資料；官方補同步在背景執行，避免 6000 筆保存集阻塞首屏。
       if (persisted.length && daysOverride && daysOverride > 1) {

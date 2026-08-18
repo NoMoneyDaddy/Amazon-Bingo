@@ -103,6 +103,9 @@ type DrawSnapshot = {
     frequencyPValue: number | null;
     sumSerialCorrelation: number | null;
     runs?: { observed: number | null; expected: number | null; z: number | null; pValue: number | null };
+    multipleTesting?: { method: string; tests: number; rawPValues: number[]; adjustedPValues: number[] };
+    blockFrequency?: { blockSize: number; blocks: number; mean: number | null; meanAbsoluteDeviation: number | null; maxDeviation: number | null };
+    approximateEntropy?: { blockLength: number; value: number; normalized: number } | null;
     verdict: string;
     caveat: string;
   };
@@ -829,6 +832,8 @@ export function BingoResearchView() {
                       <div className="rounded-lg bg-background/40 p-2"><span className="block text-muted-foreground">游程 p 值</span><span className="font-semibold tabular-nums text-violet-100">{latest.audit.runs?.pValue == null ? "—" : latest.audit.runs.pValue.toFixed(3)}</span></div>
                     </div>
                     <p className="mt-2 text-xs text-violet-100">判讀：{latest.audit.verdict}</p>
+                    <p className="mt-1 text-[11px] text-violet-100">多重檢驗：{latest.audit.multipleTesting?.method || "—"} · {latest.audit.multipleTesting?.tests ?? 0} 項 p 值已校正</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">區塊頻率偏差 {latest.audit.blockFrequency?.meanAbsoluteDeviation == null ? "—" : latest.audit.blockFrequency.meanAbsoluteDeviation.toFixed(3)} · 近似熵 {latest.audit.approximateEntropy?.normalized == null ? "—" : latest.audit.approximateEntropy.normalized.toFixed(3)}</p>
                     <p className="mt-1 text-[11px] text-muted-foreground">{latest.audit.caveat}</p>
                   </div>
                 )}

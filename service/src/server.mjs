@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v41-leakage-guard';
+const reproducibilityVersion = 'bingo-research-v42-randomness-battery';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -593,6 +593,8 @@ const researchEvidenceRegistry = [
   { name: '彩票隨機性審計', status: '頻率、序列相關與游程檢查；低 p 值只代表需複核', source: 'Lottery k/N statistical audit', url: 'https://arxiv.org/abs/0806.4595' },
   { name: '預測校準與適當評分', status: '以 Brier／對數損失檢查信心是否與實際頻率一致', source: 'Gneiting & Raftery, 2007', url: 'https://doi.org/10.1198/016214506000001437' },
   { name: '熱手與賭徒謬誤行為', status: '玩家偏誤負對照；不把玩家選號偏好當成開獎訊號', source: 'Management Science, 2018', url: 'https://pubsonline.informs.org/doi/10.1287/mnsc.2018.3233' },
+  { name: 'NIST 隨機性測試套件', status: '採用頻率、游程、區塊頻率與近似熵的研究前置檢查；不作預測證明', source: 'NIST SP 800-22 Rev. 1a', url: 'https://csrc.nist.gov/pubs/sp/800/22/r1/upd1/final' },
+  { name: '多重假設校正', status: '對同時檢查的 p 值做 Bonferroni 保守校正，降低偶然顯著', source: 'Multiple comparisons control', url: 'https://doi.org/10.1111/j.2517-6161.1995.tb02031.x' },
 ];
 
 function targetProfile(profiles, methodName, target) {
@@ -664,6 +666,42 @@ function chiSquareUpperTail(statistic, degreesOfFreedom) {
   return Math.max(0, Math.min(1, 1 - normalCdf(z)));
 }
 
+function binaryApproximateEntropy(bits, blockLength = 2) {
+  const n = bits.length;
+  if (n < blockLength + 2) return null;
+  const phi = (length) => {
+    const counts = new Map();
+    for (let index = 0; index < n; index += 1) {
+      let pattern = '';
+      for (let offset = 0; offset < length; offset += 1) pattern += bits[(index + offset) % n];
+      counts.set(pattern, (counts.get(pattern) || 0) + 1);
+    }
+    return [...counts.values()].reduce((sum, count) => {
+      const probability = count / n;
+      return sum + probability * Math.log(probability);
+    }, 0);
+  };
+  const value = phi(blockLength) - phi(blockLength + 1);
+  return { blockLength, value, normalized: Math.max(0, Math.min(1, value / Math.log(2))) };
+}
+
+function blockFrequencySummary(bits, blockSize = 20) {
+  if (bits.length < blockSize) return { blockSize, blocks: 0, mean: null, meanAbsoluteDeviation: null, maxDeviation: null };
+  const proportions = [];
+  for (let start = 0; start + blockSize <= bits.length; start += blockSize) {
+    const block = bits.slice(start, start + blockSize);
+    proportions.push(block.reduce((sum, value) => sum + value, 0) / block.length);
+  }
+  const mean = proportions.reduce((sum, value) => sum + value, 0) / proportions.length;
+  return {
+    blockSize,
+    blocks: proportions.length,
+    mean,
+    meanAbsoluteDeviation: proportions.reduce((sum, value) => sum + Math.abs(value - 0.5), 0) / proportions.length,
+    maxDeviation: Math.max(...proportions.map((value) => Math.abs(value - 0.5))),
+  };
+}
+
 function researchAudit(draws = []) {
   const valid = draws.filter((draw) => Array.isArray(draw.numbers) && draw.numbers.length === 20);
   const counts = Array(81).fill(0);
@@ -691,7 +729,11 @@ function researchAudit(draws = []) {
   const runsZ = expectedRuns != null && runVariance > 0 ? (runs - expectedRuns) / Math.sqrt(runVariance) : null;
   const runsPValue = runsZ == null ? null : Math.max(0, Math.min(1, 2 * (1 - normalCdf(Math.abs(runsZ)))));
   const pValues = [frequencyPValue, runsPValue].filter((value) => value != null);
-  const suspicious = pValues.some((value) => value < 0.01);
+  const adjustedPValues = pValues.map((value) => Math.min(1, value * pValues.length));
+  const parityBits = valid.flatMap((draw) => draw.numbers.map((number) => Number(number) % 2));
+  const blockFrequency = blockFrequencySummary(parityBits);
+  const approximateEntropy = binaryApproximateEntropy(binary);
+  const suspicious = adjustedPValues.some((value) => value < 0.01);
   return {
     sampleDraws: valid.length,
     numberUniverse: 80,
@@ -701,8 +743,11 @@ function researchAudit(draws = []) {
     frequencyPValue,
     sumSerialCorrelation: serialCorrelation,
     runs: { observed: runs || null, expected: expectedRuns, z: runsZ, pValue: runsPValue },
+    multipleTesting: { method: 'Bonferroni', tests: pValues.length, rawPValues: pValues, adjustedPValues },
+    blockFrequency,
+    approximateEntropy,
     verdict: valid.length < 30 ? '樣本不足，暫不判定' : suspicious ? '出現需複核的統計偏離' : '目前未見明顯偏離；不等於證明完全隨機',
-    caveat: '檢驗只能辨識樣本與模型的偏離，不能證明下一期可預測，也不能單憑低 p 值指稱開獎不公。',
+    caveat: '檢驗只能辨識樣本與模型的偏離；p 值已做保守的多重檢驗校正，但仍不能證明下一期可預測，也不能單憑低 p 值指稱開獎不公。',
   };
 }
 

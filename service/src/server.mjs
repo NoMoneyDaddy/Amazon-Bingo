@@ -789,5 +789,6 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(port, '0.0.0.0', () => {
   console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
-  setTimeout(() => void scheduledSync(true), 10_000);
+  const firstWakeAt = nextDrawAt(new Date()).getTime() - Date.now() - 30_000;
+  scheduledTimer = setTimeout(() => void scheduledSync(false), Math.max(60_000, firstWakeAt));
 });

@@ -2685,16 +2685,14 @@ function refreshInBackground(persisted, days = 1) {
   const hydratedProfitability = hydrateStoredPeriodMatches(persisted[0]?.profitabilityEvaluation, history);
   const storedProfitabilityReady = hasCompleteProfitabilityEvaluation(hydratedProfitability)
     && hydratedProfitability.every((play) => play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
-  if (days === 1 && persisted[0]?.models?.length && !storedProfitabilityReady) {
+  if (days === 1 && !storedProfitabilityReady) {
     setImmediate(() => void (async () => {
       try {
-        if (history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
-          await hydrateEvaluationModels(history);
-        }
-        const evaluation = await evaluateInWorker(history);
-        history[0] = { ...history[0], ...evaluation };
-        await persistSnapshots(history);
-        writeLatestResponseCache('latest-1', { ...history[0], history: compactHistoryForResponse(history.slice(0, responseHistoryLimit)), historyDays: retentionDays, modelStatus: 'formal', ...evaluation });
+        // 統一走 persistedResponse：它同時處理最新模型缺失、歷史模型補建與三種回測模式，
+        // 避免「有模型」與「無模型」各自走不同、容易漏掉的修復分支。
+        const recovered = await persistedResponse(persisted);
+        await persistSnapshots([recovered]);
+        writeLatestResponseCache('latest-1', recovered);
       } catch (error) {
         console.error(JSON.stringify({ event: 'background-evaluation-failed', message: error instanceof Error ? error.message : '回測補寫失敗' }));
       } finally {

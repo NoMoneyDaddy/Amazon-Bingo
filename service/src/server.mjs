@@ -12,12 +12,12 @@ const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult'
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
 const minimumValidationSamples = 20;
-const profileValidationWindow = 30;
+const profileValidationWindow = 20;
 // 資料保存至少涵蓋一個月；最新基準之外，模型回測仍維持 60 期。
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v17-60-backtest-30-tuning';
+const reproducibilityVersion = 'bingo-research-v18-60-backtest-selective-tuning';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -539,9 +539,10 @@ function evolveProfiles(history = []) {
   const candidates = [0.24, 0.32, 0.40];
   // 回測仍使用 60 期；參數調校採獨立 30 期窗口，降低計算量與短期噪音。
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - 1));
+  const tunableTargets = ['size', 'oddEven', 'superNumber', '1星', '2星', '3星'];
   const methods = ['梅花易數', '六爻八卦', '河圖洛書', '數字卦（楚簡研究版）', '奇門遁甲（九宮研究版）', '太乙九宮（研究版）', '生肖五行研究版', '民俗統計基線'];
   return Object.fromEntries(methods.map((method) => {
-    const targets = Object.fromEntries(predictionTargets.map((target) => {
+    const targets = Object.fromEntries(tunableTargets.map((target) => {
       if (history.length < minimumValidationSamples + 1) return [target, { empiricalWeight: 0.32, validationSamples: validationWindow, score: null, status: `樣本不足（至少需要 ${minimumValidationSamples} 期），使用預設權重` }];
       const results = candidates.map((empiricalWeight) => {
         let wins = 0; let trials = 0;

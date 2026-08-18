@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v9-taipei-time';
+const reproducibilityVersion = 'bingo-research-v10-taipei-lunar-calendar';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -251,6 +251,7 @@ function parseChineseCalendarParts(value) {
   const hourBranch = Math.floor(((hour24 + 1) % 24) / 2) + 1;
   return {
     year: Number(parts.find((part) => part.type === 'relatedYear')?.value || date.getUTCFullYear()),
+    yearBranch: ((Number(parts.find((part) => part.type === 'relatedYear')?.value || date.getUTCFullYear()) - 4) % 12 + 12) % 12 + 1,
     month: Math.max(1, month),
     day: Number(parts.find((part) => part.type === 'day')?.value || 1),
     hour: hourBranch,
@@ -314,49 +315,49 @@ function sixyaoCasting(snapshot, target, castingAt) {
 
 function luoshuCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
-  const time = parseTaipeiParts(input.castingAt);
-  const timeSum = time.year + time.month + time.day + time.hour;
+  const time = parseChineseCalendarParts(input.castingAt);
+  const timeSum = time.yearBranch + time.month + time.day + time.hour;
   const luoshu = [[4, 9, 2], [3, 5, 7], [8, 1, 6]];
   const palace = (timeSum + input.targetNo) % 9;
   const center = luoshu[Math.floor(palace / 3)][palace % 3];
-  return { input, luoshu, palace: palace + 1, center, formula: `預測時間=${input.castingAt}、玩法序號=${input.targetNo}；以年月日時總和+玩法序號 mod 9 定洛書宮位=${palace + 1}；宮位數=${center}。期號僅作所問事項：${input.question}` };
+  return { input, luoshu, palace: palace + 1, center, formula: `預測時間=${input.castingAt}；以農曆年支序${time.yearBranch}、月${time.month}、日${time.day}、時辰${time.hour}加玩法序號 mod 9 定洛書宮位=${palace + 1}；宮位數=${center}。期號僅作所問事項：${input.question}` };
 }
 
 function numeralGuaCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
-  const time = parseTaipeiParts(input.castingAt);
-  const sourceDigits = [time.year, time.month, time.day, time.hour, input.targetNo];
+  const time = parseChineseCalendarParts(input.castingAt);
+  const sourceDigits = [time.yearBranch, time.month, time.day, time.hour, input.targetNo];
   const allowed = [1, 4, 5, 6, 8, 9];
   const digits = Array.from({ length: 6 }, (_, index) => allowed[(sourceDigits[index % sourceDigits.length] + index) % allowed.length]);
-  return { input, digits, formula: `預測時間=${input.castingAt}、玩法序號=${input.targetNo}；依數字卦文獻使用的數字集合 ${allowed.join('、')}，以時間欄位建立六個可重算數字：${digits.join('、')}。期號僅作所問事項：${input.question}` };
+  return { input, digits, formula: `預測時間=${input.castingAt}；以農曆年支序${time.yearBranch}、月${time.month}、日${time.day}、時辰${time.hour}與玩法序號建立六個可重算數字：${digits.join('、')}。期號僅作所問事項：${input.question}` };
 }
 
 function qimenCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
-  const time = parseTaipeiParts(input.castingAt);
-  const timeSum = time.year + time.month + time.day + time.hour;
+  const time = parseChineseCalendarParts(input.castingAt);
+  const timeSum = time.yearBranch + time.month + time.day + time.hour;
   const palace = (timeSum + input.targetNo) % 9 + 1;
   const star = (timeSum + time.hour + input.targetNo) % 9 + 1;
   const door = (timeSum + time.month + input.targetNo) % 8 + 1;
-  return { input, palace, star, door, formula: `預測時間=${input.castingAt}、玩法序號=${input.targetNo}；以節氣／干支完整排局應定九宮、九星、八門；目前只保留時間結構適配=${palace}/${star}/${door}，未宣稱完整奇門排盤。` };
+  return { input, palace, star, door, formula: `預測時間=${input.castingAt}；以農曆年支序${time.yearBranch}、月${time.month}、日${time.day}、時辰${time.hour}建立九宮／九星／八門研究適配=${palace}/${star}/${door}；完整奇門仍需節氣、干支排局，未宣稱完整奇門排盤。` };
 }
 
 function taiyiCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
-  const time = parseTaipeiParts(input.castingAt);
-  const timeSum = time.year + time.month + time.day + time.hour;
+  const time = parseChineseCalendarParts(input.castingAt);
+  const timeSum = time.yearBranch + time.month + time.day + time.hour;
   const palace = (timeSum + input.targetNo) % 9 + 1;
   const cycle = (timeSum + input.targetNo) % 9;
-  return { input, palace, cycle, formula: `預測時間=${input.castingAt}、玩法序號=${input.targetNo}；依太乙行九宮結構建立時間索引=${palace}／${cycle}。完整太乙仍需積年、局數等排局資料，期號僅作所問事項：${input.question}` };
+  return { input, palace, cycle, formula: `預測時間=${input.castingAt}；以農曆年支序${time.yearBranch}、月${time.month}、日${time.day}、時辰${time.hour}建立太乙行九宮研究索引=${palace}／${cycle}。完整太乙仍需積年、局數等排局資料，期號僅作所問事項：${input.question}` };
 }
 
 function statisticalCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
-  const time = parseTaipeiParts(input.castingAt);
+  const time = parseChineseCalendarParts(input.castingAt);
   return {
     input,
     window: 60,
-    timeKey: `${time.year}-${time.month}-${time.day}-${time.hour}`,
+    timeKey: `農曆${time.yearBranch}-${time.month}-${time.day}-${time.hour}`,
     formula: `固定輸入=${input.castingAt}；僅使用目標期之前的歷史資料，計算熱度、遺漏、和值、奇偶與高低區特徵；窗口上限 60 期。這是統計基線，不是玄學因果。`,
   };
 }

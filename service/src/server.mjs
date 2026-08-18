@@ -17,7 +17,7 @@ const profileValidationWindow = 20;
 const retentionDays = 31;
 const persistedHistoryLimit = 6000;
 const fastResponseHistoryLimit = maxModelHistory + 1;
-const reproducibilityVersion = 'bingo-research-v53-compact-sync-response';
+const reproducibilityVersion = 'bingo-research-v54-official-draw-time';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -614,6 +614,16 @@ function formatTaipeiDateTime(date) {
   const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Taipei', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false }).formatToParts(date);
   const values = Object.fromEntries(parts.filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));
   return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}`;
+}
+
+function officialDrawDateTime(openDate, period, firstPeriod) {
+  const offset = Number(period) - Number(firstPeriod);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(openDate)) || !Number.isInteger(offset) || offset < 0 || offset > 202) return '';
+  const [year, month, day] = String(openDate).split('-').map(Number);
+  // 官方 API 的 dDate 目前為 0001-01-01；期號序列與官方時程可重現地還原當日時間。
+  // 賓果賓果每日 07:05 起，每 5 分鐘一期，最多至 23:55。
+  const utcMidnightTaipei = Date.UTC(year, month - 1, day) - 8 * 60 * 60 * 1000;
+  return formatTaipeiDateTime(new Date(utcMidnightTaipei + (7 * 60 + 5 + offset * 5) * 60 * 1000));
 }
 
 function deriveSnapshot(period, numbers, source, drawAt = '') {
@@ -1330,8 +1340,15 @@ async function fetchOfficial(daysOverride = null) {
   }));
   const records = dailyResults.flat().sort((a, b) => Number(b.record.drawTerm) - Number(a.record.drawTerm));
   if (!records.length) throw new Error('官方 API 未回傳指定期間的完整開獎資料');
+  const firstPeriodByDate = new Map();
+  for (const item of records) {
+    const period = Number(item.record.drawTerm);
+    const current = firstPeriodByDate.get(item.openDate);
+    if (Number.isFinite(period) && (!Number.isFinite(current) || period < current)) firstPeriodByDate.set(item.openDate, period);
+  }
   const parseItem = ({ record, openDate }) => {
-    const snapshot = deriveSnapshot(record.drawTerm, record.openShowOrder, apiBaseUrl, openDate);
+    const drawAt = officialDrawDateTime(openDate, record.drawTerm, firstPeriodByDate.get(openDate)) || openDate;
+    const snapshot = deriveSnapshot(record.drawTerm, record.openShowOrder, apiBaseUrl, drawAt);
     snapshot.sourceLabel = '台灣彩券官方 API';
     snapshot.superNumber = String(record.bullEyeTop || '').padStart(2, '0');
     snapshot.size = record.highLowTop && record.highLowTop !== '－' ? normalizeDrawCategory(record.highLowTop, 'size') : snapshot.size;

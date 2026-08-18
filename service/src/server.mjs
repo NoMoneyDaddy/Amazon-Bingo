@@ -2410,6 +2410,17 @@ function hydrateStoredPeriodMatches(profitability, history) {
   });
 }
 
+function hasCompleteProfitabilityEvaluation(profitability) {
+  return Array.isArray(profitability)
+    && profitability.length > 0
+    && profitability.every((play) => ['best', 'fixed', 'follow'].every((mode) => {
+      const result = play?.[mode];
+      return Number(result?.samples || 0) > 0
+        && Array.isArray(result?.periodResults)
+        && result.periodResults.length > 0;
+    }));
+}
+
 function requestedCastingTime(value) {
   const parsed = new Date(String(value || ''));
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : '';
@@ -2502,7 +2513,10 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       }
       // 首屏快速路徑只確認最新開獎資料；模型補建與 GitHub 備份交給背景同步，
       // 不得因慢來源、worker 或備份服務讓 /api/latest?days=1 長時間沒有回應。
-      if (!options.deferLatestModel && !options.deferEvaluationModels) await hydrateEvaluationModels(history);
+      const shouldComputeEvaluation = !options.deferEvaluationModels || latestDrawChanged;
+      if (shouldComputeEvaluation && history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
+        await hydrateEvaluationModels(history);
+      }
       const evaluation = options.deferEvaluationModels && !latestDrawChanged
         ? {
           forecastEvaluation: history[0]?.forecastEvaluation || [],
@@ -2564,20 +2578,22 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     forecastCastingAt: predictionCastingAt,
     predictionTargetPeriod: targetPeriod,
   }, ...visible.slice(1)];
-  if (!current.forecastEvaluation?.length && history.slice(1).some((item) => !Array.isArray(item.models) || !item.models.length)) await hydrateEvaluationModels(history);
-  const evaluationHistory = [{ ...current, models }, ...visible.slice(1)];
+  if ((!current.forecastEvaluation?.length || !hasCompleteProfitabilityEvaluation(current.profitabilityEvaluation))
+    && history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
+    await hydrateEvaluationModels(history);
+  }
+  const evaluationHistory = history;
   const hasStoredEvaluation = Boolean(current.forecastEvaluation?.length
     && current.calibratedProbabilityEvaluation?.length
-    && current.profitabilityEvaluation?.length
+    && hasCompleteProfitabilityEvaluation(current.profitabilityEvaluation)
     && current.zoneProfitabilityEvaluation?.length
     && Object.keys(current.technicalAnalysis || {}).length);
   const computedEvaluation = hasStoredEvaluation ? null : await evaluateInWorker(evaluationHistory);
   const storedForecast = current.forecastEvaluation?.length ? current.forecastEvaluation : computedEvaluation.forecastEvaluation;
   const storedCalibrated = current.calibratedProbabilityEvaluation?.length ? current.calibratedProbabilityEvaluation : computedEvaluation.calibratedProbabilityEvaluation;
   const hydratedProfitability = hydrateStoredPeriodMatches(current.profitabilityEvaluation, visible);
-  const storedProfitabilityReady = Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
-    && hydratedProfitability.every((play) => Array.isArray(play.best?.periodResults)
-      && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
+  const storedProfitabilityReady = hasCompleteProfitabilityEvaluation(hydratedProfitability)
+    && hydratedProfitability.every((play) => play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
   const storedProfitability = storedProfitabilityReady ? hydratedProfitability : computedEvaluation.profitabilityEvaluation;
   const storedZone = current.zoneProfitabilityEvaluation?.length ? current.zoneProfitabilityEvaluation : computedEvaluation.zoneProfitabilityEvaluation;
   const storedTechnical = Object.keys(current.technicalAnalysis || {}).length ? current.technicalAnalysis : computedEvaluation.technicalAnalysis;
@@ -2608,14 +2624,15 @@ function refreshInBackground(persisted, days = 1) {
   // 已有正式模型但缺少回測時，只補寫評估快照；不要為了回測再次重跑模型。
   const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);
   const hydratedProfitability = hydrateStoredPeriodMatches(persisted[0]?.profitabilityEvaluation, history);
-  const storedProfitabilityReady = Array.isArray(hydratedProfitability) && hydratedProfitability.length > 0
-    && hydratedProfitability.every((play) => Array.isArray(play.best?.periodResults)
-      && play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
+  const storedProfitabilityReady = hasCompleteProfitabilityEvaluation(hydratedProfitability)
+    && hydratedProfitability.every((play) => play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
   if (days === 1 && persisted[0]?.models?.length && !storedProfitabilityReady) {
     setImmediate(() => void (async () => {
       try {
+        if (history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
+          await hydrateEvaluationModels(history);
+        }
         const evaluation = await evaluateInWorker(history);
-        if (hydratedProfitability.length) evaluation.profitabilityEvaluation = hydratedProfitability;
         history[0] = { ...history[0], ...evaluation };
         await persistSnapshots(history);
         writeLatestResponseCache('latest-1', { ...history[0], history: compactHistoryForResponse(history.slice(0, responseHistoryLimit)), historyDays: retentionDays, modelStatus: 'formal', ...evaluation });

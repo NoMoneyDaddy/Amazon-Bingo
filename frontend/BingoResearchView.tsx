@@ -157,6 +157,45 @@ function numberSum(numbers: string[]) {
   return numbers.reduce((sum, number) => sum + Number(number), 0);
 }
 
+function recentNumberStats(draws: DrawSnapshot[]) {
+  const sample = draws.slice(0, 30);
+  const normalizedDraws = sample.map((draw) => draw.numbers.map(normalizeNumber));
+  const stats = Array.from({ length: 80 }, (_, index) => ({ number: String(index + 1).padStart(2, "0"), count: 0, currentOpen: 0 }));
+  normalizedDraws.forEach((numbers) => numbers.forEach((number) => {
+    const item = stats[Number(number) - 1];
+    if (item) item.count += 1;
+  }));
+  stats.forEach((item) => {
+    for (const numbers of normalizedDraws) {
+      if (!numbers.includes(item.number)) break;
+      item.currentOpen += 1;
+    }
+  });
+  const hot = new Set([...stats].sort((a, b) => b.count - a.count || Number(a.number) - Number(b.number)).slice(0, 10).map((item) => item.number));
+  const cold = new Set([...stats].sort((a, b) => a.count - b.count || Number(a.number) - Number(b.number)).filter((item) => !hot.has(item.number)).slice(0, 10).map((item) => item.number));
+  return { stats, hot, cold };
+}
+
+function DrawNumberBalls({ draw, recentStats, compact = false }: { draw: DrawSnapshot; recentStats: ReturnType<typeof recentNumberStats>; compact?: boolean }) {
+  return (
+    <div className={compact ? "flex min-w-0 max-w-full gap-1 overflow-x-auto pb-0.5" : "grid grid-cols-10 gap-1"} role="list" aria-label={`第 ${draw.period} 期的 20 個開獎號碼`}>
+      {draw.numbers.map((number, index) => {
+        const normalized = normalizeNumber(number);
+        const isSuperNumber = normalizeNumber(draw.superNumber) === normalized;
+        const numberStat = recentStats.stats[Number(normalized) - 1];
+        const isHot = recentStats.hot.has(normalized);
+        const isCold = recentStats.cold.has(normalized);
+        return (
+          <span key={`${draw.period}-${number}-${index}`} role="listitem" aria-label={`開獎號碼 ${number}${isSuperNumber ? "，超級獎號" : isHot ? "，熱門號碼" : isCold ? "，冷門號碼" : ""}`} className={`relative flex ${compact ? "h-6 w-6 shrink-0 text-[9px]" : "h-7 w-7 text-[10px]"} items-center justify-center rounded-full border font-bold tabular-nums text-white ${isSuperNumber ? "border-red-100 bg-gradient-to-br from-red-400 via-red-600 to-red-800 shadow-[0_1px_6px_rgba(239,68,68,0.5)]" : isHot ? "border-pink-100 bg-gradient-to-br from-pink-300 via-pink-600 to-fuchsia-800" : isCold ? "border-sky-100 bg-gradient-to-br from-sky-300 via-blue-600 to-indigo-800" : "border-orange-100 bg-gradient-to-br from-orange-300 via-amber-400 to-orange-600"}`}>
+            {normalized}
+            {(numberStat?.currentOpen || 0) > 1 && <span className="absolute -right-1 -top-1 flex h-3 min-w-3 items-center justify-center rounded-full bg-slate-950 px-0.5 text-[7px] leading-none text-white">{numberStat?.currentOpen}</span>}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function parseModels(draw: DrawSnapshot): Model[] {
   return draw.models || [];
 }
@@ -409,6 +448,7 @@ export function BingoResearchView() {
   const [page, setPage] = useState<Page>("overview");
   const [expandedHistory, setExpandedHistory] = useState<string | null>(null);
   const latest = sorted[0];
+  const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
   const latestModels = useMemo(
     () => (latest ? parseModels(latest) : []),
     [latest],
@@ -529,8 +569,8 @@ export function BingoResearchView() {
                         <p className="text-[9px] font-semibold uppercase tracking-[0.14em] text-orange-200/80">最新開獎</p>
                         <h2 id="latest-draw-heading" className="text-xs font-bold tabular-nums text-orange-100">第 {latest.period} 期</h2>
                       </div>
-                      <div className="min-w-0 flex-1 overflow-x-auto whitespace-nowrap rounded-md bg-slate-950/45 px-1.5 py-1 font-mono text-[11px] tracking-tight text-orange-50" aria-label={`第 ${latest.period} 期的 20 個開獎號碼`}>
-                        {latest.numbers.map((number) => normalizeNumber(number)).join(" ")}
+                      <div className="min-w-0 flex-1 overflow-hidden rounded-md bg-slate-950/45 px-1.5 py-1">
+                        <DrawNumberBalls draw={latest} recentStats={recentStats} />
                       </div>
                       <div className="shrink-0 text-right text-[9px] leading-4 text-muted-foreground">
                         <div>大{latest.size || "—"} · {latest.oddEven || "—"}</div>
@@ -698,7 +738,7 @@ export function BingoResearchView() {
                           <div className="mt-0.5 truncate text-[9px] text-muted-foreground">{draw.drawAt || "時間未知"}</div>
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="overflow-x-auto whitespace-nowrap font-mono text-[10px] tracking-tight text-orange-50 sm:text-[11px]">{draw.numbers.map((number) => normalizeNumber(number)).join(" ")}</div>
+                          <DrawNumberBalls draw={draw} recentStats={recentStats} compact />
                           <div className="mt-0.5 truncate text-[9px] text-muted-foreground">總和 {numberSum(draw.numbers)} · 大小 {draw.size || "—"} · 單雙 {draw.oddEven || "—"} · 超 {draw.superNumber || "—"}</div>
                         </div>
                         <button

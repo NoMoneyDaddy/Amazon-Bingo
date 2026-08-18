@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v10-taipei-lunar-calendar';
+const reproducibilityVersion = 'bingo-research-v11-refresh-next-taipei-draw';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -843,10 +843,8 @@ async function latest(daysOverride = null, existingHistory = []) {
       const nextPeriod = nextPredictionPeriod(rawHistory[0]?.period || snapshot.period);
       // 歷史模型的起卦輸入以實際開獎時間為準；舊資料若曾保存錯誤 castingAt，不再優先採用。
       const previousCastingAt = reproducibleCastingAt(rawHistory[0]?.drawAt || rawHistory[0]?.castingAt, rawHistory[0]?.period);
-      const storedForecastCastingAt = rawHistory[0]?.forecastCastingAt;
-      const predictionCastingAt = storedForecastCastingAt
-        ? reproducibleCastingAt(storedForecastCastingAt, nextPeriod)
-        : nextDrawAt(new Date()).toISOString();
+      // 下一期固定輸入永遠以目前計算出的下一個台北開獎時刻為準，不沿用已過期的保存值。
+      const predictionCastingAt = nextDrawAt(new Date()).toISOString();
       const history = [];
       for (let index = 0; index < rawHistory.length; index += 1) {
         await new Promise((resolve) => setImmediate(resolve));
@@ -965,15 +963,19 @@ const server = http.createServer(async (req, res) => {
       const requestedDays = Number(requestUrl.searchParams.get('days'));
       const daysOverride = Number.isFinite(requestedDays) && requestedDays > 0 ? requestedDays : null;
       const persisted = await readPersistedCached(daysOverride && daysOverride > 1 ? 10000 : maxModelHistory);
+      const cachedForecast = persisted[0]?.forecastCastingAt
+        ? reproducibleCastingAt(persisted[0].forecastCastingAt, persisted[0].predictionTargetPeriod || '')
+        : '';
+      const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
       // 非開獎時段不應被官方 API 的空回應或逾時清空畫面；先回傳最近一筆已確認開獎資料，更新在背景完成。
-      if (persisted.length && daysOverride === 1) {
+      if (persisted.length && daysOverride === 1 && forecastFresh) {
         const cached = persistedResponse(persisted);
         refreshInBackground(persisted);
         return send(res, 200, cached, req);
       }
       const hasNextPrediction = persisted.length && persisted[0].predictionTargetPeriod && persisted[0].predictionTargetPeriod !== persisted[0].period;
       const hasUsableHistory = persisted.length >= maxModelHistory;
-      if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
+      if (persisted.length && !daysOverride && hasNextPrediction && hasUsableHistory && forecastFresh) return send(res, 200, { ...persisted[0], history: persisted, historyDays: 30, sourceHealth: persisted[0].sourceHealth || [], backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath } });
       const refreshDays = daysOverride === 1 && !hasUsableHistory ? 30 : daysOverride;
       return send(res, 200, await latest(refreshDays, persisted), req);
     } catch (error) { return send(res, 502, { error: error instanceof Error ? error.message : '官方資料同步失敗' }, req); }

@@ -993,15 +993,6 @@ export function BingoResearchView() {
                     <span className="ml-1">最新開獎為第 {latest.period} 期，但目前預測目標為第 {latest.predictionTargetPeriod || "—"} 期；請重新同步後再參考。</span>
                   </div>
                 )}
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border border-border bg-background/70 px-3 py-2 text-[10px] leading-5 text-muted-foreground" role="status">
-                  <span className="whitespace-nowrap">保留至少 {latest?.historyDays || 31} 日</span>
-                  <span className="whitespace-nowrap">歷史 {Math.max(0, sorted.length - 1)} 期</span>
-                  <span className="whitespace-nowrap">回測樣本 {bestPlays[0]?.best.samples || 0} 期</span>
-                  <span className="whitespace-nowrap">最新資料 {latest?.numbers.length || 0}/20 個號碼</span>
-                  <span className="whitespace-nowrap">模型 {latestModels.length} 個</span>
-                  <span className="whitespace-nowrap">{latest?.sourceHealth?.some((item) => item.ok) ? "官方來源正常" : "來源狀態未知"}</span>
-                  <span className="whitespace-nowrap">{latest?.sourceHealth?.find((item) => item.ok)?.latencyMs == null ? "來源延遲—" : `來源延遲 ${latest.sourceHealth.find((item) => item.ok)?.latencyMs}ms`}</span>
-                </div>
                 {latest?.sourceRanking?.length ? (
                   <details className="border border-cyan-300/20 bg-cyan-300/5 px-3 py-2 text-[10px] leading-5 text-muted-foreground">
                     <summary className="cursor-pointer select-none font-semibold text-cyan-100">資料源排序：速度／穩定度／新鮮度</summary>

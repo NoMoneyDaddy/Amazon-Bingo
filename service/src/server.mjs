@@ -11,7 +11,7 @@ const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
 const defaultHistoryDays = 30;
 const maxModelHistory = 60;
-const reproducibilityVersion = 'bingo-research-v11-refresh-next-taipei-draw';
+const reproducibilityVersion = 'bingo-research-v12-cache-first-fallback';
 const singleBetCost = 25;
 const basicPayouts = {
   "1星": { 1: 50 },
@@ -968,7 +968,7 @@ const server = http.createServer(async (req, res) => {
         : '';
       const forecastFresh = Boolean(cachedForecast) && Date.parse(cachedForecast) > Date.now();
       // 非開獎時段不應被官方 API 的空回應或逾時清空畫面；先回傳最近一筆已確認開獎資料，更新在背景完成。
-      if (persisted.length && daysOverride === 1 && forecastFresh) {
+      if (persisted.length && daysOverride === 1) {
         const cached = persistedResponse(persisted);
         refreshInBackground(persisted);
         return send(res, 200, cached, req);

@@ -1465,8 +1465,24 @@ function profitabilityEvaluation(history = []) {
       || String(a.model).localeCompare(String(b.model));
     const empty = (mode) => ({ mode, model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, validationProfit: null, validationTrials: 0, prediction: '—', periodResults: [] });
     const candidateModels = (selectionModels.length ? selectionModels : currentModels).filter((model) => model.name !== '多模型聚合');
-    const fixed = candidateModels.map((model) => evaluate(model, 'fixed')).sort(rank)[0] || empty('fixed');
-    const follow = candidateModels.map((model) => evaluate(model, 'follow')).sort(rank)[0] || empty('follow');
+    // 14 個模型 × 2 種模式 × 10 個目標期會造成數百次模型重建，讓背景回測長時間沒有結果。
+    // 先依樣本外驗證證據縮小到前 4 名；完整模型仍保留在模型明細，逐期重型計算只處理有競爭力的候選。
+    const rankedCandidates = candidateModels
+      .map((model) => {
+        const evidence = model.calculation?.evolution?.[play.key] || {};
+        const validationProfit = Number(evidence.profit);
+        const validationTrials = Number(evidence.trials || evidence.validationSamples || 0);
+        return { model, validationProfit: Number.isFinite(validationProfit) && validationTrials >= minimumValidationSamples ? validationProfit : null, validationTrials, confidence: Number(evidence.confidence ?? -1), estimatedRate: Number(evidence.estimatedRate ?? -1) };
+      })
+      .sort((a, b) => (b.validationProfit ?? -Infinity) - (a.validationProfit ?? -Infinity)
+        || b.validationTrials - a.validationTrials
+        || b.confidence - a.confidence
+        || b.estimatedRate - a.estimatedRate
+        || String(a.model.name).localeCompare(String(b.model.name)))
+      .slice(0, 4)
+      .map((item) => item.model);
+    const fixed = rankedCandidates.map((model) => evaluate(model, 'fixed')).sort(rank)[0] || empty('fixed');
+    const follow = rankedCandidates.map((model) => evaluate(model, 'follow')).sort(rank)[0] || empty('follow');
     return { ...play, best: fixed, fixed, follow, metricLabel: '盈利機率' };
   });
 }

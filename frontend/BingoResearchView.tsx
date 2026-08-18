@@ -554,8 +554,8 @@ function ProfitabilityDetail({
 }) {
   return (
     <div className="grid gap-1.5 border-t border-slate-800 px-2.5 py-2 text-[10px] leading-4 text-muted-foreground sm:grid-cols-4">
-      <span>回測期數 m：<strong className="tabular-nums text-slate-200">{best.samples}</strong></span>
-      <span>正盈利期數 n：<strong className="tabular-nums text-emerald-200">{best.wins}</strong></span>
+      <span>有效回測期數：<strong className="tabular-nums text-slate-200">{best.samples} 期</strong></span>
+      <span>正盈利期數：<strong className="tabular-nums text-emerald-200">{best.wins} 期</strong></span>
       <span>累計賺賠：<strong className={best.profit > 0 ? "tabular-nums text-emerald-200" : "tabular-nums text-rose-200"}>{formatNetProfit(best.profit)}</strong></span>
       <span>平均／期：<strong className={best.averageProfit != null && best.averageProfit > 0 ? "tabular-nums text-emerald-200" : "tabular-nums text-rose-200"}>{formatNetProfit(best.averageProfit)}</strong></span>
       <span>總派彩：<strong className="tabular-nums text-slate-200">{formatNetProfit(best.payoutTotal)}</strong></span>
@@ -948,7 +948,7 @@ export function BingoResearchView() {
                     {latest?.predictionTargetPeriod ? `最新開獎：第 ${latest.period} 期；預測目標：第 ${latest.predictionTargetPeriod} 期。` : "預測目標期號同步中。"} 以下是「淨盈利大於 0」的回測統計，不是實際中獎機率。
                   </p>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_7.2rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_6.5rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)]">
                       <span>玩法</span>
                       <span className="sm:hidden">推薦</span>
                       <span className="hidden sm:inline">盈利回測</span>
@@ -967,14 +967,14 @@ export function BingoResearchView() {
                         }}
                         className="min-w-0 max-w-full border-b border-slate-800 last:border-b-0"
                       >
-                        <summary className="grid min-w-0 max-w-full cursor-pointer list-none grid-cols-[5rem_minmax(0,1fr)_7.2rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_6.5rem_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
+                        <summary className="grid min-w-0 max-w-full cursor-pointer list-none grid-cols-[5rem_minmax(0,1fr)_8.3rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
                           <span className="min-w-0 shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">{play.label}</span>
                           <div className="min-w-0 max-w-full">
                             <PredictionValue value={play.best.prediction} />
                             <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">點擊看回測</span>
                           </div>
-                          <span className="text-right text-[10px] font-semibold leading-4 tabular-nums text-amber-200 sm:text-xs">
-                            {play.best.samples ? <>{play.best.wins}/{play.best.samples}<br /><span className="font-normal">{(play.best.wins / play.best.samples * 100).toFixed(1)}% · {formatNetProfit(play.best.profit)}</span></> : "—"}
+                          <span className="text-right text-[10px] font-semibold leading-4 text-amber-200 sm:text-xs">
+                            {play.best.samples ? <><span className="block">盈利機率 {(play.best.wins / play.best.samples * 100).toFixed(1)}%</span><span className="block font-normal tabular-nums text-slate-300">正盈利 {play.best.wins} 期／共 {play.best.samples} 期</span><span className={`block font-normal tabular-nums ${play.best.profit > 0 ? "text-emerald-300" : "text-rose-300"}`}>累計賺賠 {formatNetProfit(play.best.profit)}</span></> : "尚無回測資料"}
                           </span>
                         </summary>
                         <ProfitabilityDetail best={play.best} />
@@ -1212,7 +1212,7 @@ export function BingoResearchView() {
                   )}
                 </div>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
-                  盈利機率：正盈利期數 n ÷ 有效回測期數 m × 100%；打平不算盈利。賺賠金額以每期 25 元成本、實際派彩計算；樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
+                  盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。賺賠金額以每期 25 元成本、實際派彩計算；樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
                 </div>
                   </div>
                 </details>

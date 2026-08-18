@@ -2639,7 +2639,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   }, ...visible.slice(1)];
   if ((!current.models?.length || !current.forecastEvaluation?.length || !hasCompleteProfitabilityEvaluation(current.profitabilityEvaluation))
     && history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
-    if (!current.models?.length) await hydrateEvaluationModels(history);
+    await hydrateEvaluationModels(history);
   }
   const evaluationHistory = history;
   const hasStoredEvaluation = Boolean(current.forecastEvaluation?.length

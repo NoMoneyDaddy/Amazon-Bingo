@@ -662,21 +662,60 @@ export function BingoResearchView() {
     () => bestPlayStats(sorted, latestModels),
     [sorted, latestModels],
   );
+  const technicalAnalysis = useMemo(() => {
+    const draws = sorted.slice(0, 30);
+    const frequency = new Map<string, number>();
+    draws.forEach((draw) => draw.numbers.forEach((number) => frequency.set(normalizeNumber(number), (frequency.get(normalizeNumber(number)) || 0) + 1)));
+    const hotNumbers = [...frequency.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 10);
+    const zones = [0, 0, 0, 0];
+    draws.forEach((draw) => draw.numbers.forEach((number) => zones[Math.min(3, Math.floor((Number(number) - 1) / 20))] += 1));
+    const sizeCounts = draws.reduce((counts, draw) => { const key = normalizeCategory(draw.size); counts[key] = (counts[key] || 0) + 1; return counts; }, {} as Record<string, number>);
+    const oddEvenCounts = draws.reduce((counts, draw) => { const key = normalizeCategory(draw.oddEven); counts[key] = (counts[key] || 0) + 1; return counts; }, {} as Record<string, number>);
+    const superNumbers = new Map<string, number>();
+    draws.forEach((draw) => { const number = normalizeNumber(draw.superNumber); if (number !== "—") superNumbers.set(number, (superNumbers.get(number) || 0) + 1); });
+    const sums = draws.map((draw) => numberSum(draw.numbers)).filter((value) => Number.isFinite(value));
+    const repeats = draws.slice(0, -1).reduce((total, draw, index) => {
+      const next = new Set(draws[index + 1]?.numbers || []);
+      return total + draw.numbers.filter((number) => next.has(number)).length;
+    }, 0);
+    const consecutiveDraws = draws.filter((draw) => {
+      const numbers = draw.numbers.map(Number).sort((a, b) => a - b);
+      return numbers.some((number, index) => index > 0 && number === numbers[index - 1] + 1);
+    }).length;
+    return {
+      sampleSize: draws.length,
+      hotNumbers,
+      zones,
+      sizeCounts,
+      oddEvenCounts,
+      topSuper: [...superNumbers.entries()].sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 5),
+      averageSum: sums.length ? sums.reduce((total, value) => total + value, 0) / sums.length : null,
+      repeatAverage: draws.length > 1 ? repeats / (draws.length - 1) : null,
+      consecutiveRate: draws.length ? consecutiveDraws / draws.length : null,
+    };
+  }, [sorted]);
 
   const sync = useCallback(async () => {
     if (syncing) return;
     setSyncing(true);
     setError("");
     try {
-      // 首次讀取與手動重新讀取都抓最近一個月，避免畫面只剩 60 期。
-      // 目前最新期號是輸入，服務端以此計算下一期期號；起卦時間取本次同步當下。
-      const snapshot = await fetchLatest(31, new Date().toISOString());
+      // 首屏先取最新一期；歷史 31 日由後端背景建庫，稍後再補到畫面。
+      const castingAt = new Date().toISOString();
+      const snapshot = await fetchLatest(1, castingAt);
       const records = snapshot.history?.length ? snapshot.history : [snapshot];
       if (!records.length || !records.some((item) => item.period && item.numbers.length)) {
         throw new Error("目前沒有可顯示的開獎資料");
       }
       setDraws(records);
       setLastSync(Date.now());
+      void new Promise((resolve) => window.setTimeout(resolve, 2000))
+        .then(() => fetchLatest(31, castingAt))
+        .then((fullSnapshot) => {
+          const fullRecords = fullSnapshot.history?.length ? fullSnapshot.history : [fullSnapshot];
+          if (fullRecords.length > records.length) setDraws(fullRecords);
+        })
+        .catch(() => undefined);
     } catch (err) {
       setError(err instanceof Error ? err.message : "讀取失敗");
     } finally {
@@ -880,29 +919,34 @@ export function BingoResearchView() {
             )}
             {page === "technical" && (
               <section aria-labelledby="technical-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
-                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 技術分析</p>
-                <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>技術分析與研究透明度</h2>
-                <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  四個步驟把資料轉成研究結果：讀取、計算、回測、輸出。每個模型都保留規則、輸入與證據，方便重新檢查。
-                </p>
-                <div className="mt-5 grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
-                  {[
-                    ["01", "讀資料", "歷史期數"],
-                    ["02", "算特徵", "規則與頻率"],
-                    ["03", "做回測", "逐玩法比較"],
-                    ["04", "出結果", "預測與勝率"],
-                  ].map(([number, title, detail]) => (
-                    <div key={number} className="rounded-2xl border border-border bg-background/70 p-3 transition-transform duration-300 hover:-translate-y-0.5">
-                      <div className="text-xs font-semibold tabular-nums text-amber-200">STEP {number}</div>
-                      <div className="mt-1 font-semibold text-foreground">{title}</div>
-                      <div className="mt-0.5 text-xs text-muted-foreground">{detail}</div>
-                    </div>
-                  ))}
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
+                <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
+                <p className="mt-2 text-sm leading-6 text-muted-foreground">以最近 {technicalAnalysis.sampleSize} 期實際開獎結果，檢查號碼頻率、區間分布、大小單雙、重複球與連號；這些是描述性分析，不代表能改變隨機開獎機率。</p>
+                <div className="mt-4 grid gap-2 sm:grid-cols-4">
+                  <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3"><div className="text-[10px] text-muted-foreground">平均和值</div><div className="mt-1 text-xl font-bold tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</div></div>
+                  <div className="rounded-xl border border-violet-300/25 bg-violet-300/10 p-3"><div className="text-[10px] text-muted-foreground">跨期平均重複球</div><div className="mt-1 text-xl font-bold tabular-nums text-violet-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</div></div>
+                  <div className="rounded-xl border border-amber-300/25 bg-amber-300/10 p-3"><div className="text-[10px] text-muted-foreground">含連號期數</div><div className="mt-1 text-xl font-bold tabular-nums text-amber-100">{technicalAnalysis.consecutiveRate == null ? "—" : `${(technicalAnalysis.consecutiveRate * 100).toFixed(1)}%`}</div></div>
+                  <div className="rounded-xl border border-emerald-300/25 bg-emerald-300/10 p-3"><div className="text-[10px] text-muted-foreground">分析樣本</div><div className="mt-1 text-xl font-bold tabular-nums text-emerald-100">{technicalAnalysis.sampleSize} 期</div></div>
                 </div>
-                <div className="mt-4 rounded-2xl border border-cyan-300/25 bg-cyan-300/10 p-4 text-sm leading-6 text-slate-200">
-                  <strong className="text-cyan-100">怎麼讀研究證據？</strong>
-                  <p className="mt-1">只有 walk-forward 正盈利率嚴格超出同玩法隨機基線才取得聚合權重；等於或低於基線一律為 0。這不是下一期機率或保證。</p>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <div className="rounded-2xl border border-orange-300/25 bg-orange-300/10 p-4">
+                    <div className="flex items-center justify-between gap-2"><strong className="text-orange-100">號碼球熱度排行</strong><span className="text-[10px] text-muted-foreground">出現期數</span></div>
+                    <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-5">{technicalAnalysis.hotNumbers.map(([number, count]) => <div key={number} className="rounded-lg bg-background/45 px-2 py-1.5 text-center"><div className="font-bold tabular-nums text-orange-100">{number}</div><div className="text-[10px] text-muted-foreground">{count} 期</div></div>)}</div>
+                  </div>
+                  <div className="rounded-2xl border border-sky-300/25 bg-sky-300/10 p-4">
+                    <div className="flex items-center justify-between gap-2"><strong className="text-sky-100">四區號碼分布</strong><span className="text-[10px] text-muted-foreground">1–80 號</span></div>
+                    <div className="mt-3 grid grid-cols-4 gap-2">{technicalAnalysis.zones.map((count, index) => <div key={index} className="text-center"><div className="h-16 rounded-md bg-background/45 p-1"><div className="h-full rounded bg-sky-300/60" style={{ height: `${technicalAnalysis.sampleSize ? Math.max(8, count / (technicalAnalysis.sampleSize * 20) * 100) : 8}%`, marginTop: `${technicalAnalysis.sampleSize ? 100 - Math.max(8, count / (technicalAnalysis.sampleSize * 20) * 100) : 92}%` }} /></div><div className="mt-1 text-[10px] text-muted-foreground">{index * 20 + 1}–{index * 20 + 20}</div><div className="text-xs font-semibold tabular-nums text-sky-100">{count}</div></div>)}</div>
+                  </div>
                 </div>
+                <div className="mt-3 grid gap-3 sm:grid-cols-3">
+                  <div className="rounded-2xl border border-border bg-background/50 p-3"><strong className="text-xs text-amber-100">大小結構</strong><div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(technicalAnalysis.sizeCounts).map(([key, value]) => <span key={key} className="rounded-full bg-amber-300/10 px-2 py-1 text-xs text-amber-100">{key} {value} 期</span>)}</div></div>
+                  <div className="rounded-2xl border border-border bg-background/50 p-3"><strong className="text-xs text-violet-100">單雙結構</strong><div className="mt-2 flex flex-wrap gap-1.5">{Object.entries(technicalAnalysis.oddEvenCounts).map(([key, value]) => <span key={key} className="rounded-full bg-violet-300/10 px-2 py-1 text-xs text-violet-100">{key} {value} 期</span>)}</div></div>
+                  <div className="rounded-2xl border border-border bg-background/50 p-3"><strong className="text-xs text-rose-100">超級獎號排行</strong><div className="mt-2 flex flex-wrap gap-1.5">{technicalAnalysis.topSuper.length ? technicalAnalysis.topSuper.map(([number, count]) => <span key={number} className="rounded-full bg-rose-300/10 px-2 py-1 text-xs text-rose-100">{number} × {count}</span>) : <span className="text-xs text-muted-foreground">—</span>}</div></div>
+                </div>
+                <div className="mt-3 rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3 text-xs leading-5 text-cyan-50">分析原則：先看實際開獎資料，再看頻率與結構；短期熱號、冷號、連號與區間偏移都只作比較，不宣稱能突破隨機基線。</div>
+                <details className="mt-4 rounded-2xl border border-border bg-background/40 p-3">
+                  <summary className="cursor-pointer select-none text-sm font-semibold text-slate-200">模型、回測與風險細節</summary>
+                  <div className="mt-3">
                 {latest?.theoreticalRiskBaseline?.rows?.length ? (
                   <div className="mt-3 rounded-2xl border border-rose-300/25 bg-rose-300/10 p-4 text-sm leading-6 text-slate-200">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1096,6 +1140,8 @@ export function BingoResearchView() {
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
                   勝率計算：淨盈利大於 0 的期數 ÷ 有效預測期數 × 100%；打平不算勝利。樣本不足或舊資料沒有保存細節時，畫面會顯示「—」，不把未知資料當成 0%。
                 </div>
+                  </div>
+                </details>
               </section>
             )}
             {page === "history" && (

@@ -1219,8 +1219,9 @@ export function BingoResearchView() {
                     </div>
                   </div>
                   <div className="mt-4 min-w-0 max-w-full divide-y divide-slate-800 overflow-hidden rounded-2xl border border-slate-700/80 bg-slate-950/50">
-                    <div className="grid grid-cols-[5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)]">
+                    <div className="grid grid-cols-[5.5rem_6.5rem_minmax(0,1fr)_8.3rem] gap-2 border-b border-slate-700 px-2.5 py-2 text-center text-[10px] font-semibold uppercase tracking-wide text-muted-foreground sm:grid-cols-[6rem_8.5rem_7rem_minmax(0,1fr)]">
                       <span className="text-center">玩法</span>
+                      <span className="text-center">使用算法</span>
                       <span className="text-center sm:hidden">推薦</span>
                       <span className="hidden items-center justify-center gap-1 text-center sm:flex">
                         <span>盈利回測：</span>
@@ -1248,9 +1249,12 @@ export function BingoResearchView() {
                         }}
                         className="min-w-0 max-w-full border-b border-slate-800 last:border-b-0"
                       >
-                        <summary className="grid min-w-0 max-w-full cursor-pointer list-none grid-cols-[5rem_minmax(0,1fr)_8.3rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_7.5rem_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
+                        <summary className="grid min-w-0 max-w-full cursor-pointer list-none grid-cols-[5.5rem_6.5rem_minmax(0,1fr)_8.3rem] items-center gap-2 px-2.5 py-2.5 sm:grid-cols-[6rem_8.5rem_7rem_minmax(0,1fr)] [&::-webkit-details-marker]:hidden">
                           {(() => { const best = profitStrategy === "fixed" ? (play.fixed || play.best) : (play.follow || play.best); return <>
                           <span className="min-w-0 shrink-0 whitespace-nowrap text-xs text-slate-300 sm:text-sm">{play.label}</span>
+                          <span className="min-w-0 break-words text-left text-[10px] leading-4 text-cyan-200 sm:text-xs" title={best.model === "—" ? "尚無可用算法資料" : best.model}>
+                            {best.model === "—" ? "—" : best.model}
+                          </span>
                           <div className="min-w-0 max-w-full">
                             <PredictionValue value={best.prediction} />
                             <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">點擊看回測</span>

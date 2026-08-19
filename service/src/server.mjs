@@ -24,7 +24,7 @@ const retentionDays = 7;
 const persistedHistoryLimit = 2500;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
-const reproducibilityVersion = 'bingo-research-v77-validation-profit-model-selection';
+const reproducibilityVersion = 'bingo-research-v78-differentiated-model-families';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -710,6 +710,59 @@ function betaBaselinePrediction(history, count = 10) {
     .map((number) => String(number).padStart(2, '0'));
 }
 
+function uniformBaselinePrediction(seed, count = 10) {
+  return Array.from({ length: 80 }, (_, index) => index + 1)
+    .sort((a, b) => deterministicTie(`${seed}|uniform`, a) - deterministicTie(`${seed}|uniform`, b) || a - b)
+    .slice(0, count)
+    .sort((a, b) => a - b)
+    .map((number) => String(number).padStart(2, '0'));
+}
+
+function ewmaInclusion(number, history, decay = 0.94) {
+  let weightedHits = 0;
+  let totalWeight = 0;
+  history.forEach((draw, index) => {
+    const weight = decay ** index;
+    totalWeight += weight;
+    if ((draw.numbers || []).some((value) => Number(value) === number)) weightedHits += weight;
+  });
+  // 以 20 個虛擬觀測固定先驗包含率 20/80，避免短樣本被近期波動放大。
+  return (weightedHits + 20 * 0.25) / Math.max(1, totalWeight + 20);
+}
+
+function markovInclusion(number, history) {
+  let transitions = 0;
+  let hits = 0;
+  const last = history[0]?.numbers?.some((value) => Number(value) === number) ? 1 : 0;
+  for (let index = history.length - 1; index > 0; index -= 1) {
+    const older = history[index]?.numbers?.some((value) => Number(value) === number) ? 1 : 0;
+    const newer = history[index - 1]?.numbers?.some((value) => Number(value) === number) ? 1 : 0;
+    if (older === last) {
+      transitions += 1;
+      hits += newer;
+    }
+  }
+  // Laplace 平滑的條件出現率；資料不足時收縮回理論 25%。
+  return (hits + 0.25 * 4) / Math.max(1, transitions + 4);
+}
+
+function quantitativeNumberPrediction(kind, seed, count, history) {
+  if (kind === 'uniform' || kind === 'hypergeometric') return uniformBaselinePrediction(seed, count);
+  const scored = Array.from({ length: 80 }, (_, index) => {
+    const number = index + 1;
+    let probability = 0.25;
+    if (kind === 'frequency') probability = windowFrequency(number, history, 60);
+    if (kind === 'bayesian') {
+      const hits = history.reduce((sum, draw) => sum + ((draw.numbers || []).some((value) => Number(value) === number) ? 1 : 0), 0);
+      probability = (hits + 5) / Math.max(1, history.length + 20);
+    }
+    if (kind === 'ewma') probability = ewmaInclusion(number, history);
+    if (kind === 'markov') probability = markovInclusion(number, history);
+    return { number, probability, tie: deterministicTie(`${seed}|${kind}`, number) };
+  }).sort((a, b) => b.probability - a.probability || a.tie - b.tie || a.number - b.number);
+  return scored.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
+}
+
 function deterministicBootstrap(values, seed = '') {
   if (!values.length) return { mean: null, lower: null, upper: null, samples: 0 };
   const replications = Math.min(400, Math.max(200, values.length * 20));
@@ -885,6 +938,10 @@ function exclusionPrediction(seed, count, history = [], target = '10星') {
 }
 
 function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, target = '') {
+  // 這些模型使用各自獨立的生成機制，不再套用術數適配器與共用頻率混合分數。
+  if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(tradition.kind)) {
+    return quantitativeNumberPrediction(tradition.kind, seed, count, history);
+  }
   const frequencies = historicalFrequencies(history);
   const recentFrequencies = windowFrequencies(history, 12);
   const mediumFrequencies = windowFrequencies(history, 60);
@@ -979,6 +1036,14 @@ const NUMBER_ZONES = [
 ];
 
 function zonePredictionSet(seed, tradition, history, empiricalWeight, target = '10星', picksPerZone = 5) {
+  if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(tradition.kind)) {
+    const ranked = quantitativeNumberPrediction(tradition.kind, seed, 80, history).map(Number);
+    return NUMBER_ZONES.map((zone) => ({
+      key: zone.key,
+      label: zone.label,
+      numbers: ranked.filter((number) => number >= zone.min && number <= zone.max).slice(0, picksPerZone).sort((a, b) => a - b).map((number) => String(number).padStart(2, '0')),
+    }));
+  }
   const frequencies = historicalFrequencies(history);
   const recentFrequencies = windowFrequencies(history, 12);
   const mediumFrequencies = windowFrequencies(history, 60);
@@ -1126,15 +1191,22 @@ const modelSources = {
   '奇門遁甲（九宮研究版）': [{ name: '北海道大學：奇門遁甲的基礎研究', url: 'https://eprints.lib.hokudai.ac.jp/repo/huscap/all/44606/' }, { name: 'EASTM：中國軍事占卜史研究', url: 'https://core.ac.uk/download/pdf/228877365.pdf' }],
   '太乙九宮（研究版）': [{ name: 'Extrême-Orient：太乙、奇門遁甲與六壬研究', url: 'https://journals.openedition.org/extremeorient/pdf/270' }, { name: '柏林自由大學：中國帝制時期的認知占卜', url: 'https://refubium.fu-berlin.de/handle/fub188/154' }],
   '民俗統計基線': [{ name: '台灣彩券官方開獎時間與隨機開獎說明', url: 'https://www.taiwanlottery.com/run_lottery/schedule/' }],
+  '均勻隨機理論基準': [{ name: '台灣彩券官方開獎規則／時程', url: 'https://www.taiwanlottery.com/run_lottery/schedule/' }],
+  '頻率窗口基線': [{ name: '彩票 k/N 隨機性統計審計', url: 'https://arxiv.org/abs/0806.4595' }],
   '生肖五行研究版': [{ name: '中國哲學書電子化計劃：周易與五行資料', url: 'https://ctext.org/datawiki.pl?if=en&res=484682' }],
-  '貝葉斯平滑基線': [{ name: 'Predicting Winning Lottery Numbers（統計模型研究）', url: 'https://arxiv.org/abs/2403.12836' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
-  '超幾何集合基線': [{ name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
+  '貝葉斯 Beta-Binomial 基線': [{ name: '彩票 k/N 隨機性統計審計', url: 'https://arxiv.org/abs/0806.4595' }],
+  '指數衰減 EWMA 基線': [{ name: '時間序列交叉驗證原則', url: 'https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html' }],
+  '二狀態 Markov 研究版': [{ name: '時間序列交叉驗證原則', url: 'https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html' }],
+  '超幾何集合審計基準': [{ name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '多窗口穩定性基線': [{ name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '排除濾網基線': [{ name: 'NIST SP 800-22 隨機性測試', url: 'https://csrc.nist.gov/pubs/sp/800/22/r1/upd1/final' }, { name: 'Statistical auditing and randomness test of lotto k/N-type games', url: 'https://arxiv.org/abs/0806.4595' }],
   '趨勢加權回歸基線': [{ name: '序列式機率預測與評估', url: 'https://arxiv.org/abs/0905.1673' }, { name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }],
   '機器學習負對照': [{ name: '序列式機率預測與評估', url: 'https://arxiv.org/abs/0905.1673' }, { name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }],
 };
 const researchEvidenceRegistry = [
+  { name: '均勻隨機與超幾何基準', status: '以 80 選 20 不放回理論作為所有模型的最低比較線；不把基準當成預測優勢', source: 'Coronel-Brizio et al., 2008', url: 'https://arxiv.org/abs/0806.4595' },
+  { name: '時間序列 walk-forward', status: '訓練資料永遠早於測試資料；禁止隨機切分造成未來資訊洩漏', source: 'scikit-learn TimeSeriesSplit', url: 'https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html' },
+  { name: '機率校準', status: '以 Brier／log loss 評估預測機率與實際結果，不以命中率單獨決定模型優劣', source: 'scikit-learn Probability Calibration', url: 'https://scikit-learn.org/stable/modules/calibration.html' },
   { name: '西洋占星（負對照）', status: '不納入號碼預測；以雙盲研究作為反向驗證與限制說明', source: 'Nature 318（Carlson, 1985）', url: 'https://www.nature.com/articles/318419a0.pdf' },
   { name: '賭徒謬誤與熱手效應', status: '只用來檢查熱號／冷號敘事，不當作開獎訊號', source: 'NBER Working Paper 3769', url: 'https://www.nber.org/papers/w3769' },
   { name: '彩票隨機性審計', status: '頻率、序列相關與游程檢查；低 p 值只代表需複核', source: 'Lottery k/N statistical audit', url: 'https://arxiv.org/abs/0806.4595' },
@@ -1169,6 +1241,38 @@ function categoryPrediction(seed, traditional, history, field, empiricalWeight) 
     value,
     score: (value === fallback ? traditionalWeight : 0) + (counts.get(value) || 0) / maxCount * Math.min(0.8, empiricalWeight),
   })).sort((a, b) => b.score - a.score || String(a.value).localeCompare(String(b.value)))[0].value;
+}
+
+function quantitativeCategoryPrediction(kind, seed, history, field) {
+  const allowed = field === 'size' ? ['大', '小'] : ['單', '雙'];
+  if (kind === 'uniform' || kind === 'hypergeometric') return allowed[seed % 2];
+  if (kind === 'markov' && history.length >= 2) {
+    const latest = normalizeDrawCategory(history[0]?.[field], field);
+    let trials = 0;
+    let hits = 0;
+    for (let index = history.length - 1; index > 0; index -= 1) {
+      const previous = normalizeDrawCategory(history[index]?.[field], field);
+      const current = normalizeDrawCategory(history[index - 1]?.[field], field);
+      if (previous === latest && allowed.includes(current)) {
+        trials += 1;
+        if (current === latest) hits += 1;
+      }
+    }
+    if (trials >= 4) return hits / trials >= 0.5 ? latest : allowed.find((value) => value !== latest);
+  }
+  const counts = new Map(allowed.map((value) => [value, 2]));
+  history.forEach((item) => {
+    const value = normalizeDrawCategory(item[field], field);
+    if (counts.has(value)) counts.set(value, counts.get(value) + 1);
+  });
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || allowed.indexOf(a[0]) - allowed.indexOf(b[0]))[0][0];
+}
+
+function modelCategoryPrediction(kind, seed, casting, history, field, empiricalWeight) {
+  if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(kind)) {
+    return quantitativeCategoryPrediction(kind, seed, history, field);
+  }
+  return categoryPrediction(seed, targetTraditionalCategory(casting, field, seed), history, field, empiricalWeight);
 }
 
 function validPredictionCategory(value, field) {
@@ -1892,9 +1996,12 @@ function evolveProfiles(history = []) {
     ['梅花易數', 'meihua', 11], ['六爻八卦', 'sixyao', 37], ['河圖洛書', 'luoshu', 61],
     ['數字卦（楚簡研究版）', 'numeral-gua', 73], ['奇門遁甲（九宮研究版）', 'qimen', 89],
     ['太乙九宮（研究版）', 'taiyi', 97], ['民俗統計基線', 'statistics', 113],
-    ['生肖五行研究版', 'bazi', 127], ['三才數理研究版', 'sanCai', 137], ['貝葉斯平滑基線', 'bayesian', 149],
-    ['超幾何集合基線', 'hypergeometric', 163], ['多窗口穩定性基線', 'multiscale', 179],
-    ['排除濾網基線', 'exclusion', 191], ['趨勢加權回歸基線', 'regression', 223],
+    ['均勻隨機理論基準', 'uniform', 127], ['頻率窗口基線', 'frequency', 131],
+    ['生肖五行研究版', 'bazi', 137], ['三才數理研究版', 'sanCai', 139],
+    ['貝葉斯 Beta-Binomial 基線', 'bayesian', 149], ['指數衰減 EWMA 基線', 'ewma', 157],
+    ['二狀態 Markov 研究版', 'markov', 163], ['超幾何集合審計基準', 'hypergeometric', 167],
+    ['多窗口穩定性基線', 'multiscale', 179], ['排除濾網基線', 'exclusion', 191],
+    ['趨勢加權回歸基線', 'regression', 223],
   ];
   if (validationRows.length < minimumValidationSamples) {
     return Object.fromEntries(methods.map(([method]) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0, validationSamples: validationRows.length, score: null, baselineRate: null, qualityScore: 0, eligible: false, status: `樣本不足（需要 ${minimumValidationSamples} 期），只保留研究結果` }])) }]));
@@ -1917,7 +2024,7 @@ function evolveProfiles(history = []) {
         } else {
           tenStar = scoreNumbers(`${castingAt}|${actual.period}|${kind}|${seedOffset}`, 10, tradition, training, empiricalWeight, '10星');
         }
-        const predictions = { size: categoryPrediction(seedOffset, targetTraditionalCategory(casting, 'size', seedOffset), training, 'size', empiricalWeight), oddEven: categoryPrediction(seedOffset, targetTraditionalCategory(casting, 'oddEven', seedOffset), training, 'oddEven', empiricalWeight), superNumber: tenStar[0] || '' };
+        const predictions = { size: modelCategoryPrediction(kind, seedOffset, casting, training, 'size', empiricalWeight), oddEven: modelCategoryPrediction(kind, seedOffset, casting, training, 'oddEven', empiricalWeight), superNumber: tenStar[0] || '' };
         for (let star = 1; star <= 10; star += 1) predictions[`${star}星`] = tenStar.slice(0, star);
         for (const target of tunableTargets) {
           const prediction = predictions[target];
@@ -1979,6 +2086,7 @@ function castingFor(kind, snapshot, target, castingAt) {
   if (kind === 'numeral-gua') return numeralGuaCasting(snapshot, target);
   if (kind === 'qimen') return qimenCasting(snapshot, target);
   if (kind === 'statistics') return statisticalCasting(snapshot, target);
+  if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(kind)) return statisticalCasting(snapshot, target);
   if (kind === 'bayesian') return statisticalCasting(snapshot, target);
   if (kind === 'hypergeometric') return statisticalCasting(snapshot, target);
   if (kind === 'multiscale') return statisticalCasting(snapshot, target);
@@ -1993,6 +2101,7 @@ function traditionFor(kind, casting) {
   if (kind === 'luoshu') return { kind, center: casting.center };
   if (kind === 'numeral-gua') return { kind, digits: casting.digits };
   if (kind === 'statistics') return { kind, window: casting.window };
+  if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(kind)) return { kind, window: casting.window };
   if (kind === 'bayesian') return { kind, window: casting.window };
   if (kind === 'hypergeometric') return { kind, window: casting.window };
   if (kind === 'multiscale') return { kind, window: casting.window };
@@ -2190,12 +2299,14 @@ function recentTargetGate(modelName, target, history = []) {
 }
 
 function aggregateModel(models, history) {
-  const eligibleModels = models.filter((model) => model.calculation?.predictionEligible !== false);
+  const eligibleModels = models.filter((model) => model.calculation?.predictionEligible !== false
+    && !['uniform', 'hypergeometric'].includes(model.calculation?.method));
   // 玄學／文化模型保留在研究頁比較，但不在統計證據不足時稀釋基線。
   // 只有明確標示可檢驗統計或可重現機器學習的模型進入正式共識。
   const quantitativeModels = eligibleModels.filter((model) => {
     const tier = String(model.calculation?.evidenceTier || '');
-    return tier.includes('可檢驗統計') || tier.includes('可重現機器學習');
+    return tier.includes('可檢驗統計') || tier.includes('可重現機器學習')
+      || ['frequency', 'bayesian', 'ewma', 'markov'].includes(model.calculation?.method);
   });
   const ensembleModels = quantitativeModels.length ? quantitativeModels : eligibleModels;
   const hasValidatedWeight = ensembleModels.some((model) => predictionTargets.some((target) => {
@@ -2331,10 +2442,14 @@ export function buildModels(snapshot, history = [], options = {}) {
     { name: '奇門遁甲（九宮研究版）', kind: 'qimen', status: '九宮／九星／八門核心＋目標玩法適配，非完整排局', seedOffset: 89 },
     { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心＋目標玩法適配，非完整太乙排局', seedOffset: 97 },
     { name: '民俗統計基線', kind: 'statistics', status: '熱度／遺漏／和值／奇偶／區間統計基線，非因果預測', seedOffset: 113 },
-    { name: '生肖五行研究版', kind: 'bazi', status: '農曆年干支／五行固定映射＋統計適配，非完整八字排盤', seedOffset: 127 },
-    { name: '三才數理研究版', kind: 'sanCai', status: '天／人時間層＋地才號碼結構的研究適配，非姓名筆畫三才', seedOffset: 137 },
-    { name: '貝葉斯平滑基線', kind: 'bayesian', status: 'Beta／Dirichlet 平滑頻率基線；可重算但不主張改變隨機機率', seedOffset: 149 },
-    { name: '超幾何集合基線', kind: 'hypergeometric', status: '80 選 20 不放回抽樣；用集合包含率與精確抽樣假設做基線', seedOffset: 163 },
+    { name: '均勻隨機理論基準', kind: 'uniform', status: '每個號碼等機率的理論對照，不宣稱預測優勢', seedOffset: 127 },
+    { name: '頻率窗口基線', kind: 'frequency', status: '只用目標期以前 60 期的出現率排序，不加入術數特徵', seedOffset: 131 },
+    { name: '生肖五行研究版', kind: 'bazi', status: '農曆年干支／五行固定映射＋統計適配，非完整八字排盤', seedOffset: 137 },
+    { name: '三才數理研究版', kind: 'sanCai', status: '天／人時間層＋地才號碼結構的研究適配，非姓名筆畫三才', seedOffset: 139 },
+    { name: '貝葉斯 Beta-Binomial 基線', kind: 'bayesian', status: '以 Beta 先驗收縮每個號碼的期級出現率，避免短樣本極端值', seedOffset: 149 },
+    { name: '指數衰減 EWMA 基線', kind: 'ewma', status: '以固定衰減率給近期期數較高權重，不使用傳統術數映射', seedOffset: 157 },
+    { name: '二狀態 Markov 研究版', kind: 'markov', status: '以每個號碼「上一期出現／未出現」狀態估計下一期條件率', seedOffset: 163 },
+    { name: '超幾何集合審計基準', kind: 'hypergeometric', status: '以 80 選 20 不放回理論作集合命中與隨機性對照，不產生優勢預測', seedOffset: 167 },
     { name: '多窗口穩定性基線', kind: 'multiscale', status: '近 12／60／300 期多時間窗；對短期訊號施加穩定性懲罰', seedOffset: 179 },
     { name: '排除濾網基線', kind: 'exclusion', status: 'walk-forward 排除驗證；只啟用樣本外顯著低於 25% 基準的濾網', seedOffset: 191 },
   ].filter((method) => !options.onlyMethod || method.name === options.onlyMethod);
@@ -2385,6 +2500,7 @@ export function buildModels(snapshot, history = [], options = {}) {
         if (method.kind === 'sanCai') return [target, `天${casting.heaven}／人${casting.human}／地才＝號碼區域＋尾數`];
         if (method.kind === 'bazi') return [target, `年${casting.pillars.yearStem}/${casting.pillars.yearBranch}・月${casting.pillars.monthStem}/${casting.pillars.monthBranch}・日${casting.pillars.dayStem}/${casting.pillars.dayBranch}・時${casting.pillars.hourStem}/${casting.pillars.hourBranch}`];
         if (method.kind === 'statistics') return [target, '固定統計窗口 60 期／目標期前資料'];
+        if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(method.kind)) return [target, casting.formula];
         if (method.kind === 'bayesian') return [target, 'Beta／Dirichlet 平滑窗口 60 期／目標期前資料'];
         if (method.kind === 'hypergeometric') return [target, '80 選 20 不放回集合包含率／目標期前資料'];
         if (method.kind === 'multiscale') return [target, '12／60／300 期頻率與跨窗口穩定性／目標期前資料'];
@@ -2394,8 +2510,8 @@ export function buildModels(snapshot, history = [], options = {}) {
         return [target, casting.digits.join('、')];
       })) },
       official: {
-        size: validPredictionCategory(categoryPrediction(modelSeed, targetTraditionalCategory(targetCastings.size, 'size', modelSeed), history, 'size', weights.size), 'size'),
-        oddEven: validPredictionCategory(categoryPrediction(modelSeed, targetTraditionalCategory(targetCastings.oddEven, 'oddEven', modelSeed), history, 'oddEven', weights.oddEven), 'oddEven'),
+        size: validPredictionCategory(modelCategoryPrediction(method.kind, modelSeed, targetCastings.size, history, 'size', weights.size), 'size'),
+        oddEven: validPredictionCategory(modelCategoryPrediction(method.kind, modelSeed, targetCastings.oddEven, history, 'oddEven', weights.oddEven), 'oddEven'),
         superNumber: (picksByTarget.superNumber || picks)[modelSeed % (picksByTarget.superNumber || picks).length],
         basic: Object.fromEntries(Array.from({ length: 10 }, (_, index) => {
           const target = `${index + 1}星`;

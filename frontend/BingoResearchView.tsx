@@ -1643,6 +1643,10 @@ export function BingoResearchView() {
     };
   }, [latest?.technicalAnalysis, technicalAnalysisFallback]);
   const backtestReady = hasBacktestEvaluation(latest);
+  // 正式模型已存在時，後端進度代表背景更新，不應把首頁誤顯示成卡住；
+  // 只有首次建模／模型尚未取得時才顯示阻塞型進度條。
+  const blockingComputation = latest?.modelStatus !== "formal"
+    && (computationProgress?.status === "running" || latest?.modelStatus === "queued");
 
   const sync = useCallback(async (forceHistory = false) => {
     if (syncingRef.current) return;
@@ -1919,7 +1923,7 @@ export function BingoResearchView() {
                         正式模型狀態：{latest?.modelStatus === "queued" ? "計算中，尚未產生預測" : latest?.modelStatus === "error" ? "計算失敗，未使用備援號碼" : "尚未取得"}；目前只顯示官方開獎資料。
                       </div>
                     ) : null}
-                    {computationProgress?.status === "running" || latest?.modelStatus === "queued" ? (
+                    {blockingComputation ? (
                       <div className="mb-2 rounded border border-cyan-300/25 bg-cyan-300/10 px-2.5 py-2" role="status" aria-live="polite">
                         <div className="flex items-center justify-between gap-2 text-[11px] text-cyan-100">
                           <span>{computationProgress?.message || "後端正在計算"}</span>

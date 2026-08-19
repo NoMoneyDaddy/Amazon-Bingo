@@ -2003,8 +2003,8 @@ function evaluateCompositionStrategies(history = [], target = '10星', size = 10
   };
 }
 
-async function hydrateEvaluationModels(history = []) {
-  const lastIndex = Math.min(history.length - 1, profitabilityBacktestWindow + 1);
+async function hydrateEvaluationModels(history = [], windowSize = profitabilityBacktestWindow) {
+  const lastIndex = Math.min(history.length - 1, windowSize + 1);
   for (let index = 1; index <= lastIndex; index += 1) {
     if (Array.isArray(history[index]?.models) && history[index].models.length) continue;
     const item = history[index];
@@ -3778,15 +3778,24 @@ const server = http.createServer(async (req, res) => {
           deferEvaluationModels: true,
           quickModelHistoryCount: quickDecisionBacktestWindow,
         });
+        const quickHistory = prioritySnapshot.history || [prioritySnapshot];
+        let quickIntegrity = quickBacktestLeakageGuard(quickHistory, quickDecisionBacktestWindow);
+        if (quickIntegrity.excludedSamples > 0) {
+          // 快速回測必須固定完成 10 個目標期；只補建缺少的歷史模型，
+          // 並沿用每期「目標期以前」的資料，不能以目前模型代替。
+          await hydrateEvaluationModels(quickHistory, quickDecisionBacktestWindow);
+          quickIntegrity = quickBacktestLeakageGuard(quickHistory, quickDecisionBacktestWindow);
+        }
         void readPersistedCached(persistedHistoryLimit)
           .then((rows) => refreshInBackground(rows, 1))
           .catch(() => undefined);
         // 臨場判斷不等待完整回測：先回傳模型與最近 10 期快速比較，20 期完整研究交給背景更新。
-        const quickEvaluation = fastProfitabilityEvaluation(prioritySnapshot.history || [prioritySnapshot], quickDecisionBacktestWindow);
+        const quickEvaluation = fastProfitabilityEvaluation(quickHistory, quickDecisionBacktestWindow);
         return send(res, 200, {
           ...prioritySnapshot,
+          history: quickHistory,
           profitabilityEvaluation: quickEvaluation,
-          quickBacktestIntegrity: quickBacktestLeakageGuard(prioritySnapshot.history || [prioritySnapshot], quickDecisionBacktestWindow),
+          quickBacktestIntegrity: quickIntegrity,
           evaluationMode: 'quick',
           modelStatus: prioritySnapshot.models?.length ? 'formal' : 'queued',
         }, req);

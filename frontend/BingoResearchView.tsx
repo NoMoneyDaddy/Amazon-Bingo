@@ -247,6 +247,26 @@ type TechnicalAnalysisData = {
     topPatterns: Array<[string, number]>;
     rule: string;
   };
+  ladderVariants?: Array<{
+    key: string;
+    label: string;
+    drawRate: number | null;
+    draws: number;
+    sequences: number;
+    longest: number | null;
+    topPatterns: Array<[string, number]>;
+    rule: string;
+  }>;
+  numberRegularity?: Array<{
+    number: string;
+    count: number;
+    omission: number;
+    meanGap: number | null;
+    gapStd: number | null;
+    repeatRate: number | null;
+    regularity: number | null;
+  }>;
+  numberRegularityRule?: string;
   coOccurrence: Array<{ pair: string; count: number; rate: number | null }>;
   tailAnalysis: {
     counts: Record<string, number>;
@@ -1861,6 +1881,26 @@ export function BingoResearchView() {
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">
                     <div className="rounded-xl border border-violet-200/15 bg-background/35 p-3"><div className="text-xs font-semibold text-violet-100">常見階梯牌</div><div className="mt-2 flex flex-wrap gap-1.5">{technicalAnalysis.ladderAnalysis.topPatterns.length ? technicalAnalysis.ladderAnalysis.topPatterns.map(([pattern, count]) => <span key={pattern} className="rounded-full bg-violet-300/10 px-2 py-1 text-xs tabular-nums text-violet-100">{pattern} × {count}</span>) : <span className="text-xs text-muted-foreground">—</span>}</div></div>
                     <div className="rounded-xl border border-violet-200/15 bg-background/35 p-3 text-xs leading-5 text-muted-foreground"><div className="font-semibold text-violet-100">偵測規則</div><p className="mt-1">{technicalAnalysis.ladderAnalysis.rule}</p><p className="mt-1 text-amber-200/80">階梯牌是歷史結構標記，不代表下一期機率上升，也不自動取得預測權重。</p></div>
+                  </div>
+                  <div className="mt-3 rounded-xl border border-fuchsia-200/15 bg-background/35 p-3">
+                    <div className="flex items-center justify-between gap-2"><strong className="text-xs text-fuchsia-100">變種階梯比較</strong><span className="text-[10px] text-muted-foreground">同一研究樣本</span></div>
+                    <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                      {(technicalAnalysis.ladderVariants || []).map((variant) => (
+                        <div key={variant.key} className="rounded-lg border border-fuchsia-200/15 bg-background/40 p-2.5">
+                          <div className="flex items-center justify-between gap-2"><span className="text-xs font-semibold text-fuchsia-100">{variant.label}</span><span className="text-xs font-bold tabular-nums text-fuchsia-200">{variant.drawRate == null ? "—" : `${(variant.drawRate * 100).toFixed(1)}%`}</span></div>
+                          <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground"><span>{variant.draws} 期</span><span>{variant.sequences} 組</span><span>最長 {variant.longest == null ? "—" : `${variant.longest} 號`}</span></div>
+                          <div className="mt-1 text-[10px] leading-4 text-muted-foreground">{variant.rule}</div>
+                          {variant.topPatterns.length ? <div className="mt-1 flex flex-wrap gap-1">{variant.topPatterns.slice(0, 3).map(([pattern, count]) => <span key={pattern} className="rounded-full bg-fuchsia-300/10 px-1.5 py-0.5 text-[10px] tabular-nums text-fuchsia-100">{pattern} × {count}</span>)}</div> : null}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="mt-3 rounded-xl border border-sky-200/15 bg-background/35 p-3">
+                    <div className="flex items-center justify-between gap-2"><strong className="text-xs text-sky-100">號碼出現穩定度</strong><span className="text-[10px] text-muted-foreground">至少出現 3 次</span></div>
+                    <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-5">
+                      {(technicalAnalysis.numberRegularity || []).slice(0, 10).map((item) => <div key={item.number} className="rounded-lg bg-background/45 px-2 py-1.5 text-center"><div className="font-bold tabular-nums text-sky-100">{item.number}</div><div className="text-[10px] tabular-nums text-muted-foreground">{item.count} 次 · 間隔 {item.meanGap == null ? "—" : item.meanGap.toFixed(1)}</div><div className="text-[10px] tabular-nums text-sky-200/80">波動 {item.gapStd == null ? "—" : item.gapStd.toFixed(1)} · 連續 {item.repeatRate == null ? "—" : `${(item.repeatRate * 100).toFixed(0)}%`}</div></div>)}
+                    </div>
+                    <p className="mt-2 text-[10px] leading-4 text-muted-foreground">{technicalAnalysis.numberRegularityRule || "依出現間隔的平均值與波動排序；不是下一期機率。"}</p>
                   </div>
                 </details>
                 <div className="mt-3 grid gap-3 sm:grid-cols-2">

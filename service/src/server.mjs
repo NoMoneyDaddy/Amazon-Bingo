@@ -1565,7 +1565,40 @@ function technicalAnalysis(history = []) {
   let ladderDraws = 0;
   let ladderSequences = 0;
   let longestLadder = 0;
-  draws.forEach((draw) => {
+  const ladderVariantSpecs = [
+    { key: 'step1', label: '連號階梯', rule: '相鄰號碼差 1，至少 2 號。' },
+    { key: 'step2', label: '跳一階梯', rule: '相鄰號碼差 2，至少 2 號。' },
+    { key: 'step3', label: '跳二階梯', rule: '相鄰號碼差 3，至少 2 號。' },
+    { key: 'mixed', label: '混合階梯', rule: '相鄰差只允許 1 或 2，至少 3 號且同時包含兩種間距。' },
+  ];
+  const ladderVariantStats = Object.fromEntries(ladderVariantSpecs.map((spec) => [spec.key, { draws: 0, sequences: 0, longest: 0, patterns: new Map() }]));
+  const collectSequences = (values, allowedSteps, minimumLength = 2) => {
+    const sequences = [];
+    let run = [];
+    const flush = () => {
+      if (run.length >= minimumLength) sequences.push(run);
+      run = [];
+    };
+    values.forEach((value, index) => {
+      const previous = run[run.length - 1];
+      if (!run.length || allowedSteps.includes(value - previous)) run.push(value);
+      else { flush(); run = [value]; }
+      if (index === values.length - 1) flush();
+    });
+    return sequences;
+  };
+  const addVariant = (key, sequences, drawIndex) => {
+    const stat = ladderVariantStats[key];
+    if (!stat || !sequences.length) return;
+    stat.draws += 1;
+    stat.sequences += sequences.length;
+    sequences.forEach((sequence) => {
+      stat.longest = Math.max(stat.longest, sequence.length);
+      const label = sequence.map(numberKey).join('–');
+      stat.patterns.set(label, (stat.patterns.get(label) || 0) + 1);
+    });
+  };
+  draws.forEach((draw, drawIndex) => {
     const values = normalizedNumbers(draw);
     values.forEach((number) => {
       const key = numberKey(number);
@@ -1586,6 +1619,11 @@ function technicalAnalysis(history = []) {
       if (index === values.length - 1 && run.length >= 2) sequences.push(run);
     });
     if (sequences.length) ladderDraws += 1;
+    addVariant('step1', sequences, drawIndex);
+    addVariant('step2', collectSequences(values, [2]), drawIndex);
+    addVariant('step3', collectSequences(values, [3]), drawIndex);
+    const mixedSequences = collectSequences(values, [1, 2], 3).filter((sequence) => sequence.some((value, index) => index > 0 && value - sequence[index - 1] === 2));
+    addVariant('mixed', mixedSequences, drawIndex);
     sequences.forEach((sequence) => {
       ladderSequences += 1;
       longestLadder = Math.max(longestLadder, sequence.length);
@@ -1608,6 +1646,14 @@ function technicalAnalysis(history = []) {
   const short = draws.slice(0, 10); const prior = draws.slice(10, 30); const countWindow = (window) => { const result = new Map(); window.forEach((draw) => (draw.numbers || []).forEach((number) => { const key = String(number).padStart(2, '0'); result.set(key, (result.get(key) || 0) + 1); })); return result; };
   const shortFrequency = countWindow(short); const priorFrequency = countWindow(prior);
   const trendNumbers = allNumbers.map((item) => ({ ...item, change: (shortFrequency.get(item.number) || 0) / Math.max(1, short.length) - (priorFrequency.get(item.number) || 0) / Math.max(1, prior.length) })).sort((a, b) => b.change - a.change || b.count - a.count).slice(0, 8);
+  const regularityNumbers = allNumbers.map((item) => {
+    const occurrences = draws.reduce((indexes, draw, index) => (draw.numbers || []).some((value) => numberKey(Number(value)) === item.number) ? [...indexes, index] : indexes, []);
+    const intervals = occurrences.slice(1).map((value, index) => value - occurrences[index]);
+    const meanGap = intervals.length ? intervals.reduce((total, value) => total + value, 0) / intervals.length : null;
+    const gapVariance = meanGap == null ? null : intervals.reduce((total, value) => total + (value - meanGap) ** 2, 0) / intervals.length;
+    const gapStd = gapVariance == null ? null : Math.sqrt(gapVariance);
+    return { ...item, meanGap, gapStd, repeatRate: intervals.length ? intervals.filter((value) => value === 1).length / intervals.length : null, regularity: meanGap && gapStd != null ? gapStd / meanGap : null };
+  }).filter((item) => item.count >= 3).sort((a, b) => (a.regularity ?? Infinity) - (b.regularity ?? Infinity) || b.count - a.count).slice(0, 10);
   const percentage = (value, total) => total ? `${(value / total * 100).toFixed(1)}%` : '—';
   const sizeTotal = Object.values(sizeCounts).reduce((total, value) => total + value, 0); const oddEvenTotal = Object.values(oddEvenCounts).reduce((total, value) => total + value, 0);
   return {
@@ -1630,6 +1676,12 @@ function technicalAnalysis(history = []) {
       topPatterns: [...ladderPatterns.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 10),
       rule: '同一期排序後，連續整數至少 2 號視為一組階梯牌；只作描述性統計，不進入預測權重。',
     },
+    ladderVariants: ladderVariantSpecs.map((spec) => {
+      const stat = ladderVariantStats[spec.key];
+      return { key: spec.key, label: spec.label, drawRate: draws.length ? stat.draws / draws.length : null, draws: stat.draws, sequences: stat.sequences, longest: stat.longest || null, topPatterns: [...stat.patterns.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 6), rule: spec.rule };
+    }),
+    numberRegularity: regularityNumbers,
+    numberRegularityRule: '以近 30 期每個號碼的出現間隔計算平均間隔、間隔標準差、連續跨期比例；樣本少於 3 次不列入穩定度排序。',
     coOccurrence: [...coOccurrence.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([pair, count]) => ({ pair, count, rate: draws.length ? count / draws.length : null })),
     tailAnalysis: {
       counts: tailCounts,

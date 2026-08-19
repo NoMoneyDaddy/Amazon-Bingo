@@ -1150,8 +1150,8 @@ function LadderChart({ draws, analysis, showAssist, showGap, showHeat, showTail,
   return (
     <div className="mt-3 overflow-hidden rounded-xl border border-violet-300/20 bg-black/30">
       <div className="flex items-center justify-between gap-2 border-b border-violet-300/15 px-2.5 py-2 text-[10px] text-muted-foreground">
-        <span className="font-semibold text-violet-100">階梯圖・最近 {rows.length} 期</span>
-        <span className="shrink-0 text-violet-200/80">左右滑動查看 01–80</span>
+        <span className="font-semibold text-violet-100">技術分析整合圖・最近 {rows.length} 期</span>
+        <span className="shrink-0 text-violet-200/80">期數固定・號碼左右滑動</span>
       </div>
       <div className="overflow-x-auto overscroll-x-contain px-2 pb-2 [touch-action:pan-x]">
         <div className="min-w-0" style={{ width: chartWidth }}>
@@ -1162,14 +1162,16 @@ function LadderChart({ draws, analysis, showAssist, showGap, showHeat, showTail,
               </span>
             ))}
             {Array.from({ length: 80 }, (_, index) => (
-              <span key={index} className="absolute bottom-0 h-1 border-l border-slate-700/60" style={{ left: index * columnWidth }} />
+              <span key={index} className={`absolute bottom-0 h-1 border-l ${index % 5 === 0 ? "border-slate-500/80" : "border-slate-700/40"}`} style={{ left: index * columnWidth }}>
+                {index % 5 === 0 ? <span className="absolute bottom-1 left-1 text-[8px] font-semibold tabular-nums text-slate-500">{String(index + 1).padStart(2, "0")}</span> : null}
+              </span>
             ))}
           </div>
           <div className="space-y-1.5 pt-1">
             {rows.map(({ draw, numbers, segments, superNumber }) => (
-              <div key={draw.period} className="flex h-8 items-center">
-                <span className="w-[3.5rem] shrink-0 pr-1 text-right text-[9px] font-semibold tabular-nums text-slate-400">{draw.period.slice(-5)}</span>
-                <div className="relative h-8 shrink-0 border-b border-slate-800/80" style={{ width: chartWidth }}>
+              <div key={draw.period} className="flex h-10 items-center">
+                <span className="sticky left-0 z-30 flex h-9 w-[3.5rem] shrink-0 items-center justify-end border-r border-slate-700/80 bg-slate-950/95 pr-1 text-right text-[9px] font-semibold tabular-nums text-slate-300 shadow-[4px_0_8px_rgba(0,0,0,0.25)]">{draw.period.slice(-5)}</span>
+                <div className="relative h-9 shrink-0 border-b border-slate-800/80" style={{ width: chartWidth }}>
                   {showTail ? Array.from({ length: 80 }, (_, index) => <span key={`tail-${index}`} className="absolute inset-y-0" style={{ left: index * columnWidth, width: columnWidth, backgroundColor: `color-mix(in srgb, ${TAIL_COLORS[index % 10]} 8%, transparent)` }} />) : null}
                   {[20, 40, 60].map((column) => <span key={column} className="absolute inset-y-0 border-l border-violet-300/15" style={{ left: column * columnWidth }} />)}
                   {showCoOccurrence ? coOccurrencePairs.map(([left, right], index) => {
@@ -1192,7 +1194,7 @@ function LadderChart({ draws, analysis, showAssist, showGap, showHeat, showTail,
                     const isHot = showHeat && hotNumbers.has(number);
                     const isTrend = showHeat && trendNumbers.has(number);
                     const tailColor = TAIL_COLORS[number % 10];
-                    return <span key={`${draw.period}-${number}`} className={`absolute top-1/2 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-[8px] font-bold tabular-nums ${isSuper ? "z-20 border-pink-100 bg-pink-500 text-white shadow-[0_0_0_2px_rgba(244,114,182,0.35)]" : inLadder ? "z-10 border-violet-100 bg-violet-500 text-white" : isGap ? "border-amber-200 bg-amber-600 text-white" : isHot ? "border-orange-200 bg-orange-500 text-white" : isTrend ? "border-emerald-200 bg-emerald-500 text-white" : "border-slate-500 bg-slate-800 text-slate-300"}`} style={{ left: (number - 1) * columnWidth + columnWidth / 2, boxShadow: showTail ? `inset 0 -2px 0 ${tailColor}` : undefined }}>{String(number).padStart(2, "0")}</span>;
+                    return <span key={`${draw.period}-${number}`} className={`absolute top-1/2 flex h-6 w-6 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-[9px] font-bold tabular-nums ${isSuper ? "z-20 border-pink-100 bg-pink-500 text-white shadow-[0_0_0_2px_rgba(244,114,182,0.35)]" : inLadder ? "z-10 border-violet-100 bg-violet-500 text-white" : isGap ? "border-amber-200 bg-amber-600 text-white" : isHot ? "border-orange-200 bg-orange-500 text-white" : isTrend ? "border-emerald-200 bg-emerald-500 text-white" : "border-slate-500 bg-slate-800 text-slate-300"}`} style={{ left: (number - 1) * columnWidth + columnWidth / 2, boxShadow: showTail ? `inset 0 -2px 0 ${tailColor}` : undefined }}>{String(number).padStart(2, "0")}</span>;
                   })}
                 </div>
               </div>
@@ -1215,13 +1217,13 @@ function LadderChart({ draws, analysis, showAssist, showGap, showHeat, showTail,
 }
 
 function NumberTrendBoard({ draws, analysis }: { draws: DrawSnapshot[]; analysis: TechnicalAnalysisData }) {
-  const [showAssist, setShowAssist] = useState(false);
+  const [showAssist, setShowAssist] = useState(true);
   const [showGap, setShowGap] = useState(true);
   const [showHighEnergy, setShowHighEnergy] = useState(true);
   const [showLadder, setShowLadder] = useState(true);
   const [showHeat, setShowHeat] = useState(true);
   const [showTail, setShowTail] = useState(true);
-  const [showCoOccurrence, setShowCoOccurrence] = useState(true);
+  const [showCoOccurrence, setShowCoOccurrence] = useState(false);
   const recent = draws.slice(0, 30);
   const shortWindow = recent.slice(0, 10);
   const stats = useMemo(() => {
@@ -1275,12 +1277,12 @@ function NumberTrendBoard({ draws, analysis }: { draws: DrawSnapshot[]; analysis
   return (
     <details open className="mt-4 rounded-2xl border border-fuchsia-300/25 bg-slate-950/55 p-3">
       <summary className="cursor-pointer list-none text-sm font-semibold text-fuchsia-100">
-        號碼走勢與標記圖層
-        <span className="float-right text-[10px] font-normal text-muted-foreground">近期軌跡・遺漏・階梯</span>
+        號碼走勢與技術分析圖層
+        <span className="float-right text-[10px] font-normal text-muted-foreground">一圖整合・可勾選圖層</span>
       </summary>
       <div className="mt-3 flex flex-wrap gap-2 border-b border-fuchsia-300/15 pb-3 text-[11px]">
         {([
-          ["輔助標記", showAssist, setShowAssist],
+          ["開獎號碼", showAssist, setShowAssist],
           ["遺漏", showGap, setShowGap],
           ["標記超獎高能", showHighEnergy, setShowHighEnergy],
           ["標記超獎階梯", showLadder, setShowLadder],

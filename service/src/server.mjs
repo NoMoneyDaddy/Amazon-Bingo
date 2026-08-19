@@ -24,7 +24,7 @@ const retentionDays = 7;
 const persistedHistoryLimit = 2500;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
-const reproducibilityVersion = 'bingo-research-v81-strict-evidence-ensemble';
+const reproducibilityVersion = 'bingo-research-v82-long-window-invalidation';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -3109,7 +3109,7 @@ function hasCompleteProfitabilityEvaluation(profitability) {
     && profitability.length > 0
     && profitability.every((play) => ['best', 'fixed', 'follow'].every((mode) => {
       const result = play?.[mode];
-      return Number(result?.samples || 0) > 0
+      return Number(result?.samples || 0) >= Math.min(profitabilityBacktestWindow, 20)
         && Array.isArray(result?.periodResults)
         && result.periodResults.length > 0;
     }));

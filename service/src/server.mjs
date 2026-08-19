@@ -83,6 +83,7 @@ const formalModelCacheTtlMs = 15 * 60 * 1000;
 const sourceRuntimeStats = new Map();
 let redisClient;
 let redisConnectPromise;
+let priorityResponseInFlight;
 let computationProgress = {
   status: 'idle',
   stage: 'idle',
@@ -3796,6 +3797,36 @@ function writeLatestResponseCache(key, body) {
   return body;
 }
 
+async function getPriorityResponse(castingAt = '') {
+  if (!priorityResponseInFlight) {
+    priorityResponseInFlight = (async () => {
+      const persistedForPriority = await readPersistedCached(persistedHistoryLimit);
+      // 即時入口只讀保存快照；模型與回測交給 Worker，避免每次首頁同步在 API 容器重算造成記憶體峰值。
+      const prioritySnapshot = persistedForPriority[0]
+        ? {
+            ...persistedForPriority[0],
+            history: compactHistoryForResponse(selectRecentHistory(persistedForPriority, retentionDays).slice(0, fastResponseHistoryLimit), quickDecisionBacktestWindow),
+          }
+        : await latest(1, [], castingAt, { deferLatestModel: true, deferEvaluationModels: true });
+      const quickHistory = prioritySnapshot.history || [prioritySnapshot];
+      const quickIntegrity = quickBacktestLeakageGuard(quickHistory, quickDecisionBacktestWindow);
+      void readPersistedCached(persistedHistoryLimit)
+        .then((rows) => refreshInBackground(rows, 1))
+        .catch(() => undefined);
+      const quickEvaluation = fastProfitabilityEvaluation(quickHistory, quickDecisionBacktestWindow);
+      return writeLatestResponseCache('latest-priority', {
+        ...prioritySnapshot,
+        history: quickHistory,
+        profitabilityEvaluation: quickEvaluation,
+        quickBacktestIntegrity: quickIntegrity,
+        evaluationMode: 'quick',
+        modelStatus: prioritySnapshot.models?.length ? 'formal' : 'queued',
+      });
+    })().finally(() => { priorityResponseInFlight = undefined; });
+  }
+  return priorityResponseInFlight;
+}
+
 function nextDrawAt(now = new Date()) {
   const taipei = new Date(now.getTime() + 8 * 60 * 60 * 1000);
   const year = taipei.getUTCFullYear(); const month = taipei.getUTCMonth(); const day = taipei.getUTCDate();
@@ -3868,30 +3899,7 @@ const server = http.createServer(async (req, res) => {
       if (priorityRefresh && daysOverride === 1) {
         const cachedPriority = readLatestResponseCache('latest-priority');
         if (cachedPriority) return send(res, 200, cachedPriority, req);
-        const persistedForPriority = await readPersistedCached(persistedHistoryLimit);
-        // 即時入口只讀保存快照；模型與回測交給 Worker，避免每次首頁同步在 API 容器重算造成記憶體峰值。
-        const prioritySnapshot = persistedForPriority[0]
-          ? {
-              ...persistedForPriority[0],
-              history: compactHistoryForResponse(selectRecentHistory(persistedForPriority, retentionDays).slice(0, fastResponseHistoryLimit), quickDecisionBacktestWindow),
-            }
-          : await latest(1, [], castingAt, { deferLatestModel: true, deferEvaluationModels: true });
-        const quickHistory = prioritySnapshot.history || [prioritySnapshot];
-        const quickIntegrity = quickBacktestLeakageGuard(quickHistory, quickDecisionBacktestWindow);
-        void readPersistedCached(persistedHistoryLimit)
-          .then((rows) => refreshInBackground(rows, 1))
-          .catch(() => undefined);
-        // 臨場判斷不等待完整回測：先回傳模型與最近 10 期快速比較，20 期完整研究交給背景更新。
-        const quickEvaluation = fastProfitabilityEvaluation(quickHistory, quickDecisionBacktestWindow);
-        const priorityResponse = {
-          ...prioritySnapshot,
-          history: quickHistory,
-          profitabilityEvaluation: quickEvaluation,
-          quickBacktestIntegrity: quickIntegrity,
-          evaluationMode: 'quick',
-          modelStatus: prioritySnapshot.models?.length ? 'formal' : 'queued',
-        };
-        return send(res, 200, writeLatestResponseCache('latest-priority', priorityResponse), req);
+        return send(res, 200, await getPriorityResponse(castingAt), req);
       }
       if (responseCacheKey) {
         const cachedResponse = readLatestResponseCache(responseCacheKey);

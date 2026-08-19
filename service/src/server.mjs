@@ -3261,9 +3261,30 @@ function hasRetentionCoverage(history, days = retentionDays) {
 
 function compactHistoryForResponse(history, preserveModelCount = 0) {
   return history.map((item, index) => {
-    if (index <= preserveModelCount) return item;
-    const { models, ...compact } = item;
-    return compact;
+    // 最新快照在 response 根節點已完整提供；歷史列只需保留開獎與必要的模型欄位。
+    // 每期重複帶回完整回測／機率評估會把即時回應膨脹到 30MB 以上，
+    // 同時增加 JSON stringify、gzip 與 API 記憶體峰值。
+    if (index === 0) return item;
+    const {
+      forecastEvaluation,
+      calibratedProbabilityEvaluation,
+      profitabilityEvaluation,
+      zoneProfitabilityEvaluation,
+      technicalAnalysis,
+      sourceHealth,
+      sourceRanking,
+      audit,
+      behaviorAudit,
+      backtestIntegrity,
+      backup,
+      researchEvidence,
+      theoreticalRiskBaseline,
+      models,
+      ...compact
+    } = item;
+    return index <= preserveModelCount && models?.length
+      ? { ...compact, models }
+      : compact;
   });
 }
 

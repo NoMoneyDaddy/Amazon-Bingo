@@ -2162,7 +2162,21 @@ function technicalAnalysis(history = []) {
   const coordinate = (number) => ({ row: Math.floor((number - 1) / 10), column: (number - 1) % 10, quadrant: Math.min(3, Math.floor((number - 1) / 20)) + 1 });
   const diagonalCounts = { downRight: 0, downLeft: 0, total: 0 };
   const quadrantRelations = { same: 0, adjacent: 0, opposite: 0 };
-  ladderPatterns.forEach((_, pattern) => { const values = pattern.split('–').map(Number); for (let index = 0; index + 1 < values.length; index += 1) { const a = coordinate(values[index]); const b = coordinate(values[index + 1]); const rowDelta = b.row - a.row; const columnDelta = b.column - a.column; if (rowDelta === 1 && columnDelta === 1) { diagonalCounts.downRight += 1; diagonalCounts.total += 1; } if (rowDelta === 1 && columnDelta === -1) { diagonalCounts.downLeft += 1; diagonalCounts.total += 1; } const distance = Math.abs(a.quadrant - b.quadrant); if (distance === 0) quadrantRelations.same += 1; else if (distance === 1) quadrantRelations.adjacent += 1; else quadrantRelations.opposite += 1; } });
+  draws.forEach((draw) => {
+    const values = normalizedNumbers(draw);
+    const ladderMembers = new Set(values.filter((value, index) => (index > 0 && value === values[index - 1] + 1) || (index + 1 < values.length && values[index + 1] === value + 1)));
+    const members = [...ladderMembers].sort((a, b) => a - b);
+    for (let left = 0; left < members.length; left += 1) {
+      for (let right = left + 1; right < members.length; right += 1) {
+        const a = coordinate(members[left]); const b = coordinate(members[right]);
+        const rowDelta = b.row - a.row; const columnDelta = b.column - a.column;
+        if (rowDelta === 1 && columnDelta === 1) { diagonalCounts.downRight += 1; diagonalCounts.total += 1; }
+        if (rowDelta === 1 && columnDelta === -1) { diagonalCounts.downLeft += 1; diagonalCounts.total += 1; }
+        const distance = Math.abs(a.quadrant - b.quadrant);
+        if (distance === 0) quadrantRelations.same += 1; else if (distance === 1) quadrantRelations.adjacent += 1; else quadrantRelations.opposite += 1;
+      }
+    }
+  });
   const angleValues = draws.flatMap((draw) => normalizedNumbers(draw).map((number) => 2 * Math.PI * (number - 1) / 80));
   const trigMean = angleValues.length ? { sin: angleValues.reduce((total, angle) => total + Math.sin(angle), 0) / angleValues.length, cos: angleValues.reduce((total, angle) => total + Math.cos(angle), 0) / angleValues.length } : { sin: null, cos: null };
   const regularityNumbers = allNumbers.map((item) => {

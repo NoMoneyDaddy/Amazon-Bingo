@@ -516,6 +516,9 @@ function fourPillars(value) {
   const dayBranch = dayCycle % 12;
   const monthStem = (yearStem % 5 * 2 + lunar.month + 1) % 10;
   const hourStem = (dayStem % 5 * 2 + lunar.hourBranchIndex) % 10;
+  const stems = ['甲', '乙', '丙', '丁', '戊', '己', '庚', '辛', '壬', '癸'];
+  const branches = ['子', '丑', '寅', '卯', '辰', '巳', '午', '未', '申', '酉', '戌', '亥'];
+  const pillarLabel = (stem, branch) => `${stems[stem]}${branches[branch]}`;
   return {
     yearStem, yearBranch: lunar.yearBranchIndex,
     monthStem, monthBranch: lunar.monthBranchIndex,
@@ -523,6 +526,10 @@ function fourPillars(value) {
     hourStem, hourBranch: lunar.hourBranchIndex,
     yearElement: Math.floor(yearStem / 2), monthElement: Math.floor(monthStem / 2),
     dayElement: Math.floor(dayStem / 2), hourElement: Math.floor(hourStem / 2),
+    yearLabel: pillarLabel(yearStem, lunar.yearBranchIndex),
+    monthLabel: pillarLabel(monthStem, lunar.monthBranchIndex),
+    dayLabel: pillarLabel(dayStem, dayBranch),
+    hourLabel: pillarLabel(hourStem, lunar.hourBranchIndex),
   };
 }
 
@@ -547,13 +554,14 @@ function targetInput(snapshot, target, castingAt = reproducibleCastingAt(snapsho
 
 function meihuaCasting(snapshot, target, castingAt) {
   const input = targetInput(snapshot, target, castingAt);
+  const pillars = fourPillars(input.castingAt);
   const lunar = parseChineseCalendarParts(input.castingAt);
-  const yearBranch = ((lunar.year - 4) % 12 + 12) % 12 + 1;
-  const total = yearBranch + lunar.month + lunar.day;
+  const yearBranch = pillars.yearBranch + 1;
+  const total = yearBranch + lunar.month + lunar.day + pillars.dayStem;
   const upper = total % 8 || 8;
   const lower = (total + lunar.hour) % 8 || 8;
   const moving = (total + lunar.hour) % 6 || 6;
-  return { input, upper, lower, moving, formula: `預測時間=${input.castingAt}；年支=${yearBranch}、農曆月=${lunar.month}、日=${lunar.day}、時=${lunar.hour}；上卦=(年支+月+日) mod 8=${upper}；下卦=(年支+月+日+時) mod 8=${lower}；動爻=(年支+月+日+時) mod 6=${moving}。同一預測時刻的時間起卦核心一致；期號與玩法僅作所問事項，各目標再獨立套用研究排序：${input.question}` };
+  return { input, upper, lower, moving, pillars, formula: `預測時間=${input.castingAt}；四柱=${pillars.yearLabel}/${pillars.monthLabel}/${pillars.dayLabel}/${pillars.hourLabel}；上卦=(年支序+農曆月+日+日干序) mod 8=${upper}；下卦再加時支序；動爻再加時支序。同一預測時刻的時間起卦核心一致；期號與玩法僅作所問事項，各目標再獨立套用研究排序：${input.question}` };
 }
 
 function digitalYarrowLine(random, lineIndex) {
@@ -583,39 +591,43 @@ function sixyaoCasting(snapshot, target, castingAt) {
 function luoshuCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
   const time = parseChineseCalendarParts(input.castingAt);
-  const timeSum = time.yearBranch + time.month + time.day + time.hour;
+  const pillars = fourPillars(input.castingAt);
+  const timeSum = time.yearBranch + time.month + time.day + time.hour + pillars.yearStem + pillars.monthStem + pillars.dayStem + pillars.hourStem;
   const luoshu = [[4, 9, 2], [3, 5, 7], [8, 1, 6]];
   const palace = (timeSum + input.targetNo) % 9;
   const center = luoshu[Math.floor(palace / 3)][palace % 3];
-  return { input, luoshu, palace: palace + 1, center, formula: `預測時間=${input.castingAt}；以農曆年支序${time.yearBranch}、月${time.month}、日${time.day}、時辰${time.hour}加玩法序號 mod 9 定洛書宮位=${palace + 1}；宮位數=${center}。期號僅作所問事項：${input.question}` };
+  return { input, luoshu, palace: palace + 1, center, pillars, formula: `預測時間=${input.castingAt}；四柱=${pillars.yearLabel}/${pillars.monthLabel}/${pillars.dayLabel}/${pillars.hourLabel}，連同農曆月日時計算 mod 9 定洛書宮位=${palace + 1}；宮位數=${center}。期號僅作所問事項：${input.question}` };
 }
 
 function numeralGuaCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
   const time = parseChineseCalendarParts(input.castingAt);
-  const sourceDigits = [time.yearBranch, time.month, time.day, time.hour, input.targetNo];
+  const pillars = fourPillars(input.castingAt);
+  const sourceDigits = [time.yearBranch, pillars.yearStem, time.month, pillars.monthStem, time.day, pillars.dayStem, time.hour, pillars.hourStem, input.targetNo];
   const allowed = [1, 4, 5, 6, 8, 9];
   const digits = Array.from({ length: 6 }, (_, index) => allowed[(sourceDigits[index % sourceDigits.length] + index) % allowed.length]);
-  return { input, digits, formula: `預測時間=${input.castingAt}；以農曆年支序${time.yearBranch}、月${time.month}、日${time.day}、時辰${time.hour}與玩法序號建立六個可重算數字：${digits.join('、')}。期號僅作所問事項：${input.question}` };
+  return { input, digits, pillars, formula: `預測時間=${input.castingAt}；以四柱干支序列與農曆月日、時辰及玩法序號建立六個可重算數字：${digits.join('、')}。期號僅作所問事項：${input.question}` };
 }
 
 function qimenCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
   const time = parseChineseCalendarParts(input.castingAt);
-  const timeSum = time.yearBranch + time.month + time.day + time.hour;
+  const pillars = fourPillars(input.castingAt);
+  const timeSum = time.yearBranch + time.month + time.day + time.hour + pillars.yearStem + pillars.monthStem + pillars.dayStem + pillars.hourStem;
   const palace = (timeSum + input.targetNo) % 9 + 1;
   const star = (timeSum + time.hour + input.targetNo) % 9 + 1;
   const door = (timeSum + time.month + input.targetNo) % 8 + 1;
-  return { input, palace, star, door, formula: `預測時間=${input.castingAt}；以農曆年支序${time.yearBranch}、月${time.month}、日${time.day}、時辰${time.hour}建立九宮／九星／八門研究適配=${palace}/${star}/${door}；完整奇門仍需節氣、干支排局，未宣稱完整奇門排盤。` };
+  return { input, palace, star, door, pillars, formula: `預測時間=${input.castingAt}；以四柱=${pillars.yearLabel}/${pillars.monthLabel}/${pillars.dayLabel}/${pillars.hourLabel}建立九宮／九星／八門研究適配=${palace}/${star}/${door}；完整奇門仍需節氣、干支排局，未宣稱完整奇門排盤。` };
 }
 
 function taiyiCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
   const time = parseChineseCalendarParts(input.castingAt);
-  const timeSum = time.yearBranch + time.month + time.day + time.hour;
+  const pillars = fourPillars(input.castingAt);
+  const timeSum = time.yearBranch + time.month + time.day + time.hour + pillars.yearStem + pillars.monthStem + pillars.dayStem + pillars.hourStem;
   const palace = (timeSum + input.targetNo) % 9 + 1;
   const cycle = (timeSum + input.targetNo) % 9;
-  return { input, palace, cycle, formula: `預測時間=${input.castingAt}；以農曆年支序${time.yearBranch}、月${time.month}、日${time.day}、時辰${time.hour}建立太乙行九宮研究索引=${palace}／${cycle}。完整太乙仍需積年、局數等排局資料，期號僅作所問事項：${input.question}` };
+  return { input, palace, cycle, pillars, formula: `預測時間=${input.castingAt}；以四柱=${pillars.yearLabel}/${pillars.monthLabel}/${pillars.dayLabel}/${pillars.hourLabel}建立太乙行九宮研究索引=${palace}／${cycle}。完整太乙仍需積年、局數等排局資料，期號僅作所問事項：${input.question}` };
 }
 
 function statisticalCasting(snapshot, target) {

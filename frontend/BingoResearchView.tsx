@@ -464,7 +464,7 @@ function hasFormalModels(models: Model[]): boolean {
   return models.some((model) => !isLocalFallbackModel(model));
 }
 
-const HISTORY_WINDOW_DAYS = 30;
+const HISTORY_WINDOW_DAYS = 14;
 const LATEST_REFRESH_MS = 5_000;
 const HISTORY_REFRESH_MS = 5 * 60_000;
 const SYNC_POLICY = {

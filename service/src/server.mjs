@@ -13,6 +13,7 @@ const defaultHistoryDays = 7;
 const maxModelHistory = 300;
 const liveModelHistoryLimit = 180;
 const profitabilityBacktestWindow = 20;
+const quickDecisionBacktestWindow = 5;
 // 回測評估含 prequential 與校準巢狀迴圈；限制輸入窗口避免 300 期造成 O(n³) Worker 阻塞。
 const evaluationHistoryLimit = 60;
 // 盈利回測使用 20 期；模型調參另用較長樣本，並保留最新 20 期作為未參與調參的隔離窗口。
@@ -2897,7 +2898,7 @@ function evaluateInWorkerWithTimeout(history = [], timeoutMs = 12000) {
   return Promise.race([evaluateInWorker(history), timeout]).finally(() => clearTimeout(timer));
 }
 
-function fastProfitabilityEvaluation(history = []) {
+function fastProfitabilityEvaluation(history = [], windowSize = quickDecisionBacktestWindow) {
   const plays = [
     { key: 'size', label: '猜大小' }, { key: 'oddEven', label: '猜單雙' }, { key: 'superNumber', label: '超級獎號' },
     ...Array.from({ length: 10 }, (_, index) => ({ key: `${index + 1}星`, label: `${index + 1} 星` })),
@@ -2910,7 +2911,7 @@ function fastProfitabilityEvaluation(history = []) {
   const predictionFor = (model, key) => key === 'size' ? model?.official?.size : key === 'oddEven' ? model?.official?.oddEven : key === 'superNumber' ? model?.official?.superNumber : model?.official?.basic?.[key] || [];
   const evaluate = (play, mode) => {
     const anchor = bestModelFor(play.key);
-    const periodResults = history.slice(0, profitabilityBacktestWindow).map((actual, index) => {
+    const periodResults = history.slice(0, windowSize).map((actual, index) => {
       const historical = (history[index + 1]?.models || []).find((model) => model.name === anchor?.name);
       const model = historical || anchor;
       const predicted = predictionFor(model, play.key);
@@ -2923,7 +2924,7 @@ function fastProfitabilityEvaluation(history = []) {
     });
     const profit = periodResults.reduce((sum, item) => sum + item.net, 0);
     const wins = periodResults.filter((item) => item.profitable).length;
-    const result = { mode, model: anchor?.name || '—', samples: periodResults.length, wins, profit, payoutTotal: periodResults.reduce((sum, item) => sum + item.payout, 0), costTotal: periodResults.length * betCostForTarget(play.key), matches: periodResults.reduce((sum, item) => sum + item.matches, 0), targetCount: periodResults.reduce((sum, item) => sum + item.targetCount, 0), averageProfit: periodResults.length ? profit / periodResults.length : null, positiveExpected: periodResults.length > 0 && profit / periodResults.length > 0, profitRate: periodResults.length ? wins / periodResults.length : null, prediction: predictionFor(anchor, play.key), periodResults, fallback: '快速回測：Worker 超時，先使用已保存模型快照' };
+    const result = { mode, model: anchor?.name || '—', samples: periodResults.length, wins, profit, payoutTotal: periodResults.reduce((sum, item) => sum + item.payout, 0), costTotal: periodResults.length * betCostForTarget(play.key), matches: periodResults.reduce((sum, item) => sum + item.matches, 0), targetCount: periodResults.reduce((sum, item) => sum + item.targetCount, 0), averageProfit: periodResults.length ? profit / periodResults.length : null, positiveExpected: periodResults.length > 0 && profit / periodResults.length > 0, profitRate: periodResults.length ? wins / periodResults.length : null, prediction: predictionFor(anchor, play.key), periodResults, fallback: `快速判斷：最近 ${windowSize} 期；完整 ${profitabilityBacktestWindow} 期回測在背景更新`, evaluationMode: 'quick' };
     return result;
   };
   return plays.map((play) => { const fixed = evaluate(play, 'fixed'); const follow = evaluate(play, 'follow'); return { ...play, metricLabel: '盈利機率', best: fixed, fixed, follow }; });
@@ -3514,9 +3515,14 @@ const server = http.createServer(async (req, res) => {
         void readPersistedCached(persistedHistoryLimit)
           .then((rows) => refreshInBackground(rows, 1))
           .catch(() => undefined);
-        const priorityReady = prioritySnapshot.models?.length
-          && hasCompleteProfitabilityEvaluation(prioritySnapshot.profitabilityEvaluation);
-        return send(res, 200, { ...prioritySnapshot, modelStatus: priorityReady ? 'formal' : 'queued' }, req);
+        // 臨場判斷不等待完整回測：先回傳模型與最近 5 期快速比較，20 期完整研究交給背景更新。
+        const quickEvaluation = fastProfitabilityEvaluation(prioritySnapshot.history || [prioritySnapshot], quickDecisionBacktestWindow);
+        return send(res, 200, {
+          ...prioritySnapshot,
+          profitabilityEvaluation: quickEvaluation,
+          evaluationMode: 'quick',
+          modelStatus: prioritySnapshot.models?.length ? 'formal' : 'queued',
+        }, req);
       }
       if (responseCacheKey) {
         const cachedResponse = readLatestResponseCache(responseCacheKey);

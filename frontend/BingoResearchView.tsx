@@ -117,6 +117,7 @@ type DrawSnapshot = {
   fetchedAt?: number;
   history?: DrawSnapshot[];
   historyDays?: number;
+  evaluationMode?: "quick" | "full" | "background";
   modelStatus?: "formal" | "queued" | "error" | "unavailable";
   modelError?: string;
   predictionTargetPeriod?: string;
@@ -389,6 +390,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     models: Array.isArray(value.models) ? value.models.map(normalizeModel) : [],
     fetchedAt: value.fetchedAt || 0,
     historyDays: value.historyDays,
+    evaluationMode: value.evaluationMode,
     modelStatus: value.modelStatus,
     modelError: value.modelError,
     predictionTargetPeriod: value.predictionTargetPeriod || "",
@@ -1055,7 +1057,7 @@ function ProfitabilityDetail({
       <span className={best.positiveExpected ? "text-emerald-300" : "text-rose-300"}>{best.positiveExpected ? "正期望：平均每期淨盈利" : "未達正期望：僅供比較"}</span>
       <div className="col-span-full mt-1 border-t border-slate-800 pt-2">
         <div className="flex items-center justify-between gap-2">
-          <span className="font-semibold text-slate-200">最近 20 期逐期結果</span>
+          <span className="font-semibold text-slate-200">最近 {best.samples || 0} 期逐期結果</span>
           <span className="text-[9px] text-muted-foreground">綠色＝盈利／紅色＝未盈利</span>
         </div>
         {best.periodResults?.length ? (
@@ -1898,7 +1900,7 @@ export function BingoResearchView() {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       <div><span className="block text-[10px] text-muted-foreground">最新開獎</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.period ? `第 ${latest.period} 期` : "同步中"}</strong></div>
                       <div><span className="block text-[10px] text-muted-foreground">預測目標</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.predictionTargetPeriod ? `第 ${latest.predictionTargetPeriod} 期` : "同步中"}</strong></div>
-                      <div><span className="block text-[10px] text-muted-foreground">回測樣本</span><strong className="text-sm tabular-nums text-cyan-50">20 期</strong></div>
+                      <div><span className="block text-[10px] text-muted-foreground">判斷樣本</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.evaluationMode === "quick" ? "快速 5 期" : latest?.profitabilityEvaluation?.[0]?.best?.samples ? `${latest.profitabilityEvaluation[0].best.samples} 期` : "背景計算"}</strong></div>
                       <div><span className="block text-[10px] text-muted-foreground">目前模式</span><strong className="text-sm text-cyan-50">{profitStrategy === "fixed" ? "固定連買" : "連續跟買"}</strong></div>
                     </div>
                     <details className="mt-3 border-t border-cyan-300/15 pt-2">
@@ -1927,8 +1929,8 @@ export function BingoResearchView() {
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-cyan-300/15 pt-2">
                       <span className="text-[10px] font-semibold text-cyan-200">切換回測模式</span>
                       <div className="flex min-h-10 w-full rounded-lg border border-cyan-300/25 bg-background/40 p-1 sm:w-auto" role="group" aria-label="回測模式">
-                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "fixed" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => changeProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定連買 20 期</button>
-                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "follow" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => changeProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>連續跟買 20 期</button>
+                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "fixed" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => changeProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定連買</button>
+                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "follow" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => changeProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>連續跟買</button>
                       </div>
                     </div>
                   </div>
@@ -2348,7 +2350,7 @@ export function BingoResearchView() {
                   </div>
                 </details>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
-                  盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。模型在回測視窗開始前決定，不看完 20 期結果才挑選。賺賠金額以每期 25 元成本、名目單注派彩計算；官方均分制需要同期期中獎注數，故不把研究值當成保證實領額。樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
+                  盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。首頁先用最近 5 期快速判斷，完整 20 期回測在背景更新；模型在各自回測視窗開始前決定。賺賠金額以每期 25 元成本、名目單注派彩計算；官方均分制需要同期期中獎注數，故不把研究值當成保證實領額。樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
                 </div>
                   </div>
                 </details>

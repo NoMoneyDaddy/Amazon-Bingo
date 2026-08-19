@@ -1909,7 +1909,7 @@ export function BingoResearchView() {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       <div><span className="block text-[10px] text-muted-foreground">最新開獎</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.period ? `第 ${latest.period} 期` : "同步中"}</strong></div>
                       <div><span className="block text-[10px] text-muted-foreground">預測目標</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.predictionTargetPeriod ? `第 ${latest.predictionTargetPeriod} 期` : "同步中"}</strong></div>
-                      <div><span className="block text-[10px] text-muted-foreground">判斷樣本</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.evaluationMode === "quick" ? "快速 5 期" : latest?.profitabilityEvaluation?.[0]?.best?.samples ? `${latest.profitabilityEvaluation[0].best.samples} 期` : "背景計算"}</strong></div>
+                      <div><span className="block text-[10px] text-muted-foreground">判斷樣本</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.evaluationMode === "quick" ? "快速 10 期" : latest?.profitabilityEvaluation?.[0]?.best?.samples ? `${latest.profitabilityEvaluation[0].best.samples} 期` : "背景計算"}</strong></div>
                       <div><span className="block text-[10px] text-muted-foreground">目前模式</span><strong className="text-sm text-cyan-50">{profitStrategy === "fixed" ? "固定連買" : "連續跟買"}</strong></div>
                     </div>
                     <details className="mt-3 border-t border-cyan-300/15 pt-2">
@@ -2371,7 +2371,7 @@ export function BingoResearchView() {
                   </div>
                 </details>
                 <div className="mt-3 rounded-xl border border-amber-300/30 bg-amber-300/10 p-3 text-xs leading-5 text-amber-100">
-                  盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。首頁先用最近 5 期快速判斷，完整 20 期回測在背景更新；模型在各自回測視窗開始前決定。賺賠金額以每期 25 元成本、名目單注派彩計算；官方均分制需要同期期中獎注數，故不把研究值當成保證實領額。樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
+                  盈利機率：正盈利期數 ÷ 有效回測期數 × 100%；打平不算盈利。首頁先用最近 10 期快速判斷，完整 20 期回測在背景更新；模型在各自回測視窗開始前決定。賺賠金額以每期 25 元成本、名目單注派彩計算；官方均分制需要同期期中獎注數，故不把研究值當成保證實領額。樣本不足或舊資料沒有保存細節時，畫面顯示「—」，不把未知資料當成 0%。
                 </div>
                   </div>
                 </details>

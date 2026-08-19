@@ -13,7 +13,7 @@ const defaultHistoryDays = 7;
 const maxModelHistory = 300;
 const liveModelHistoryLimit = 180;
 const profitabilityBacktestWindow = 20;
-const quickDecisionBacktestWindow = 5;
+const quickDecisionBacktestWindow = 10;
 // 回測評估含 prequential 與校準巢狀迴圈；限制輸入窗口避免 300 期造成 O(n³) Worker 阻塞。
 const evaluationHistoryLimit = 60;
 // 盈利回測使用 20 期；模型調參另用較長樣本，並保留最新 20 期作為未參與調參的隔離窗口。
@@ -3556,7 +3556,7 @@ const server = http.createServer(async (req, res) => {
         void readPersistedCached(persistedHistoryLimit)
           .then((rows) => refreshInBackground(rows, 1))
           .catch(() => undefined);
-        // 臨場判斷不等待完整回測：先回傳模型與最近 5 期快速比較，20 期完整研究交給背景更新。
+        // 臨場判斷不等待完整回測：先回傳模型與最近 10 期快速比較，20 期完整研究交給背景更新。
         const quickEvaluation = fastProfitabilityEvaluation(prioritySnapshot.history || [prioritySnapshot], quickDecisionBacktestWindow);
         return send(res, 200, {
           ...prioritySnapshot,

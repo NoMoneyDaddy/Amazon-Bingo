@@ -24,7 +24,7 @@ const retentionDays = 7;
 const persistedHistoryLimit = 2500;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
-const reproducibilityVersion = 'bingo-research-v79-ranked-candidate-ensemble';
+const reproducibilityVersion = 'bingo-research-v80-adaptive-policy-evolution';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -2085,11 +2085,28 @@ function researchAudit(draws = []) {
   };
 }
 
+function adaptiveEvolutionCandidates(history = [], validationWindow = 0) {
+  // 固定兩個權重不足以稱為演化；每輪保留零權重基準、廣域探索點，
+  // 再依樣本量加入較細的局部搜尋點。候選集合完全由資料摘要決定，
+  // 因此同一份歷史可以重現同一輪搜尋，不會偷偷使用未來資料。
+  const valid = history.slice(profileHoldoutWindow, profileHoldoutWindow + validationWindow);
+  const recentRates = Array.from({ length: 80 }, (_, index) => {
+    const number = index + 1;
+    return valid.length ? valid.reduce((sum, draw) => sum + ((draw.numbers || []).some((value) => Number(value) === number) ? 1 : 0), 0) / valid.length : 0.25;
+  });
+  const mean = recentRates.reduce((sum, value) => sum + value, 0) / Math.max(1, recentRates.length);
+  const dispersion = recentRates.reduce((sum, value) => sum + Math.abs(value - mean), 0) / Math.max(1, recentRates.length);
+  const grid = validationWindow >= 24 ? [0, 0.04, 0.08, 0.12, 0.18, 0.24, 0.32, 0.40, 0.48] : [0, 0.08, 0.16, 0.24, 0.32, 0.40];
+  // 短樣本或高度波動時，加入保守點並避免把近期噪音放大成高權重。
+  if (validationWindow < minimumValidationSamples || dispersion > 0.08) grid.push(0.02, 0.06);
+  return [...new Set(grid)].sort((a, b) => a - b);
+}
+
 function evolveProfiles(history = []) {
   // 只用最新 10 期以外的逐期樣本；每一折只計算一次 10 星排序，再取前綴供各星級使用。
   // 這避免舊版「每個方法／玩法／權重都重建整套模型」造成 Worker 超時，超時後前端才會誤用備援。
-  const candidates = [0.08, 0.24];
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - profileHoldoutWindow - 1));
+  const candidates = adaptiveEvolutionCandidates(history, validationWindow);
   const validationRows = history.slice(profileHoldoutWindow, profileHoldoutWindow + validationWindow);
   const tunableTargets = ['size', 'oddEven', 'superNumber', ...Array.from({ length: 10 }, (_, index) => `${index + 1}星`)];
   const methods = [
@@ -2104,7 +2121,7 @@ function evolveProfiles(history = []) {
     ['趨勢加權回歸基線', 'regression', 223],
   ];
   if (validationRows.length < minimumValidationSamples) {
-    return Object.fromEntries(methods.map(([method]) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0, validationSamples: validationRows.length, score: null, baselineRate: null, qualityScore: 0, eligible: false, status: `樣本不足（需要 ${minimumValidationSamples} 期），只保留研究結果` }])) }]));
+    return Object.fromEntries(methods.map(([method]) => [method, { targets: Object.fromEntries(tunableTargets.map((target) => [target, { empiricalWeight: 0, validationSamples: validationRows.length, score: null, baselineRate: null, qualityScore: 0, eligible: false, candidateSearch: { candidates, selected: 0, iteration: 'holdout-insufficient' }, status: `樣本不足（需要 ${minimumValidationSamples} 期），只保留研究結果` }])) }]));
   }
   const scores = Object.fromEntries(methods.map(([method]) => [method, Object.fromEntries(tunableTargets.map((target) => [target, candidates.map((empiricalWeight) => ({ empiricalWeight, wins: 0, trials: 0, profit: 0, payout: 0, matches: 0, baselineMatches: 0, baselineSum: 0 }))]))]));
   for (const [method, kind, seedOffset] of methods) {
@@ -2161,7 +2178,7 @@ function evolveProfiles(history = []) {
     const best = results.sort((a, b) => b.qualityScore - a.qualityScore || b.confidence - a.confidence || b.score - a.score)[0];
     const evidenceShrink = best?.eligible ? clamp((best.validationSamples - minimumValidationSamples + 1) / Math.max(1, profileValidationWindow - minimumValidationSamples + 1), 0.25, 1) : 0;
     const effectiveWeight = best?.eligible ? Number((best.empiricalWeight * evidenceShrink).toFixed(4)) : 0;
-    return [target, { ...(best || { empiricalWeight: 0, trials: 0, score: null, confidence: 0, qualityScore: 0 }), empiricalWeight: effectiveWeight, selectedWeight: best?.empiricalWeight || 0, evidenceShrink, eligible: Boolean(best?.eligible), status: best?.eligible ? `逐期樣本外 ${validationWindow} 期／品質分數 ${best.qualityScore.toFixed(3)}／納入收縮權重` : `逐期樣本外 ${validationWindow} 期／未通過超額閘門，只作研究比較` }];
+    return [target, { ...(best || { empiricalWeight: 0, trials: 0, score: null, confidence: 0, qualityScore: 0 }), empiricalWeight: effectiveWeight, selectedWeight: best?.empiricalWeight || 0, evidenceShrink, eligible: Boolean(best?.eligible), candidateSearch: { candidates, selected: best?.empiricalWeight || 0, iteration: `walk-forward-${validationWindow}-${candidates.length}` }, status: best?.eligible ? `逐期樣本外 ${validationWindow} 期／在 ${candidates.length} 組候選中選出 ${best.empiricalWeight.toFixed(2)}／品質分數 ${best.qualityScore.toFixed(3)}／納入收縮權重` : `逐期樣本外 ${validationWindow} 期／在 ${candidates.length} 組候選中未通過超額閘門，只作研究比較` }];
   })) }]));
 }
 

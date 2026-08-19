@@ -39,6 +39,9 @@ type Evolution = Record<
     estimatedRate?: number | null;
     confidence?: number | null;
     baselineRate?: number | null;
+    selectedWeight?: number;
+    evidenceShrink?: number;
+    candidateSearch?: { candidates: number[]; selected: number; iteration: string };
     eligible?: boolean;
     status?: string;
   }
@@ -2257,6 +2260,7 @@ export function BingoResearchView() {
                               const score = model.calculation?.evolution?.[target]?.score;
                               const baselineRate = model.calculation?.evolution?.[target]?.baselineRate;
                               const eligible = model.calculation?.evolution?.[target]?.eligible;
+                              const candidateSearch = model.calculation?.evolution?.[target]?.candidateSearch;
                               return (
                                 <div key={target} className="rounded-xl border border-amber-300/20 bg-card/70 px-2.5 py-2.5 text-[11px]">
                                   <div className="flex items-center justify-between gap-2">
@@ -2269,6 +2273,7 @@ export function BingoResearchView() {
                                   </div>
                                   <div className={`mt-1.5 rounded-md px-1.5 py-1 ${eligible ? "bg-emerald-300/10 text-emerald-100" : "bg-slate-700/40 text-muted-foreground"}`}>{eligible ? "已超出基線，取得聚合權重" : "未超出基線，不取得聚合權重"}</div>
                                   <div className="mt-1.5 rounded-md bg-slate-700/40 px-1.5 py-1 text-muted-foreground"><span className="text-slate-200">玩法適配：</span>{model.calculation?.targetRules?.[target] || "—"}</div>
+                                  <div className="mt-1.5 rounded-md bg-indigo-300/10 px-1.5 py-1 text-indigo-100/80">自進化搜尋：{candidateSearch ? `${candidateSearch.candidates.length} 組候選／選 ${candidateSearch.selected.toFixed(2)}／${candidateSearch.iteration}` : "—"}</div>
                                   <div className="mt-1.5 text-muted-foreground">研究描述：{result.sumBand} · {result.oddEvenCount} · {result.highLowCount}</div>
                                 </div>
                               );

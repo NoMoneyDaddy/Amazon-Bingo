@@ -59,7 +59,8 @@ const githubToken = process.env.GITHUB_TOKEN || '';
 const githubRepo = process.env.GITHUB_BACKUP_REPO || 'NoMoneyDaddy/Amazon-Bingo';
 const githubBackupPath = process.env.GITHUB_BACKUP_PATH || 'backups/bingo-model-profile.json';
 const upstreamTimeoutMs = 15_000;
-const sourceFetchConcurrency = 3;
+// API 只做即時來源探測；降低同時保留的來源回應數，避免部署／冷啟動時的記憶體尖峰。
+const sourceFetchConcurrency = 2;
 const redisUrl = process.env.REDIS_URL || '';
 const redisLockTtlMs = 180_000;
 const workerMode = process.env.WORKER_MODE === '1';
@@ -3690,11 +3691,20 @@ function refreshInBackground(persisted, days = 1) {
   if (redisUrl) {
     void enqueueRefreshJob(persisted, days)
       .then((queued) => {
-        if (!queued) return executeRefreshJob(persisted, days);
+        if (!queued) {
+          // 有 Redis 時 API 不得退回本機重型計算；否則來源同步失敗會把 API 容器推到記憶體驅逐。
+          console.error(JSON.stringify({ event: 'background-queue-unavailable', action: 'keep-cache-and-retry' }));
+        }
         return null;
       })
       .catch((error) => console.error(JSON.stringify({ event: 'background-enqueue-failed', message: error instanceof Error ? error.message : String(error) })))
-      .finally(() => { refreshInFlight = false; });
+      .finally(() => {
+        refreshInFlight = false;
+        if (evaluationRefreshQueued) {
+          evaluationRefreshQueued = false;
+          setImmediate(() => refreshInBackground(persisted, 1));
+        }
+      });
     return;
   }
   void executeRefreshJob(persisted, days)

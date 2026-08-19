@@ -1468,6 +1468,7 @@ export function BingoResearchView() {
         const trials = evidence.reduce((sum, item) => sum + Number(item.trials || item.validationSamples || 0), 0);
         const wins = evidence.reduce((sum, item) => sum + Number(item.wins || 0), 0);
         const scores = evidence.map((item) => Number(item.score)).filter(Number.isFinite);
+        const eligible = evidence.filter((item) => item.eligible === true).length;
         const weight = Number(model.calculation?.empiricalWeight);
         return {
           model,
@@ -1475,11 +1476,17 @@ export function BingoResearchView() {
           wins,
           rate: trials ? wins / trials : null,
           score: scores.length ? scores.reduce((sum, value) => sum + value, 0) / scores.length : null,
+          eligible,
           weight: Number.isFinite(weight) ? weight : null,
           selected: selectedCount.get(model.name) || 0,
         };
       })
-      .sort((a, b) => (b.selected - a.selected) || ((b.score ?? -Infinity) - (a.score ?? -Infinity)) || ((b.weight ?? -Infinity) - (a.weight ?? -Infinity)) || a.model.name.localeCompare(b.model.name));
+      // 排名以樣本外回測分數為主；「採用玩法」只是附加資訊，不能凌駕實際績效。
+      .sort((a, b) => ((b.score ?? -Infinity) - (a.score ?? -Infinity))
+        || (b.eligible - a.eligible)
+        || (b.trials - a.trials)
+        || ((b.weight ?? -Infinity) - (a.weight ?? -Infinity))
+        || a.model.name.localeCompare(b.model.name));
   }, [bestPlays, latestModels, profitStrategy]);
   const technicalAnalysisFallback = useMemo(() => {
     const draws = sorted.slice(0, 30);
@@ -1864,7 +1871,7 @@ export function BingoResearchView() {
                     <details className="mt-3 border-t border-cyan-300/15 pt-2">
                       <summary className="cursor-pointer select-none text-xs font-semibold text-cyan-100">模型排名與透明度 <span className="ml-1 text-[10px] font-normal text-muted-foreground">{modelRankings.length} 個模型</span></summary>
                       <div className="mt-2 space-y-1.5">
-                        {modelRankings.slice(0, 8).map((item, index) => (
+                        {modelRankings.map((item, index) => (
                           <div key={item.model.name} className="rounded-lg border border-cyan-300/15 bg-background/35 px-2.5 py-2 text-[10px] leading-4">
                             <div className="flex items-center justify-between gap-2">
                               <span className="min-w-0 truncate font-semibold text-slate-100">{index + 1}. {item.model.name}</span>
@@ -1874,13 +1881,15 @@ export function BingoResearchView() {
                               <span>驗證樣本 {item.trials || "—"}</span>
                               <span>驗證命中 {item.trials ? `${item.wins}/${item.trials}` : "—"}</span>
                               <span>驗證率 {item.rate == null ? "—" : `${(item.rate * 100).toFixed(1)}%`}</span>
+                              <span>樣本外分數 {item.score == null ? "—" : `${(item.score * 100).toFixed(1)}%`}</span>
+                              <span>通過閘門 {item.eligible || "—"}</span>
                               <span>採用玩法 {item.selected || "—"}</span>
                             </div>
                           </div>
                         ))}
                         {!modelRankings.length ? <div className="rounded-lg border border-dashed border-cyan-300/20 px-2.5 py-2 text-muted-foreground">模型排名資料尚未回傳</div> : null}
                       </div>
-                      <p className="mt-2 text-[10px] leading-4 text-muted-foreground">排名優先看被玩法選用次數，再看樣本外驗證分數；缺少驗證樣本時顯示「—」，不把未知資料當成 0。</p>
+                      <p className="mt-2 text-[10px] leading-4 text-muted-foreground">排名依樣本外回測分數、通過驗證閘門數與有效樣本排序；採用玩法次數只作參考。缺少驗證樣本時顯示「—」，不把未知資料當成 0。</p>
                     </details>
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-cyan-300/15 pt-2">
                       <span className="text-[10px] font-semibold text-cyan-200">切換回測模式</span>

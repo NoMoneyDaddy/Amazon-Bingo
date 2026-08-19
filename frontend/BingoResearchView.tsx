@@ -157,6 +157,14 @@ type DrawSnapshot = {
     passed: boolean;
     rule: string;
   };
+  quickBacktestIntegrity?: {
+    window: number;
+    checkedTargets: number;
+    excludedSamples: number;
+    violations: number;
+    passed: boolean;
+    rule: string;
+  };
   forecastEvaluation?: Array<{
     name: string;
     samples: number;
@@ -398,6 +406,7 @@ function normalizeSnapshot(value: Partial<DrawSnapshot>): DrawSnapshot {
     audit: value.audit,
     behaviorAudit: value.behaviorAudit,
     backtestIntegrity: value.backtestIntegrity,
+    quickBacktestIntegrity: value.quickBacktestIntegrity,
     forecastEvaluation: Array.isArray(value.forecastEvaluation) ? value.forecastEvaluation : [],
     calibratedProbabilityEvaluation: Array.isArray(value.calibratedProbabilityEvaluation) ? value.calibratedProbabilityEvaluation : [],
     theoreticalRiskBaseline: value.theoreticalRiskBaseline,
@@ -2155,6 +2164,18 @@ export function BingoResearchView() {
                     </div>
                     <p className="mt-2 text-xs text-emerald-100">已檢查 {latest.backtestIntegrity.checkedTargets} 個目標期；每個目標只使用更早資料，歷史模型不重用未驗證快取。</p>
                     <p className="mt-1 text-[11px] text-muted-foreground">{latest.backtestIntegrity.rule}</p>
+                  </div>
+                )}
+                {latest?.quickBacktestIntegrity && (
+                  <div className="mt-3 rounded-2xl border border-cyan-300/25 bg-cyan-300/10 p-4 text-sm leading-6 text-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <strong className="text-cyan-100">快速回測防洩漏閘門</strong>
+                      <span className={`rounded-full px-2 py-1 text-xs tabular-nums ${latest.quickBacktestIntegrity.passed ? "bg-emerald-300/15 text-emerald-100" : "bg-rose-300/15 text-rose-100"}`}>
+                        {latest.quickBacktestIntegrity.passed ? "通過" : `發現 ${latest.quickBacktestIntegrity.violations} 項問題`}
+                      </span>
+                    </div>
+                    <p className="mt-2 text-xs text-cyan-100">已檢查最近 {latest.quickBacktestIntegrity.window} 期；排除 {latest.quickBacktestIntegrity.excludedSamples} 期缺少歷史模型的樣本。</p>
+                    <p className="mt-1 text-[11px] text-muted-foreground">{latest.quickBacktestIntegrity.rule}</p>
                   </div>
                 )}
                 {latest?.forecastEvaluation?.length ? (

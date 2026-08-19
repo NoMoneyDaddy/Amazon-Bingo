@@ -898,13 +898,18 @@ function leakageGuard(history = [], nextPeriod = '') {
       const period = Number(draw.period);
       return targetPeriod && ((Number.isFinite(targetNumber) && Number.isFinite(period) && period >= targetNumber) || String(draw.period) === targetPeriod);
     });
-    checks.push({ targetPeriod, trainingCount: training.length, leaked });
+    const modelSource = history[index];
+    const sourcePeriod = Number(modelSource?.period);
+    const target = Number(targetPeriod);
+    const modelSourceLeaked = Number.isFinite(sourcePeriod) && Number.isFinite(target) && sourcePeriod >= target;
+    checks.push({ targetPeriod, trainingCount: training.length, modelSourcePeriod: modelSource?.period || '', leaked: leaked || modelSourceLeaked, modelSourceLeaked });
   }
   return {
     checkedTargets: checks.length,
     violations: checks.filter((check) => check.leaked).length,
     passed: checks.every((check) => !check.leaked),
-    rule: '每個目標期只使用更早期數；下一期預測排除最新開獎期與所有未來期數；不重用未驗證歷史模型快取。',
+    modelSourceViolations: checks.filter((check) => check.modelSourceLeaked).length,
+    rule: '每個目標期只使用更早期數；下一期預測排除最新開獎期與所有未來期數；歷史模型來源期必須早於目標期；缺少模型時排除樣本。',
   };
 }
 
@@ -1429,8 +1434,9 @@ function randomPrediction(target, seed) {
   return values.slice(0, count).sort((a, b) => a - b).map((value) => String(value).padStart(2, '0'));
 }
 
-function evaluationModelFor(actual, name, prior, includeNumbers = true) {
-  const saved = actual.models?.find((model) => model.name === name);
+function evaluationModelFor(actual, name, prior, includeNumbers = true, modelSource = null) {
+  // 歷史快照上的 models 是「該期之後」的預測；評估 actual 時，必須讀更舊一期保存的模型。
+  const saved = (modelSource?.models || actual.models)?.find((model) => model.name === name);
   if (saved || name !== '趨勢加權回歸基線') return saved;
   // 舊保存期數可能沒有新模型；只用該目標期以前的資料即時補算。
   return buildWeightedRegressionModel(actual, prior, reproducibleCastingAt(actual.drawAt, actual.period), { includeNumbers });
@@ -1441,7 +1447,7 @@ function prequentialCategoryProbability(target, modelName, prior = []) {
   let trials = 0;
   for (let index = 0; index < prior.length; index += 1) {
     const past = prior[index];
-    const pastModel = evaluationModelFor(past, modelName, prior.slice(index + 1), false);
+    const pastModel = evaluationModelFor(past, modelName, prior.slice(index + 1), false, prior[index + 1]);
     if (!pastModel) continue;
     const predicted = target === 'size' ? pastModel.official?.size : pastModel.official?.oddEven;
     const actualValue = target === 'size' ? past.size : past.oddEven;
@@ -1459,7 +1465,7 @@ function forecastEvaluation(history = []) {
   records.forEach((actual, recordIndex) => {
     const prior = records.slice(recordIndex + 1);
     modelNames.forEach((name) => {
-    const model = evaluationModelFor(actual, name, prior, true);
+    const model = evaluationModelFor(actual, name, prior, true, records[recordIndex + 1]);
     if (!model) return;
     const result = byModel.get(model.name) || {
       name: model.name,
@@ -1530,13 +1536,13 @@ function calibratedProbabilityEvaluation(history = []) {
   return modelNames.map((name) => {
     const metrics = { size: { brier: 0, logLoss: 0, count: 0, nextProbability: 0.5, bins: new Map() }, oddEven: { brier: 0, logLoss: 0, count: 0, nextProbability: 0.5, bins: new Map() } };
     records.forEach((actual, recordIndex) => {
-      const model = evaluationModelFor(actual, name, records.slice(recordIndex + 1), false);
+      const model = evaluationModelFor(actual, name, records.slice(recordIndex + 1), false, records[recordIndex + 1]);
       if (!model) return;
       const older = records.slice(recordIndex + 1);
       ['size', 'oddEven'].forEach((target) => {
         let wins = 0; let trials = 0;
         older.forEach((past, olderIndex) => {
-          const pastModel = evaluationModelFor(past, name, records.slice(recordIndex + olderIndex + 2), false);
+          const pastModel = evaluationModelFor(past, name, records.slice(recordIndex + olderIndex + 2), false, records[recordIndex + olderIndex + 2]);
           if (!pastModel) return;
           const predicted = target === 'size' ? pastModel.official.size : pastModel.official.oddEven;
           const actualValue = target === 'size' ? past.size : past.oddEven;
@@ -1562,7 +1568,7 @@ function calibratedProbabilityEvaluation(history = []) {
     ['size', 'oddEven'].forEach((target) => {
       let wins = 0; let trials = 0;
       records.forEach((past, pastIndex) => {
-        const pastModel = evaluationModelFor(past, name, records.slice(pastIndex + 1), false);
+        const pastModel = evaluationModelFor(past, name, records.slice(pastIndex + 1), false, records[pastIndex + 1]);
         if (!pastModel) return;
         const predicted = target === 'size' ? pastModel.official.size : pastModel.official.oddEven;
         const actualValue = target === 'size' ? past.size : past.oddEven;
@@ -1915,13 +1921,16 @@ async function hydrateEvaluationModels(history = []) {
   for (let index = 1; index <= lastIndex; index += 1) {
     if (Array.isArray(history[index]?.models) && history[index].models.length) continue;
     const item = history[index];
+    const target = history[index - 1];
     if (!item) continue;
-    const modelHistory = history.slice(index + 1, index + maxModelHistory + 1)
+    const modelHistory = history.slice(index, index + maxModelHistory)
       .map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
     try {
-      history[index].models = await buildModelsCached(item, modelHistory, {
+      // 模型寫在較舊的來源列，但預測目標是下一個較新的 target；訓練資料只取 target 以前的更舊期數。
+      const targetSnapshot = { ...target, period: target?.period || item.period };
+      history[index].models = await buildModelsCached(targetSnapshot, modelHistory, {
         evolve: false,
-        castingAt: reproducibleCastingAt(item.castingAt || item.drawAt, item.period),
+        castingAt: reproducibleCastingAt(target?.castingAt || target?.drawAt || item.drawAt, targetSnapshot.period),
       });
       history[index].modelStatus = history[index].models.length ? 'formal' : 'error';
     } catch (error) {
@@ -2911,23 +2920,50 @@ function fastProfitabilityEvaluation(history = [], windowSize = quickDecisionBac
   const predictionFor = (model, key) => key === 'size' ? model?.official?.size : key === 'oddEven' ? model?.official?.oddEven : key === 'superNumber' ? model?.official?.superNumber : model?.official?.basic?.[key] || [];
   const evaluate = (play, mode) => {
     const anchor = bestModelFor(play.key);
-    const periodResults = history.slice(0, windowSize).map((actual, index) => {
-      const historical = (history[index + 1]?.models || []).find((model) => model.name === anchor?.name);
-      const model = historical || anchor;
+    const periodResults = history.slice(0, windowSize).flatMap((actual, index) => {
+      // 每個已完成目標期只能使用更舊一列保存的模型；缺少模型就排除，不能用目前預測補值。
+      const model = (history[index + 1]?.models || []).find((candidate) => candidate.name === anchor?.name);
+      if (!model || !Array.isArray(actual?.numbers) || actual.numbers.length !== 20) return [];
       const predicted = predictionFor(model, play.key);
       const payout = backtestPayout(play.key, predicted, actual);
       const net = payout - betCostForTarget(play.key);
       const predictedNumbers = Array.isArray(predicted) ? predicted : [];
       const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
       const matches = Array.isArray(predicted) ? predictedNumbers.filter((number) => actualNumbers.has(normalizeNumberValue(number))).length : (payout > 0 ? 1 : 0);
-      return { period: String(actual.period || ''), drawAt: actual.drawAt || '', prediction: Array.isArray(predicted) ? predicted.join('、') : String(predicted || '—'), matches, targetCount: Array.isArray(predicted) ? predictedNumbers.length : 1, payout, net, profitable: net > 0 };
+      return [{ period: String(actual.period || ''), drawAt: actual.drawAt || '', prediction: Array.isArray(predicted) ? predicted.join('、') : String(predicted || '—'), matches, targetCount: Array.isArray(predicted) ? predictedNumbers.length : 1, payout, net, profitable: net > 0, observed: play.key === 'size' ? normalizeDrawCategory(actual.size, 'size') : play.key === 'oddEven' ? normalizeDrawCategory(actual.oddEven, 'oddEven') : '' }];
     });
     const profit = periodResults.reduce((sum, item) => sum + item.net, 0);
     const wins = periodResults.filter((item) => item.profitable).length;
-    const result = { mode, model: anchor?.name || '—', samples: periodResults.length, wins, profit, payoutTotal: periodResults.reduce((sum, item) => sum + item.payout, 0), costTotal: periodResults.length * betCostForTarget(play.key), matches: periodResults.reduce((sum, item) => sum + item.matches, 0), targetCount: periodResults.reduce((sum, item) => sum + item.targetCount, 0), averageProfit: periodResults.length ? profit / periodResults.length : null, positiveExpected: periodResults.length > 0 && profit / periodResults.length > 0, profitRate: periodResults.length ? wins / periodResults.length : null, prediction: predictionFor(anchor, play.key), periodResults, fallback: `快速判斷：最近 ${windowSize} 期；完整 ${profitabilityBacktestWindow} 期回測在背景更新`, evaluationMode: 'quick' };
+    const isCategory = play.key === 'size' || play.key === 'oddEven';
+    const validSamples = isCategory ? periodResults.filter((item) => ['大', '小', '單', '雙'].includes(item.observed)).length : periodResults.length;
+    const excludedSamples = isCategory ? periodResults.filter((item) => !['大', '小', '單', '雙'].includes(item.observed)).length : 0;
+    const categoryHits = isCategory ? periodResults.filter((item) => {
+      const predictedValue = normalizeDrawCategory(item.prediction, play.key);
+      return ['大', '小', '單', '雙'].includes(item.observed) && predictedValue === item.observed;
+    }).length : periodResults.reduce((sum, item) => sum + item.matches, 0);
+    const result = { mode, model: anchor?.name || '—', samples: periodResults.length, wins, profit, payoutTotal: periodResults.reduce((sum, item) => sum + item.payout, 0), costTotal: periodResults.length * betCostForTarget(play.key), matches: periodResults.reduce((sum, item) => sum + item.matches, 0), targetCount: periodResults.reduce((sum, item) => sum + item.targetCount, 0), averageProfit: periodResults.length ? profit / periodResults.length : null, positiveExpected: periodResults.length > 0 && profit / periodResults.length > 0, profitRate: periodResults.length ? wins / periodResults.length : null, hitRate: isCategory ? (validSamples ? categoryHits / validSamples : null) : (periodResults.length ? wins / periodResults.length : null), validSamples, excludedSamples, categoryHits, baselineHitRate: isCategory ? 0.5 : null, prediction: predictionFor(anchor, play.key), periodResults, fallback: `快速判斷：最近 ${windowSize} 期；缺少歷史模型的期數已排除；完整 ${profitabilityBacktestWindow} 期回測在背景更新`, evaluationMode: 'quick' };
     return result;
   };
   return plays.map((play) => { const fixed = evaluate(play, 'fixed'); const follow = evaluate(play, 'follow'); return { ...play, metricLabel: '盈利機率', best: fixed, fixed, follow }; });
+}
+
+function quickBacktestLeakageGuard(history = [], windowSize = quickDecisionBacktestWindow) {
+  const checks = history.slice(0, windowSize).map((actual, index) => {
+    const source = history[index + 1];
+    const targetPeriod = Number(actual?.period);
+    const sourcePeriod = Number(source?.period);
+    const modelSourceLeaked = Number.isFinite(targetPeriod) && Number.isFinite(sourcePeriod) && sourcePeriod >= targetPeriod;
+    const modelMissing = !Array.isArray(source?.models) || !source.models.length;
+    return { targetPeriod: actual?.period || '', modelSourcePeriod: source?.period || '', modelSourceLeaked, modelMissing };
+  });
+  return {
+    window: windowSize,
+    checkedTargets: checks.length,
+    excludedSamples: checks.filter((check) => check.modelMissing).length,
+    violations: checks.filter((check) => check.modelSourceLeaked).length,
+    passed: checks.every((check) => !check.modelSourceLeaked),
+    rule: '快速回測只用已完成開獎期；每期模型必須來自更舊一期；缺少模型時排除，不使用目前預測補值。',
+  };
 }
 
 function formalModelCacheKey(snapshot, history = [], options = {}) {
@@ -3064,9 +3100,9 @@ function hasRetentionCoverage(history, days = retentionDays) {
   return Number.isFinite(parsed.getTime()) && parsed.getTime() <= cutoff + 24 * 60 * 60 * 1000;
 }
 
-function compactHistoryForResponse(history) {
+function compactHistoryForResponse(history, preserveModelCount = 0) {
   return history.map((item, index) => {
-    if (index === 0) return item;
+    if (index <= preserveModelCount) return item;
     const { models, ...compact } = item;
     return compact;
   });
@@ -3275,7 +3311,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         : await backupModelProfile(history[0]);
       const responseHistory = daysOverride && daysOverride > 1
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays).slice(0, responseHistoryLimit))
-        : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
+        : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit), Number(options.quickModelHistoryCount || 0));
       setComputationProgress({ status: 'complete', stage: 'complete', percent: 100, message: '計算完成', runId });
       return { ...history[0], history: responseHistory, historyDays: retentionDays, modelStatus: history[0].modelStatus, modelError: history[0].modelError, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), ...evaluation, theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
@@ -3364,6 +3400,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     audit: researchAudit(visible.slice(1)),
     behaviorAudit: behaviorAudit(visible.slice(1)),
     backtestIntegrity: leakageGuard(visible, targetPeriod),
+    quickBacktestIntegrity: quickBacktestLeakageGuard(history, quickDecisionBacktestWindow),
     forecastEvaluation: storedForecast,
     calibratedProbabilityEvaluation: storedCalibrated,
     profitabilityEvaluation: storedProfitability,
@@ -3511,6 +3548,7 @@ const server = http.createServer(async (req, res) => {
           // 冷啟動只在整個保存集都沒有模型時建立；有歷史模型就先沿用，避免首頁等待數十秒。
           deferLatestModel: hasAnySavedModels,
           deferEvaluationModels: true,
+          quickModelHistoryCount: quickDecisionBacktestWindow,
         });
         void readPersistedCached(persistedHistoryLimit)
           .then((rows) => refreshInBackground(rows, 1))
@@ -3520,6 +3558,7 @@ const server = http.createServer(async (req, res) => {
         return send(res, 200, {
           ...prioritySnapshot,
           profitabilityEvaluation: quickEvaluation,
+          quickBacktestIntegrity: quickBacktestLeakageGuard(prioritySnapshot.history || [prioritySnapshot], quickDecisionBacktestWindow),
           evaluationMode: 'quick',
           modelStatus: prioritySnapshot.models?.length ? 'formal' : 'queued',
         }, req);

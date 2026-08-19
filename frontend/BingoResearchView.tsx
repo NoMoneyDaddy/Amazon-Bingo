@@ -1869,7 +1869,7 @@ export function BingoResearchView() {
                   </div>
                 )}
                 {latest?.sourceRanking?.length ? (
-                  <details className="border border-cyan-300/20 bg-cyan-300/5 px-3 py-2 text-[10px] leading-5 text-muted-foreground">
+                  <details className="hidden border border-cyan-300/20 bg-cyan-300/5 px-3 py-2 text-[10px] leading-5 text-muted-foreground">
                     <summary className="cursor-pointer select-none font-semibold text-cyan-100">資料源排序：速度／穩定度／新鮮度</summary>
                     <div className="mt-2 grid gap-1.5">
                       {latest.sourceRanking.map((item, index) => (
@@ -1924,7 +1924,7 @@ export function BingoResearchView() {
                       <div><span className="block text-[10px] text-muted-foreground">判斷樣本</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.evaluationMode === "quick" ? "快速 10 期" : latest?.profitabilityEvaluation?.[0]?.best?.samples ? `${latest.profitabilityEvaluation[0].best.samples} 期` : "背景計算"}</strong></div>
                       <div><span className="block text-[10px] text-muted-foreground">目前模式</span><strong className="text-sm text-cyan-50">{profitStrategy === "fixed" ? "固定連買" : "連續跟買"}</strong></div>
                     </div>
-                    <details className="mt-3 border-t border-cyan-300/15 pt-2">
+                    <details className="hidden mt-3 border-t border-cyan-300/15 pt-2">
                       <summary className="cursor-pointer select-none text-xs font-semibold text-cyan-100">模型排名與透明度 <span className="ml-1 text-[10px] font-normal text-muted-foreground">{modelRankings.length} 個模型</span></summary>
                       <div className="mt-2 space-y-1.5">
                         {modelRankings.map((item, index) => (
@@ -2002,7 +2002,24 @@ export function BingoResearchView() {
               </>
             )}
             {page === "technical" && (
-              <section aria-labelledby="technical-heading" className="min-w-0 rounded-3xl border border-amber-300/30 bg-card p-4 shadow-xl shadow-amber-950/20 backdrop-blur sm:p-5">
+              <section aria-labelledby="technical-summary-heading" className="min-w-0 border border-amber-300/30 bg-card p-3 sm:p-4">
+                <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-amber-200/80">03 · 研究摘要</p>
+                <div className="flex items-end justify-between gap-2"><h2 id="technical-summary-heading" className="mt-1 text-lg font-bold text-amber-100">近期開獎結構</h2><span className="text-[10px] text-muted-foreground">僅保留可讀重點</span></div>
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="rounded-lg bg-amber-300/10 p-2"><span className="block text-[10px] text-muted-foreground">分析樣本</span><strong className="text-lg tabular-nums text-amber-100">{technicalAnalysis.sampleSize || "—"} 期</strong></div>
+                  <div className="rounded-lg bg-cyan-300/10 p-2"><span className="block text-[10px] text-muted-foreground">平均和值</span><strong className="text-lg tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</strong></div>
+                  <div className="rounded-lg bg-violet-300/10 p-2"><span className="block text-[10px] text-muted-foreground">含連號期數</span><strong className="text-lg tabular-nums text-violet-100">{technicalAnalysis.consecutiveRate == null ? "—" : `${(technicalAnalysis.consecutiveRate * 100).toFixed(1)}%`}</strong></div>
+                  <div className="rounded-lg bg-orange-300/10 p-2"><span className="block text-[10px] text-muted-foreground">跨期重複球</span><strong className="text-lg tabular-nums text-orange-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</strong></div>
+                </div>
+                <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-cyan-300/15 bg-cyan-300/5 p-2.5 text-xs"><strong className="text-cyan-100">熱門同出</strong><div className="mt-1 flex flex-wrap gap-1.5">{(technicalAnalysis.structuralMath?.coOccurrence.pairs || technicalAnalysis.coOccurrence).slice(0, 6).map((item) => <span key={item.pattern || item.pair} className="rounded-full bg-cyan-300/10 px-2 py-1 text-cyan-100">{item.pattern || item.pair} × {item.count}</span>)}</div></div>
+                  <div className="rounded-lg border border-emerald-300/15 bg-emerald-300/5 p-2.5 text-xs"><strong className="text-emerald-100">熱門連號</strong><div className="mt-1 flex flex-wrap gap-1.5">{(technicalAnalysis.structuralMath?.consecutive.pairs || []).slice(0, 6).map((item) => <span key={item.pattern} className="rounded-full bg-emerald-300/10 px-2 py-1 text-emerald-100">{item.pattern} × {item.count}</span>)}</div></div>
+                </div>
+                <p className="mt-3 text-[11px] leading-5 text-muted-foreground">同出、連號、階梯與數學特徵只作歷史描述，不代表下一期機率提高，也不會自動改變推薦權重。</p>
+              </section>
+            )}
+            {page === "technical" && (
+              <section aria-labelledby="technical-heading" className="hidden min-w-0 border border-amber-300/30 bg-card p-3 sm:p-4">
                 <div>
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>

@@ -12,10 +12,10 @@ const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult'
 const defaultHistoryDays = 7;
 const maxModelHistory = 300;
 const liveModelHistoryLimit = 180;
-const profitabilityBacktestWindow = 10;
+const profitabilityBacktestWindow = 20;
 // 回測評估含 prequential 與校準巢狀迴圈；限制輸入窗口避免 300 期造成 O(n³) Worker 阻塞。
 const evaluationHistoryLimit = 60;
-// 顯示回測維持 10 期；模型調參另用較長樣本，並保留最新 10 期作為未參與調參的隔離窗口。
+// 盈利回測使用 20 期；模型調參另用較長樣本，並保留最新 20 期作為未參與調參的隔離窗口。
 const minimumValidationSamples = 18;
 const profileValidationWindow = 18;
 const profileHoldoutWindow = profitabilityBacktestWindow;
@@ -24,7 +24,7 @@ const retentionDays = 7;
 const persistedHistoryLimit = 2500;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
-const reproducibilityVersion = 'bingo-research-v80-adaptive-policy-evolution';
+const reproducibilityVersion = 'bingo-research-v81-strict-evidence-ensemble';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -1742,8 +1742,8 @@ function profitabilityEvaluation(history = []) {
         fallback: rowResult.fallback ? '缺少歷史模型，使用同算法重建備援' : '',
       };
     };
-    // 模型必須在回測視窗開始前決定；不能看完這 10 期結果再挑最高盈利者。
-    // 先用更早校準窗的實際淨利選模；該欄位不包含本次固定 10 期。
+    // 模型必須在回測視窗開始前決定；不能看完這 20 期結果再挑最高盈利者。
+    // 先用更早校準窗的實際淨利選模；該欄位不包含本次固定 20 期。
     const rank = (a, b) => (b.validationProfit ?? -Infinity) - (a.validationProfit ?? -Infinity)
       || (b.validationTrials ?? 0) - (a.validationTrials ?? 0)
       || (b.confidence ?? -1) - (a.confidence ?? -1)
@@ -2211,7 +2211,7 @@ function adaptiveEvolutionCandidates(history = [], validationWindow = 0) {
 }
 
 function evolveProfiles(history = []) {
-  // 只用最新 10 期以外的逐期樣本；每一折只計算一次 10 星排序，再取前綴供各星級使用。
+  // 只用最新 20 期以外的逐期樣本；每一折只計算一次 10 星排序，再取前綴供各星級使用。
   // 這避免舊版「每個方法／玩法／權重都重建整套模型」造成 Worker 超時，超時後前端才會誤用備援。
   const validationWindow = Math.min(profileValidationWindow, Math.max(0, history.length - profileHoldoutWindow - 1));
   const candidates = adaptiveEvolutionCandidates(history, validationWindow);
@@ -2535,7 +2535,10 @@ function aggregateModel(models, history) {
     return tier.includes('可檢驗統計') || tier.includes('可重現機器學習')
       || ['technical', 'frequency', 'bayesian', 'ewma', 'markov'].includes(model.calculation?.method);
   });
-  const ensembleModels = quantitativeModels.length ? quantitativeModels : eligibleModels;
+  const formalBaselineModels = models.filter((model) => model.calculation?.predictionEligible !== false
+    && ['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric', 'multiscale', 'exclusion', 'technical', 'regression'].includes(model.calculation?.method));
+  // 沒有模型通過樣本外閘門時，只能退回可檢驗統計基準；禁止把玄學模型等權混入正式共識。
+  const ensembleModels = quantitativeModels.length ? quantitativeModels : formalBaselineModels;
   const hasValidatedWeight = ensembleModels.some((model) => predictionTargets.some((target) => {
     const evolution = model.calculation?.evolution?.[target];
     return evolution?.eligible === true && Number(evolution?.qualityScore) > 0;
@@ -2658,7 +2661,8 @@ function aggregateModel(models, history) {
       commonCasting: '多模型聚合不另起卦；它整合各子模型在同一固定輸入下的結果。',
       commonCastingValue: '多模型加權整合',
       targetRules: Object.fromEntries(predictionTargets.map((target) => [target, '以各子模型同一玩法的樣本外權重乘名次衰減形成號碼分數，再取前 k；不是每模型固定配額，也不產生獨立卦象。'])),
-      candidateScoring: '每個模型先保留原生號碼排名；跨模型以品質權重 × 1/√名次正規化加總，並記錄支持模型數；同分時以號碼小者固定破平。',
+      candidateScoring: '每個模型先保留原生號碼排名；跨模型以品質權重 × 1/√名次正規化加總，並記錄支持模型數；同分時以號碼小者固定破平。無樣本外證據時只退回統計基準，不混入玄學模型。',
+      ensembleMode: quantitativeModels.length ? 'quantitative-evidence' : 'formal-statistical-baseline-fallback',
     },
     official: { size: weightedCategory('size'), oddEven: weightedCategory('oddEven'), superNumber, basic },
     research: {

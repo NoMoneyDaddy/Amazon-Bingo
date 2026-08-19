@@ -2989,36 +2989,21 @@ function refreshInBackground(persisted, days = 1) {
     return;
   }
   refreshInFlight = true;
-  // 已有正式模型但缺少回測時，只補寫評估快照；不要為了回測再次重跑模型。
-  const history = selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit);
-  const hydratedProfitability = hydrateStoredPeriodMatches(persisted[0]?.profitabilityEvaluation, history);
-  const storedProfitabilityReady = hasCompleteProfitabilityEvaluation(hydratedProfitability)
-    && hydratedProfitability.every((play) => play.best.periodResults.every((item) => Number.isFinite(Number(item.matches)) && Number.isFinite(Number(item.targetCount))));
-  if (days === 1 && !storedProfitabilityReady) {
-    setImmediate(() => void (async () => {
-      try {
-        // 統一走 persistedResponse：它同時處理最新模型缺失、歷史模型補建與三種回測模式，
-        // 避免「有模型」與「無模型」各自走不同、容易漏掉的修復分支。
-        const recovered = await persistedResponse(persisted);
-        // 先更新記憶體快取，讓下一次首頁請求立即看到回測；資料庫寫入放在後面，避免慢寫入再次遮蔽結果。
-        writeLatestResponseCache('latest-1', recovered);
-        await persistSnapshots([recovered]);
-      } catch (error) {
-        console.error(JSON.stringify({ event: 'background-evaluation-failed', message: error instanceof Error ? error.message : '回測補寫失敗' }));
-      } finally {
-        refreshInFlight = false;
-        if (evaluationRefreshQueued) {
-          evaluationRefreshQueued = false;
-          setImmediate(() => refreshInBackground(persisted, 1));
-        }
+  // 先用輕量同步確認官方期號；只有新期號、模型缺失或回測不完整時，
+  // 才啟動完整預計算，避免每次開插件都重跑全部算法。
+  void latest(1, persisted, '', { deferLatestModel: true, deferEvaluationModels: true })
+    .then(async (probe) => {
+      const complete = Boolean(probe?.models?.length) && hasCompleteProfitabilityEvaluation(probe?.profitabilityEvaluation);
+      const changed = String(probe?.predictionTargetPeriod || '') !== String(persisted[0]?.predictionTargetPeriod || '')
+        || String(probe?.period || '') !== String(persisted[0]?.period || '');
+      if (!complete || changed || days > 1) {
+        const refreshed = await readPersistedCached(persistedHistoryLimit);
+        const result = await precomputeLatestSnapshot(refreshed);
+        writeLatestResponseCache('latest-1', result);
+        return result;
       }
-    })());
-    return;
-  }
-  void latest(days, persisted, '', { deferEvaluationModels: true })
-    .then((result) => {
-      if (days === 1) writeLatestResponseCache('latest-1', result);
-      return result;
+      writeLatestResponseCache('latest-1', probe);
+      return probe;
     })
     .catch((error) => console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' })))
     .finally(() => {
@@ -3028,6 +3013,16 @@ function refreshInBackground(persisted, days = 1) {
         setImmediate(() => refreshInBackground(persisted, 1));
       }
     });
+}
+
+async function precomputeLatestSnapshot(persisted = []) {
+  // 預計算至少抓完整保存窗口，確保模型與 walk-forward 回測有共同、足夠的歷史資料。
+  const refreshDays = retentionDays;
+  const result = await latest(refreshDays, persisted, '', {});
+  if (!result?.models?.length || !hasCompleteProfitabilityEvaluation(result.profitabilityEvaluation)) {
+    throw new Error('預計算未產生完整模型與回測快照');
+  }
+  return result;
 }
 
 function readLatestResponseCache(key) {
@@ -3058,9 +3053,8 @@ function nextDrawAt(now = new Date()) {
 async function scheduledSync(forceRepair = false) {
   try {
     const persisted = await readPersistedCached(persistedHistoryLimit);
-    const requestedDays = forceRepair || !persisted.length || !hasRetentionCoverage(persisted, retentionDays) ? retentionDays : 1;
-    const refreshDays = requestedDays === 1 && persisted.length < persistedHistoryLimit ? retentionDays : requestedDays;
-    const result = await latest(refreshDays, persisted, '', { deferEvaluationModels: true });
+    const result = await precomputeLatestSnapshot(persisted);
+    writeLatestResponseCache('latest-1', result);
     console.log(JSON.stringify({ event: 'sync-ok', period: result.period, historyDays: result.historyDays, persisted: Boolean(pool) }));
   } catch (error) {
     console.error(JSON.stringify({ event: 'sync-failed', message: error instanceof Error ? error.message : '同步失敗' }));
@@ -3123,7 +3117,9 @@ const server = http.createServer(async (req, res) => {
         void readPersistedCached(persistedHistoryLimit)
           .then((rows) => refreshInBackground(rows, 1))
           .catch(() => undefined);
-        return send(res, 200, { ...prioritySnapshot, modelStatus: 'queued' }, req);
+        const priorityReady = prioritySnapshot.models?.length
+          && hasCompleteProfitabilityEvaluation(prioritySnapshot.profitabilityEvaluation);
+        return send(res, 200, { ...prioritySnapshot, modelStatus: priorityReady ? 'formal' : 'queued' }, req);
       }
       if (responseCacheKey) {
         const cachedResponse = readLatestResponseCache(responseCacheKey);
@@ -3189,10 +3185,8 @@ if (isMainThread) {
   server.listen(port, '0.0.0.0', () => {
     console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
     void prunePersistedHistory();
-    const firstWakeAt = nextDrawAt(new Date()).getTime() - Date.now() - 30_000;
-    scheduledTimer = setTimeout(() => void scheduledSync(false), Math.max(60_000, firstWakeAt));
-    // 啟動時只先提供健康檢查與既有快取；資料同步延後到下一個排程，
-    // 避免冷啟動立刻搶滿 CPU，導致 /health 與最新資料端點一起逾時。
+    // 啟動後在背景預熱完整快照；HTTP 請求不負責首次建模，避免前端成為計算觸發器。
+    setImmediate(() => void scheduledSync(false));
   });
 }
 

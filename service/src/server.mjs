@@ -3710,35 +3710,52 @@ async function runRedisWorker() {
   catch (error) { if (!String(error?.message || error).includes('BUSYGROUP')) throw error; }
   const consumer = `${process.env.HOSTNAME || 'bingo-worker'}-${process.pid}`;
   console.log(JSON.stringify({ event: 'worker-ready', stream: redisJobStream, group: redisJobGroup, consumer }));
+  // Worker 被重部署或被平台驅逐時，未完成訊息會留在 consumer group 的 pending list。
+  // 只用 XREADGROUP 的 `>` 永遠讀不到這些訊息，會造成「開獎已更新、回測永遠等待」。
+  // 啟動時先接管閒置超過一分鐘的 pending 任務，再讀取新任務。
+  let reclaimCursor = '0-0';
+  let reclaimedCount = 0;
+  do {
+    const claimed = await client.xAutoClaim(redisJobStream, redisJobGroup, consumer, 60_000, reclaimCursor, { COUNT: 10 });
+    const messages = claimed?.messages || [];
+    reclaimCursor = claimed?.nextId || '0-0';
+    reclaimedCount += messages.length;
+    for (const message of messages) await processRedisRefreshMessage(client, consumer, message);
+    if (!messages.length && reclaimCursor === '0-0') break;
+  } while (reclaimCursor !== '0-0');
+  if (reclaimedCount) console.log(JSON.stringify({ event: 'worker-pending-reclaimed', count: reclaimedCount, consumer }));
   while (true) {
     const batches = await client.xReadGroup(redisJobGroup, consumer, [{ key: redisJobStream, id: '>' }], { COUNT: 1, BLOCK: 5000 });
     if (!batches?.length) continue;
-    for (const message of batches[0].messages || []) {
-      const values = message.message || {};
-      const runId = values.runId || message.id;
-      const days = Number(values.days || 1);
-      const attempts = Number(values.attempts || 0);
-      try {
-        await updateJobState(runId, { status: 'running', started: true, heartbeat: true });
-        const heartbeat = setInterval(() => { void updateJobState(runId, { heartbeat: true }); }, 10_000);
-        try {
-          const persisted = await readPersistedCached(persistedHistoryLimit);
-          await executeRefreshJob(persisted, days, runId);
-          await updateJobState(runId, { status: 'completed', finished: true, heartbeat: true });
-        } finally { clearInterval(heartbeat); }
-        await client.xAck(redisJobStream, redisJobGroup, message.id);
-      } catch (error) {
-        const messageText = error instanceof Error ? error.message : String(error);
-        if (attempts < 2) {
-          await client.xAdd(redisJobStream, '*', { ...values, attempts: String(attempts + 1) });
-          await updateJobState(runId, { status: 'queued', attempts: attempts + 1, error: messageText, heartbeat: true });
-        } else {
-          await updateJobState(runId, { status: 'failed', attempts: attempts + 1, error: messageText, finished: true });
-        }
-        console.error(JSON.stringify({ event: 'worker-job-failed', runId, attempts: attempts + 1, message: messageText }));
-        await client.xAck(redisJobStream, redisJobGroup, message.id);
-      }
+    for (const message of batches[0].messages || []) await processRedisRefreshMessage(client, consumer, message);
+  }
+}
+
+async function processRedisRefreshMessage(client, consumer, message) {
+  const values = message.message || {};
+  const runId = values.runId || message.id;
+  const days = Number(values.days || 1);
+  const attempts = Number(values.attempts || 0);
+  try {
+    await updateJobState(runId, { status: 'running', started: true, heartbeat: true });
+    const heartbeat = setInterval(() => { void updateJobState(runId, { heartbeat: true }); }, 10_000);
+    try {
+      const persisted = await readPersistedCached(persistedHistoryLimit);
+      await executeRefreshJob(persisted, days, runId);
+      await updateJobState(runId, { status: 'completed', finished: true, heartbeat: true });
+    } finally { clearInterval(heartbeat); }
+    await client.xAck(redisJobStream, redisJobGroup, message.id);
+    console.log(JSON.stringify({ event: 'worker-job-completed', runId, consumer }));
+  } catch (error) {
+    const messageText = error instanceof Error ? error.message : String(error);
+    if (attempts < 2) {
+      await client.xAdd(redisJobStream, '*', { ...values, attempts: String(attempts + 1) });
+      await updateJobState(runId, { status: 'queued', attempts: attempts + 1, error: messageText, heartbeat: true });
+    } else {
+      await updateJobState(runId, { status: 'failed', attempts: attempts + 1, error: messageText, finished: true });
     }
+    console.error(JSON.stringify({ event: 'worker-job-failed', runId, attempts: attempts + 1, message: messageText }));
+    await client.xAck(redisJobStream, redisJobGroup, message.id);
   }
 }
 

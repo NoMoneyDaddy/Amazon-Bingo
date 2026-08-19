@@ -117,7 +117,7 @@ type DrawSnapshot = {
   fetchedAt?: number;
   history?: DrawSnapshot[];
   historyDays?: number;
-  evaluationMode?: "quick" | "full" | "background";
+  evaluationMode?: "quick" | "full" | "background" | "pending";
   modelStatus?: "formal" | "queued" | "error" | "unavailable";
   modelError?: string;
   predictionTargetPeriod?: string;
@@ -1676,6 +1676,7 @@ export function BingoResearchView() {
     };
   }, [latest?.technicalAnalysis, technicalAnalysisFallback]);
   const backtestReady = hasBacktestEvaluation(latest);
+  const backtestPending = latest?.evaluationMode === "pending" || !backtestReady;
   // 正式模型已存在時，後端進度代表背景更新，不應把首頁誤顯示成卡住；
   // 只有首次建模／模型尚未取得時才顯示阻塞型進度條。
   const blockingComputation = latest?.modelStatus !== "formal"
@@ -1946,6 +1947,11 @@ export function BingoResearchView() {
                     </span>
                   </div>
                   <div className="mt-3 border border-cyan-300/20 bg-cyan-300/5 px-3 py-2.5 text-xs leading-5 text-muted-foreground">
+                    {backtestPending ? (
+                      <div className="mb-2 rounded border border-amber-300/25 bg-amber-300/10 px-2 py-1.5 text-amber-100">
+                        完整 20 期回測正在更新；目前不顯示快速估算，避免結果來回變動。
+                      </div>
+                    ) : null}
                     {!hasConsensusWeight && latestModels.length ? (
                       <div className="mb-2 rounded border border-amber-300/25 bg-amber-300/10 px-2 py-1.5 text-amber-100">
                         十期樣本尚未證明模型超越基準；以下是研究候選，不代表提高中獎機率。
@@ -1971,7 +1977,7 @@ export function BingoResearchView() {
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                       <div><span className="block text-[10px] text-muted-foreground">最新開獎</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.period ? `第 ${latest.period} 期` : "同步中"}</strong></div>
                       <div><span className="block text-[10px] text-muted-foreground">預測目標</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.predictionTargetPeriod ? `第 ${latest.predictionTargetPeriod} 期` : "同步中"}</strong></div>
-                      <div><span className="block text-[10px] text-muted-foreground">判斷樣本</span><strong className="text-sm tabular-nums text-cyan-50">{latest?.evaluationMode === "quick" ? "快速 10 期" : latest?.profitabilityEvaluation?.[0]?.best?.samples ? `${latest.profitabilityEvaluation[0].best.samples} 期` : "背景計算"}</strong></div>
+                      <div><span className="block text-[10px] text-muted-foreground">判斷樣本</span><strong className="text-sm tabular-nums text-cyan-50">{backtestPending ? "完整回測更新中" : latest?.profitabilityEvaluation?.[0]?.best?.samples ? `${latest.profitabilityEvaluation[0].best.samples} 期` : "—"}</strong></div>
                       <div><span className="block text-[10px] text-muted-foreground">目前模式</span><strong className="text-sm text-cyan-50">{profitStrategy === "fixed" ? "固定連買" : "連續跟買"}</strong></div>
                     </div>
                     <details className="hidden mt-3 border-t border-cyan-300/15 pt-2">

@@ -3701,11 +3701,12 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     try {
       computedEvaluation = await evaluateInWorkerWithTimeout(evaluationHistory, 12000);
     } catch (error) {
-      console.error(JSON.stringify({ event: 'evaluation-timeout-fast-fallback', message: error instanceof Error ? error.message : '回測 Worker 超時' }));
+      console.error(JSON.stringify({ event: 'evaluation-timeout-pending', message: error instanceof Error ? error.message : '回測 Worker 超時' }));
       computedEvaluation = {
         forecastEvaluation: [],
         calibratedProbabilityEvaluation: [],
-        profitabilityEvaluation: fastProfitabilityEvaluation(evaluationHistory),
+        // Worker 超時時維持「待完成」，不可把 10 期快速估算冒充正式回測。
+        profitabilityEvaluation: [],
         zoneProfitabilityEvaluation: [],
         technicalAnalysis: technicalAnalysis(evaluationHistory),
       };
@@ -3740,6 +3741,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
     modelStatus: models.length ? 'formal' : 'error',
     modelError,
     backup: { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath },
+    evaluationMode: storedProfitabilityReady ? 'full' : 'pending',
   };
 }
 
@@ -3891,7 +3893,7 @@ async function getPriorityResponse(castingAt = '') {
             ...persistedForPriority[0],
             history: compactHistoryForResponse(
               selectRecentHistory(persistedForPriority, retentionDays).slice(0, fastResponseHistoryLimit),
-              hasCompleteProfitabilityEvaluation(persistedForPriority[0].profitabilityEvaluation) ? 0 : quickDecisionBacktestWindow,
+              0,
             ),
           }
         : await latest(1, [], castingAt, { deferLatestModel: true, deferEvaluationModels: true });
@@ -3902,15 +3904,18 @@ async function getPriorityResponse(castingAt = '') {
         .catch(() => undefined);
       // 正式回測已完整保存時直接沿用，避免每次首頁即時請求重新跑快速回測。
       // 只有冷啟動或資料不完整時才使用快速計算。
-      const quickEvaluation = hasCompleteProfitabilityEvaluation(prioritySnapshot.profitabilityEvaluation)
+      const hasFormalBacktest = hasCompleteProfitabilityEvaluation(prioritySnapshot.profitabilityEvaluation);
+      // 回測只允許一個正式版本。背景完整回測尚未完成時，不再用最近 10 期
+      // 的快速估算填入同一欄位，避免使用者看到數字先跳一次、完成後再跳一次。
+      const stableEvaluation = hasFormalBacktest
         ? ensureFollowBacktestVisible(prioritySnapshot.profitabilityEvaluation)
-        : fastProfitabilityEvaluation(quickHistory, quickDecisionBacktestWindow);
+        : [];
       return writeLatestResponseCache('latest-priority', {
         ...prioritySnapshot,
         history: quickHistory,
-        profitabilityEvaluation: quickEvaluation,
+        profitabilityEvaluation: stableEvaluation,
         quickBacktestIntegrity: quickIntegrity,
-        evaluationMode: 'quick',
+        evaluationMode: hasFormalBacktest ? 'full' : 'pending',
         modelStatus: prioritySnapshot.models?.length ? 'formal' : 'queued',
       });
     })().finally(() => { priorityResponseInFlight = undefined; });
@@ -4013,10 +4018,11 @@ const server = http.createServer(async (req, res) => {
           // 即時輪詢只供首頁刷新；限制歷史筆數，避免前端每次輪詢都解析與合併 1200 筆資料。
           history: compactHistoryForResponse(
             selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit),
-            evaluationIncomplete ? quickDecisionBacktestWindow : 0,
+            0,
           ),
           historyDays: retentionDays,
           modelStatus: persisted[0].models?.length && !evaluationIncomplete ? 'formal' : 'queued',
+          evaluationMode: evaluationIncomplete ? 'pending' : 'full',
         };
         // 每次快取到期後都要在背景確認官方最新期號；正式模型存在不代表開獎資料已更新。
         refreshInBackground(persisted, 1);

@@ -23,6 +23,8 @@ const profileValidationWindow = 18;
 const profileHoldoutWindow = profitabilityBacktestWindow;
 // 資料保存至少涵蓋一個月；最新基準之外，模型選擇使用較長 walk-forward。
 const retentionDays = 14;
+// 模型最多使用 300 期歷史；計算窗口與展示／保存窗口分離，避免 Worker 一次展開 14 日來源資料。
+const modelComputationDays = 3;
 // API 與 Worker 都只保留最新快照及少量模型歷史；完整 14 日原始開獎資料由官方同步重新取得，
 // 避免把大量帶模型的 JSON 常駐在任一服務，造成計算期間的記憶體驅逐。
 const persistedHistoryLimit = 80;
@@ -3773,8 +3775,8 @@ async function processRedisRefreshMessage(client, consumer, message) {
 }
 
 async function precomputeLatestSnapshot(persisted = [], runId = '') {
-  // 預計算至少抓完整保存窗口，確保模型與 walk-forward 回測有共同、足夠的歷史資料。
-  const refreshDays = retentionDays;
+  // 預計算只抓模型所需窗口；14 日資料仍由保存與查詢路徑維護，不與重型計算同時常駐。
+  const refreshDays = modelComputationDays;
   const result = await latest(refreshDays, persisted, '', { runId });
   if (!result?.models?.length || !hasCompleteProfitabilityEvaluation(result.profitabilityEvaluation)) {
     throw new Error('預計算未產生完整模型與回測快照');

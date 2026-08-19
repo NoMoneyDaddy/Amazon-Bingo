@@ -801,7 +801,7 @@ function LatestResultTag({ label, value, tone }: { label: string; value: string;
     red: "border-red-300/35 bg-red-300/10 text-red-100",
   } as const;
   return (
-    <div className={`flex min-w-0 flex-1 flex-col items-center justify-center rounded-xl border px-2 py-1.5 ${tones[tone]}`}>
+    <div className={`flex min-h-12 min-w-0 flex-1 flex-col items-center justify-center rounded-xl border px-1.5 py-1.5 ${tones[tone]}`}>
       <span className="text-[9px] font-semibold tracking-wide opacity-75">{label}</span>
       <strong className="mt-0.5 max-w-full truncate text-sm font-bold tabular-nums sm:text-base">{value || "—"}</strong>
     </div>
@@ -1197,7 +1197,7 @@ function NumberTrendBoard({ draws }: { draws: DrawSnapshot[] }) {
           {!shortWindow.length ? <div className="py-4 text-center text-xs text-muted-foreground">尚無足夠開獎資料</div> : null}
         </div>
       </div>
-      <div className="mt-3 grid grid-cols-2 gap-2">
+      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {Array.from({ length: 4 }, (_, zone) => {
           const zoneStats = stats.slice(zone * 20, zone * 20 + 20);
           return <div key={zone} className="rounded-xl border border-slate-800 bg-slate-900/55 p-2">
@@ -1542,7 +1542,7 @@ export function BingoResearchView() {
   );
   const mobilePageButton = (key: Page, label: string) => (
     <Button
-      className="h-12 flex-1 flex-col gap-0.5 px-1 text-xs"
+      className="min-h-12 flex-1 flex-col gap-0.5 px-1 text-xs touch-manipulation"
       size="sm"
       variant={page === key ? "default" : "ghost"}
       aria-current={page === key ? "page" : undefined}
@@ -1572,7 +1572,7 @@ export function BingoResearchView() {
       />
       <div className="relative z-10 flex min-h-0 min-w-0 flex-1 overflow-x-hidden" aria-busy={syncing}>
         <CustomScrollbar className="min-h-0 flex-1" offsetRight={4} orientation="vertical">
-          <div className="mx-auto min-w-0 max-w-xl space-y-2 overflow-x-hidden p-2 pb-[calc(7rem+env(safe-area-inset-bottom))] sm:space-y-4 sm:p-5 sm:pb-6">
+          <div className="mx-auto min-w-0 max-w-xl space-y-2 overflow-x-hidden px-2.5 pb-[calc(7.5rem+env(safe-area-inset-bottom))] pt-2.5 sm:space-y-4 sm:p-5 sm:pb-6">
             <header className="overflow-hidden border border-primary/45 bg-card px-3 py-2 shadow-none sm:px-4">
               <div className="flex min-w-0 items-center justify-between gap-2">
                 <div className="flex min-w-0 items-baseline gap-1.5">
@@ -1774,7 +1774,7 @@ export function BingoResearchView() {
                   <details open className="rounded-2xl border border-cyan-300/25 bg-cyan-300/5 p-3"><summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">同出分析<span className="float-right text-[10px] font-normal text-muted-foreground">號碼對・共同出現期數</span></summary><div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3">{technicalAnalysis.coOccurrence.length ? technicalAnalysis.coOccurrence.slice(0, 12).map((item) => <div key={item.pair} className="rounded-lg bg-background/40 px-2 py-1.5 text-center"><div className="font-bold tabular-nums text-cyan-100">{item.pair}</div><div className="text-[10px] text-muted-foreground">{item.count} 期 · {item.rate == null ? "—" : `${(item.rate * 100).toFixed(1)}%`}</div></div>) : <span className="col-span-full text-xs text-muted-foreground">尚無足夠同出資料</span>}</div><p className="mt-2 text-[10px] leading-4 text-muted-foreground">同出只代表兩號在同一期同時出現的歷史次數，不表示彼此有因果關係。</p></details>
                   <details open className="rounded-2xl border border-orange-300/25 bg-orange-300/5 p-3"><summary className="cursor-pointer list-none text-sm font-semibold text-orange-100">尾號分析<span className="float-right text-[10px] font-normal text-muted-foreground">0–9 尾數分布</span></summary><div className="mt-3 grid grid-cols-5 gap-1.5">{Array.from({ length: 10 }, (_, tail) => { const key = String(tail); const count = technicalAnalysis.tailAnalysis.counts[key] || 0; const rate = technicalAnalysis.tailAnalysis.total ? count / technicalAnalysis.tailAnalysis.total : null; return <div key={key} className="rounded-lg bg-background/40 px-1.5 py-1.5 text-center"><div className="text-lg font-bold tabular-nums text-orange-100">{key}</div><div className="text-[10px] text-muted-foreground">{count} 次</div><div className="text-[9px] tabular-nums text-orange-200/80">{rate == null ? "—" : `${(rate * 100).toFixed(1)}%`}</div></div>; })}</div><p className="mt-2 text-[10px] leading-4 text-muted-foreground">{technicalAnalysis.tailAnalysis.rule}</p></details>
                 </div>
-                <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-4">
                   <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">平均和值</div><div className="mt-1 text-xl font-bold tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</div></div>
                   <div className="rounded-xl border border-violet-300/25 bg-violet-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">跨期平均重複球</div><div className="mt-1 text-xl font-bold tabular-nums text-violet-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</div></div>
                   <div className="rounded-xl border border-amber-300/25 bg-amber-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">含連號期數</div><div className="mt-1 text-xl font-bold tabular-nums text-amber-100">{technicalAnalysis.consecutiveRate == null ? "—" : `${(technicalAnalysis.consecutiveRate * 100).toFixed(1)}%`}</div></div>
@@ -1782,7 +1782,7 @@ export function BingoResearchView() {
                 </div>
                 <details className="mt-3 rounded-2xl border border-border bg-background/35 p-3">
                   <summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">完整結構分析<span className="float-right text-[10px] font-normal text-muted-foreground">範圍・比例・熱冷號</span></summary>
-                  <div className="mt-3 grid gap-2 sm:grid-cols-4">
+                  <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-4">
                   <div className="rounded-xl border border-cyan-300/20 bg-cyan-300/5 p-3 text-center"><div className="text-[10px] text-muted-foreground">和值範圍</div><div className="mt-1 font-bold tabular-nums text-cyan-100">{technicalAnalysis.sumMinimum == null ? "—" : technicalAnalysis.sumMinimum + "–" + technicalAnalysis.sumMaximum}</div><div className="mt-1 text-[10px] text-muted-foreground">標準差 {technicalAnalysis.sumStandardDeviation == null ? "—" : technicalAnalysis.sumStandardDeviation.toFixed(1)}</div></div>
                   <div className="rounded-xl border border-amber-300/20 bg-amber-300/5 p-3 text-center"><div className="text-[10px] text-muted-foreground">平均號碼跨度</div><div className="mt-1 font-bold tabular-nums text-amber-100">{technicalAnalysis.rangeAverage == null ? "—" : technicalAnalysis.rangeAverage.toFixed(1)}</div><div className="mt-1 text-[10px] text-muted-foreground">每期最大號 − 最小號</div></div>
                   <div className="rounded-xl border border-orange-300/20 bg-orange-300/5 p-3 text-center"><div className="text-[10px] text-muted-foreground">大小比例</div><div className="mt-1 font-semibold tabular-nums text-orange-100">大 {technicalAnalysis.sizePercentages["大"] || "—"} · 小 {technicalAnalysis.sizePercentages["小"] || "—"}</div><div className="mt-1 text-[10px] text-muted-foreground">依開獎期數統計</div></div>
@@ -2113,7 +2113,7 @@ export function BingoResearchView() {
             )}
           </div>
         </CustomScrollbar>
-        <nav aria-label="研究台頁面" className="fixed inset-x-0 bottom-0 z-20 flex gap-1 border-t border-primary/30 bg-background/95 p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] backdrop-blur sm:hidden">
+        <nav aria-label="研究台頁面" className="fixed inset-x-0 bottom-0 z-20 flex gap-1 border-t border-primary/30 bg-background/95 p-1.5 pb-[calc(0.375rem+env(safe-area-inset-bottom))] shadow-[0_-8px_24px_rgba(0,0,0,0.28)] backdrop-blur sm:hidden">
           {mobilePageButton("overview", "首頁")}
           {mobilePageButton("technical", "技術分析")}
           {mobilePageButton("history", "歷史紀錄")}

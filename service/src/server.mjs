@@ -648,6 +648,17 @@ function zodiacElementCasting(snapshot, target) {
   return { input, stem: pillars.yearStem, branch: pillars.yearBranch, element: elements[pillars.yearElement], pillars, digits: [], formula: `固定輸入=${input.castingAt}；以農曆年、月、日、時四柱干支建立五行與地支序列，再與號碼五行／支序固定映射及歷史統計分開回測；目前未納入節氣換月與完整命理排局，不宣稱命理因果。` };
 }
 
+function sanCaiCasting(snapshot, target) {
+  const input = targetInput(snapshot, target);
+  const pillars = fourPillars(input.castingAt);
+  const heaven = (pillars.yearStem + pillars.monthBranch) % 10;
+  const human = (pillars.dayStem + pillars.hourBranch) % 10;
+  return {
+    input, pillars, heaven, human,
+    formula: `固定輸入=${input.castingAt}；三才研究適配取天=${heaven}（年干＋月支）、人=${human}（日干＋時支），地才由每個候選號碼的區域與尾數計算；三才五行配置只作可回測特徵，不等同姓名學天格／人格／地格。`,
+  };
+}
+
 function historicalFrequencies(history) {
   const counts = Array(81).fill(0);
   // 頻率是「出現期數／期數」，不可把每期的 20 球當成 80 次獨立抽樣，
@@ -884,6 +895,17 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, t
         const elementHits = elements.filter((element) => (number - 1) % 5 === element).length;
         const branchHits = branches.filter((branch) => (number - 1) % 12 === branch).length;
         return 0.04 + elementHits * 0.055 + branchHits * 0.025;
+      })()
+      : tradition.kind === 'sanCai'
+      ? (() => {
+        const earth = ((number - 1) % 10 + Math.floor((number - 1) / 10)) % 10;
+        const heavenElement = tradition.heaven % 5;
+        const humanElement = tradition.human % 5;
+        const earthElement = earth % 5;
+        const generating = (from, to) => (to - from + 5) % 5 === 1;
+        const harmony = (heavenElement === humanElement ? 0.08 : 0) + (humanElement === earthElement ? 0.08 : 0)
+          + (generating(heavenElement, humanElement) ? 0.05 : 0) + (generating(humanElement, earthElement) ? 0.05 : 0);
+        return 0.04 + harmony;
       })()
       : tradition.kind === 'hypergeometric'
       ? hypergeometricInclusion(number, history)
@@ -1868,7 +1890,7 @@ function evolveProfiles(history = []) {
     ['梅花易數', 'meihua', 11], ['六爻八卦', 'sixyao', 37], ['河圖洛書', 'luoshu', 61],
     ['數字卦（楚簡研究版）', 'numeral-gua', 73], ['奇門遁甲（九宮研究版）', 'qimen', 89],
     ['太乙九宮（研究版）', 'taiyi', 97], ['民俗統計基線', 'statistics', 113],
-    ['生肖五行研究版', 'bazi', 127], ['貝葉斯平滑基線', 'bayesian', 149],
+    ['生肖五行研究版', 'bazi', 127], ['三才數理研究版', 'sanCai', 137], ['貝葉斯平滑基線', 'bayesian', 149],
     ['超幾何集合基線', 'hypergeometric', 163], ['多窗口穩定性基線', 'multiscale', 179],
     ['排除濾網基線', 'exclusion', 191], ['趨勢加權回歸基線', 'regression', 223],
   ];
@@ -1959,6 +1981,7 @@ function castingFor(kind, snapshot, target, castingAt) {
   if (kind === 'hypergeometric') return statisticalCasting(snapshot, target);
   if (kind === 'multiscale') return statisticalCasting(snapshot, target);
   if (kind === 'bazi') return zodiacElementCasting(snapshot, target);
+  if (kind === 'sanCai') return sanCaiCasting(snapshot, target);
   return taiyiCasting(snapshot, target);
 }
 
@@ -1972,11 +1995,12 @@ function traditionFor(kind, casting) {
   if (kind === 'hypergeometric') return { kind, window: casting.window };
   if (kind === 'multiscale') return { kind, window: casting.window };
   if (kind === 'bazi') return { kind, element: casting.element, elementIndex: casting.pillars?.yearElement, branch: casting.branch, elements: [casting.pillars?.yearElement, casting.pillars?.monthElement, casting.pillars?.dayElement, casting.pillars?.hourElement].filter(Number.isFinite), branches: [casting.pillars?.yearBranch, casting.pillars?.monthBranch, casting.pillars?.dayBranch, casting.pillars?.hourBranch].filter(Number.isFinite) };
+  if (kind === 'sanCai') return { kind, heaven: casting.heaven, human: casting.human };
   return { kind, palace: casting.palace, star: casting.star, door: casting.door, cycle: casting.cycle };
 }
 
 function targetTraditionalCategory(casting, target, seed) {
-  const values = [casting.upper, casting.lower, casting.moving, casting.palace, casting.center, casting.digits?.[0], casting.cycle].filter(Number.isFinite);
+  const values = [casting.upper, casting.lower, casting.moving, casting.palace, casting.center, casting.digits?.[0], casting.cycle, casting.heaven, casting.human].filter(Number.isFinite);
   const value = values.reduce((sum, item) => sum + item, 0) || seed;
   if (target === 'size') return value % 2 === 0 ? '大' : '小';
   return (value + (casting.moving || 0)) % 2 === 0 ? '雙' : '單';
@@ -2306,6 +2330,7 @@ export function buildModels(snapshot, history = [], options = {}) {
     { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心＋目標玩法適配，非完整太乙排局', seedOffset: 97 },
     { name: '民俗統計基線', kind: 'statistics', status: '熱度／遺漏／和值／奇偶／區間統計基線，非因果預測', seedOffset: 113 },
     { name: '生肖五行研究版', kind: 'bazi', status: '農曆年干支／五行固定映射＋統計適配，非完整八字排盤', seedOffset: 127 },
+    { name: '三才數理研究版', kind: 'sanCai', status: '天／人時間層＋地才號碼結構的研究適配，非姓名筆畫三才', seedOffset: 137 },
     { name: '貝葉斯平滑基線', kind: 'bayesian', status: 'Beta／Dirichlet 平滑頻率基線；可重算但不主張改變隨機機率', seedOffset: 149 },
     { name: '超幾何集合基線', kind: 'hypergeometric', status: '80 選 20 不放回抽樣；用集合包含率與精確抽樣假設做基線', seedOffset: 163 },
     { name: '多窗口穩定性基線', kind: 'multiscale', status: '近 12／60／300 期多時間窗；對短期訊號施加穩定性懲罰', seedOffset: 179 },
@@ -2355,6 +2380,7 @@ export function buildModels(snapshot, history = [], options = {}) {
         if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];
         if (method.kind === 'qimen') return [target, `九宮${casting.palace}／九星${casting.star}／八門${casting.door}`];
         if (method.kind === 'taiyi') return [target, `行宮${casting.palace}／循環${casting.cycle}`];
+        if (method.kind === 'sanCai') return [target, `天${casting.heaven}／人${casting.human}／地才＝號碼區域＋尾數`];
         if (method.kind === 'bazi') return [target, `年${casting.pillars.yearStem}/${casting.pillars.yearBranch}・月${casting.pillars.monthStem}/${casting.pillars.monthBranch}・日${casting.pillars.dayStem}/${casting.pillars.dayBranch}・時${casting.pillars.hourStem}/${casting.pillars.hourBranch}`];
         if (method.kind === 'statistics') return [target, '固定統計窗口 60 期／目標期前資料'];
         if (method.kind === 'bayesian') return [target, 'Beta／Dirichlet 平滑窗口 60 期／目標期前資料'];

@@ -3300,7 +3300,10 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           return result;
         })();
       // 模型、預測、回測與技術摘要必須同一批寫入，避免重開後只剩開獎資料或號碼。
-      history[0] = { ...history[0], ...evaluation };
+      const audit = researchAudit(rawHistory);
+      const behaviorAuditResult = behaviorAudit(rawHistory);
+      const backtestIntegrity = leakageGuard(rawHistory, nextPeriod);
+      history[0] = { ...history[0], ...evaluation, audit, behaviorAudit: behaviorAuditResult, backtestIntegrity };
       // days=1 只需要保存最新快照；整個歷史窗口由 days>1 的同步路徑定期補齊。
       // 這可避免每次即時輪詢都把數百筆模型 JSON 重寫進 PostgreSQL。
       const snapshotsToPersist = daysOverride === 1 ? history.slice(0, 1) : history;
@@ -3313,7 +3316,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays).slice(0, responseHistoryLimit))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit), Number(options.quickModelHistoryCount || 0));
       setComputationProgress({ status: 'complete', stage: 'complete', percent: 100, message: '計算完成', runId });
-      return { ...history[0], history: responseHistory, historyDays: retentionDays, modelStatus: history[0].modelStatus, modelError: history[0].modelError, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), ...evaluation, theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
+      return { ...history[0], history: responseHistory, historyDays: retentionDays, modelStatus: history[0].modelStatus, modelError: history[0].modelError, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit, behaviorAudit: behaviorAuditResult, backtestIntegrity, ...evaluation, theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup, quickBacktestIntegrity: quickBacktestLeakageGuard(responseHistory, quickDecisionBacktestWindow) };
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
       const errorMessage = error instanceof Error ? error.message : '來源失敗';

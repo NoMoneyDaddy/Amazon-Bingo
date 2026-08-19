@@ -512,26 +512,46 @@ function mergeDrawSnapshots(current: DrawSnapshot[], incoming: DrawSnapshot[]) {
     const incomingIsLocalFallback = draw.models.length > 0
       && draw.models.every(isLocalFallbackModel);
     const incomingIsFormal = hasFormalModels(draw.models);
+    const mergeArray = <T,>(next: T[] | undefined, previous: T[] | undefined) =>
+      next?.length ? next : (previous || []);
+    const mergeSamePeriod = (previous: DrawSnapshot, next: DrawSnapshot): DrawSnapshot => {
+      const nextIsFormal = hasFormalModels(next.models);
+      const previousIsFormal = hasFormalModels(previous.models);
+      const keepPreviousModelData = previousIsFormal && !nextIsFormal;
+      return {
+        ...previous,
+        ...next,
+        // 同一期只接受較完整的資料，避免快速快照／正式快照來回切換造成畫面跳動。
+        drawAt: next.drawAt || previous.drawAt,
+        numbers: next.numbers?.length ? next.numbers : previous.numbers,
+        superNumber: next.superNumber || previous.superNumber,
+        size: next.size || previous.size,
+        oddEven: next.oddEven || previous.oddEven,
+        source: next.source || previous.source,
+        sourceLabel: next.sourceLabel || previous.sourceLabel,
+        models: keepPreviousModelData ? previous.models : mergeArray(next.models, previous.models),
+        forecastEvaluation: keepPreviousModelData ? previous.forecastEvaluation : mergeArray(next.forecastEvaluation, previous.forecastEvaluation),
+        calibratedProbabilityEvaluation: keepPreviousModelData ? previous.calibratedProbabilityEvaluation : mergeArray(next.calibratedProbabilityEvaluation, previous.calibratedProbabilityEvaluation),
+        profitabilityEvaluation: keepPreviousModelData ? previous.profitabilityEvaluation : mergeArray(next.profitabilityEvaluation, previous.profitabilityEvaluation),
+        zoneProfitabilityEvaluation: keepPreviousModelData ? previous.zoneProfitabilityEvaluation : mergeArray(next.zoneProfitabilityEvaluation, previous.zoneProfitabilityEvaluation),
+        technicalAnalysis: keepPreviousModelData && previous.technicalAnalysis ? previous.technicalAnalysis : (next.technicalAnalysis || previous.technicalAnalysis),
+        sourceHealth: next.sourceHealth?.length ? next.sourceHealth : previous.sourceHealth,
+        sourceRanking: next.sourceRanking?.length ? next.sourceRanking : previous.sourceRanking,
+        modelStatus: previous.modelStatus === "formal" && next.modelStatus !== "formal" ? previous.modelStatus : (next.modelStatus || previous.modelStatus),
+        modelError: next.modelError || previous.modelError,
+        predictionTargetPeriod: next.predictionTargetPeriod || previous.predictionTargetPeriod,
+        historyDays: next.historyDays || previous.historyDays,
+        fetchedAt: Math.max(previous.fetchedAt || 0, next.fetchedAt || 0),
+      };
+    };
     // 最新一期快速回應可能只有本地備援；不能用它覆蓋已完成的正式模型與回測。
     if (existingIsFormal && incomingIsLocalFallback) {
-      byPeriod.set(draw.period, {
-        ...draw,
-        models: existing!.models,
-        profitabilityEvaluation: existing!.profitabilityEvaluation,
-        zoneProfitabilityEvaluation: existing!.zoneProfitabilityEvaluation,
-        forecastEvaluation: existing!.forecastEvaluation,
-        calibratedProbabilityEvaluation: existing!.calibratedProbabilityEvaluation,
-      });
+      byPeriod.set(draw.period, mergeSamePeriod(existing!, draw));
     } else if (existingIsFormal && incomingIsFormal) {
       // 正式模型可以先於盈利回測抵達；後續空回測回應不可清掉已完成的回測。
-      byPeriod.set(draw.period, {
-        ...existing,
-        ...draw,
-        profitabilityEvaluation: draw.profitabilityEvaluation.length ? draw.profitabilityEvaluation : existing!.profitabilityEvaluation,
-        zoneProfitabilityEvaluation: draw.zoneProfitabilityEvaluation.length ? draw.zoneProfitabilityEvaluation : existing!.zoneProfitabilityEvaluation,
-        forecastEvaluation: draw.forecastEvaluation.length ? draw.forecastEvaluation : existing!.forecastEvaluation,
-        calibratedProbabilityEvaluation: draw.calibratedProbabilityEvaluation.length ? draw.calibratedProbabilityEvaluation : existing!.calibratedProbabilityEvaluation,
-      });
+      byPeriod.set(draw.period, mergeSamePeriod(existing!, draw));
+    } else if (existing) {
+      byPeriod.set(draw.period, mergeSamePeriod(existing, draw));
     } else {
       byPeriod.set(draw.period, draw);
     }
@@ -807,6 +827,15 @@ async function fetchComputationProgress(): Promise<ComputationProgress | null> {
   } catch {
     return null;
   }
+}
+
+function isNewerProgress(next: ComputationProgress, previous: ComputationProgress | null) {
+  if (!previous) return true;
+  if (next.runId && previous.runId && next.runId !== previous.runId) {
+    return next.updatedAt >= previous.updatedAt;
+  }
+  return next.updatedAt >= previous.updatedAt
+    && (next.percent >= previous.percent || next.status !== "running");
 }
 
 function getNextDraw(now: Date) {
@@ -1456,6 +1485,7 @@ export function BingoResearchView() {
   );
   const [syncing, setSyncing] = useState(false);
   const [computationProgress, setComputationProgress] = useState<ComputationProgress | null>(null);
+  const progressRequestRef = useRef(0);
   const syncingRef = useRef(false);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState<number | null>(null);
@@ -1478,8 +1508,11 @@ export function BingoResearchView() {
   useEffect(() => {
     let active = true;
     const poll = async () => {
+      const requestId = ++progressRequestRef.current;
       const progress = await fetchComputationProgress();
-      if (active && progress) setComputationProgress(progress);
+      if (active && progress && requestId === progressRequestRef.current) {
+        setComputationProgress((previous) => isNewerProgress(progress, previous) ? progress : previous);
+      }
     };
     void poll();
     const timer = window.setInterval(() => void poll(), 2_000);

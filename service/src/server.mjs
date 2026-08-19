@@ -94,20 +94,32 @@ let computationProgress = {
   updatedAt: Date.now(),
   runId: '',
 };
+let activeComputationRunId = '';
+let progressPersistPromise = Promise.resolve();
 
 function setComputationProgress(patch = {}) {
+  const incomingRunId = String(patch.runId || '');
+  const startsNewRun = patch.status === 'running' || patch.stage === 'source-sync';
+  if (incomingRunId && activeComputationRunId && incomingRunId !== activeComputationRunId) {
+    if (startsNewRun) activeComputationRunId = incomingRunId;
+    else return computationProgress;
+  } else if (incomingRunId && !activeComputationRunId) {
+    activeComputationRunId = incomingRunId;
+  }
   computationProgress = { ...computationProgress, ...patch, updatedAt: Date.now() };
   if (pool) {
-    void (async () => {
+    const snapshot = { ...computationProgress };
+    // 所有進度寫入排隊，避免較慢的舊 query 晚於新階段完成而反向覆蓋進度。
+    progressPersistPromise = progressPersistPromise.then(async () => {
       try {
         await ensureDatabase();
         await pool.query(`INSERT INTO bingo_progress (id, progress, updated_at)
           VALUES (1, $1::jsonb, NOW())
-          ON CONFLICT (id) DO UPDATE SET progress=EXCLUDED.progress, updated_at=NOW()`, [JSON.stringify(computationProgress)]);
+          ON CONFLICT (id) DO UPDATE SET progress=EXCLUDED.progress, updated_at=NOW()`, [JSON.stringify(snapshot)]);
       } catch (error) {
         console.error(JSON.stringify({ event: 'progress-persist-failed', message: error instanceof Error ? error.message : String(error) }));
       }
-    })();
+    });
   }
   return computationProgress;
 }
@@ -159,7 +171,11 @@ async function readComputationProgress() {
   try {
     await ensureDatabase();
     const result = await pool.query('SELECT progress FROM bingo_progress WHERE id = 1');
-    if (result.rows[0]?.progress) computationProgress = { ...computationProgress, ...result.rows[0].progress };
+    const persisted = result.rows[0]?.progress;
+    if (persisted && Number(persisted.updatedAt || 0) >= Number(computationProgress.updatedAt || 0)) {
+      computationProgress = { ...computationProgress, ...persisted };
+      if (persisted.runId) activeComputationRunId = persisted.runId;
+    }
   } catch (error) {
     console.error(JSON.stringify({ event: 'progress-read-failed', message: error instanceof Error ? error.message : String(error) }));
   }
@@ -1992,28 +2008,39 @@ function evaluateCompositionStrategies(history = [], target = '10星', size = 10
 
 async function hydrateEvaluationModels(history = [], windowSize = profitabilityBacktestWindow) {
   const lastIndex = Math.min(history.length - 1, windowSize + 1);
-  for (let index = 1; index <= lastIndex; index += 1) {
-    if (Array.isArray(history[index]?.models) && history[index].models.length) continue;
-    const item = history[index];
-    const target = history[index - 1];
-    if (!item) continue;
-    const modelHistory = history.slice(index, index + maxModelHistory)
-      .map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
-    try {
-      // 模型寫在較舊的來源列，但預測目標是下一個較新的 target；訓練資料只取 target 以前的更舊期數。
-      const targetSnapshot = { ...target, period: target?.period || item.period };
-      history[index].models = await buildModelsCached(targetSnapshot, modelHistory, {
-        evolve: false,
-        castingAt: reproducibleCastingAt(target?.castingAt || target?.drawAt || item.drawAt, targetSnapshot.period),
-      });
-      history[index].modelStatus = history[index].models.length ? 'formal' : 'error';
-    } catch (error) {
-      history[index].models = [];
-      history[index].modelStatus = 'error';
-      history[index].modelError = error instanceof Error ? error.message : String(error);
-      console.error(JSON.stringify({ event: 'historical-model-build-failed', period: history[index].period, message: history[index].modelError }));
+  const indexes = Array.from({ length: Math.max(0, lastIndex) }, (_, offset) => offset + 1)
+    .filter((index) => !(Array.isArray(history[index]?.models) && history[index].models.length));
+  let completed = 0;
+  let cursor = 0;
+  const buildOne = async () => {
+    while (cursor < indexes.length) {
+      const index = indexes[cursor++];
+      const item = history[index];
+      const target = history[index - 1];
+      if (!item) continue;
+      const modelHistory = history.slice(index, index + maxModelHistory)
+        .map(({ period, numbers, superNumber, size, oddEven, drawAt }) => ({ period, numbers, superNumber, size, oddEven, drawAt }));
+      try {
+        // 歷史模型彼此獨立，交給最多兩個模型 Worker 併發建立。
+        const targetSnapshot = { ...target, period: target?.period || item.period };
+        history[index].models = await buildModelsCached(targetSnapshot, modelHistory, {
+          evolve: false,
+          castingAt: reproducibleCastingAt(target?.castingAt || target?.drawAt || item.drawAt, targetSnapshot.period),
+        });
+        history[index].modelStatus = history[index].models.length ? 'formal' : 'error';
+      } catch (error) {
+        history[index].models = [];
+        history[index].modelStatus = 'error';
+        history[index].modelError = error instanceof Error ? error.message : String(error);
+        console.error(JSON.stringify({ event: 'historical-model-build-failed', period: history[index].period, message: history[index].modelError }));
+      } finally {
+        completed += 1;
+        const percent = indexes.length ? 64 + Math.round((completed / indexes.length) * 7) : 71;
+        setComputationProgress({ stage: 'historical-models', percent, message: `歷史模型 ${completed}/${indexes.length}`, runId: computationProgress.runId });
+      }
     }
-  }
+  };
+  await Promise.all(Array.from({ length: Math.min(modelWorkerPoolSize, indexes.length) }, () => buildOne()));
   return history;
 }
 
@@ -2972,17 +2999,59 @@ export function buildModels(snapshot, history = [], options = {}) {
   return [...normalizedModels, aggregateModel(normalizedModels, history)];
 }
 
-let modelWorker;
+const modelWorkerPoolSize = Math.max(1, Math.min(2, Number(process.env.MODEL_WORKERS || 2)));
+let modelWorkers = [];
+let modelWorkerCursor = 0;
 let modelRequestId = 0;
 const pendingModelRequests = new Map();
 let evaluationWorker;
 let evaluationRequestId = 0;
 const pendingEvaluationRequests = new Map();
 
+function failModelWorkers(error) {
+  for (const pending of pendingModelRequests.values()) pending.reject(error);
+  pendingModelRequests.clear();
+  modelWorkers = [];
+}
+
+function ensureModelWorkers() {
+  if (modelWorkers.length === modelWorkerPoolSize) return modelWorkers;
+  modelWorkers = Array.from({ length: modelWorkerPoolSize }, () => {
+    const worker = new Worker(new URL('./model-worker.mjs', import.meta.url));
+    worker.on('message', (message) => {
+      const pending = pendingModelRequests.get(message?.requestId);
+      if (!pending) return;
+      pendingModelRequests.delete(message.requestId);
+      if (message.error) pending.reject(new Error(message.error));
+      else pending.resolve(message.models || []);
+    });
+    worker.on('error', (error) => failModelWorkers(error));
+    worker.on('exit', (code) => {
+      if (code !== 0) failModelWorkers(new Error(`模型 Worker 結束碼 ${code}`));
+    });
+    return worker;
+  });
+  return modelWorkers;
+}
+
 function ensureModelWorker() {
-  if (modelWorker) return modelWorker;
-  modelWorker = new Worker(new URL('./model-worker.mjs', import.meta.url));
-  modelWorker.on('message', (message) => {
+  return ensureModelWorkers()[0];
+}
+
+function buildModelsInWorker(snapshot, history = [], options = {}) {
+  const workers = ensureModelWorkers();
+  const worker = workers[modelWorkerCursor++ % workers.length];
+  return new Promise((resolve, reject) => {
+    const requestId = ++modelRequestId;
+    pendingModelRequests.set(requestId, { resolve, reject });
+    worker.postMessage({ requestId, snapshot, history: history.slice(0, liveModelHistoryLimit), options });
+  });
+}
+
+/* Keep the request/worker boundary explicit: model requests are distributed across
+ * at most two workers; evaluation remains separately isolated and bounded. */
+/*
+function legacyModelWorkerHandler(message) {
     const pending = pendingModelRequests.get(message?.requestId);
     if (!pending) return;
     pendingModelRequests.delete(message.requestId);
@@ -2999,16 +3068,8 @@ function ensureModelWorker() {
     if (code !== 0) failPending(new Error(`模型 Worker 結束碼 ${code}`));
     else modelWorker = undefined;
   });
-  return modelWorker;
 }
-
-function buildModelsInWorker(snapshot, history = [], options = {}) {
-  return new Promise((resolve, reject) => {
-    const requestId = ++modelRequestId;
-    pendingModelRequests.set(requestId, { resolve, reject });
-    ensureModelWorker().postMessage({ requestId, snapshot, history: history.slice(0, liveModelHistoryLimit), options });
-  });
-}
+*/
 
 function ensureEvaluationWorker() {
   if (evaluationWorker) return evaluationWorker;

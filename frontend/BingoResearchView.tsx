@@ -239,6 +239,21 @@ type TechnicalAnalysisData = {
   trendNumbers: Array<{ number: string; count: number; omission: number; change: number }>;
   sizePercentages: Record<string, string>;
   oddEvenPercentages: Record<string, string>;
+  ladderAnalysis: {
+    drawRate: number | null;
+    ladderDraws: number;
+    sequenceCount: number;
+    longest: number | null;
+    topPatterns: Array<[string, number]>;
+    rule: string;
+  };
+  coOccurrence: Array<{ pair: string; count: number; rate: number | null }>;
+  tailAnalysis: {
+    counts: Record<string, number>;
+    total: number;
+    hotTails: Array<{ tail: string; count: number }>;
+    rule: string;
+  };
 };
 
 function normalizeModel(value: Partial<Model> | null | undefined): Model {
@@ -1325,6 +1340,29 @@ export function BingoResearchView() {
     shortDraws.forEach((draw) => draw.numbers.forEach((number) => shortFrequency.set(normalizeNumber(number), (shortFrequency.get(normalizeNumber(number)) || 0) + 1)));
     priorDraws.forEach((draw) => draw.numbers.forEach((number) => priorFrequency.set(normalizeNumber(number), (priorFrequency.get(normalizeNumber(number)) || 0) + 1)));
     const trendNumbers = allNumberStats.map((item) => ({ ...item, change: (shortFrequency.get(item.number) || 0) / Math.max(1, shortDraws.length) - (priorFrequency.get(item.number) || 0) / Math.max(1, priorDraws.length) })).sort((a, b) => b.change - a.change || b.count - a.count).slice(0, 8);
+    const ladderPatterns = new Map<string, number>();
+    let ladderDraws = 0;
+    let sequenceCount = 0;
+    let longest = 0;
+    const coOccurrence = new Map<string, number>();
+    const tailCounts = Object.fromEntries(Array.from({ length: 10 }, (_, tail) => [String(tail), 0]));
+    draws.forEach((draw) => {
+      const values = [...new Set(draw.numbers.map(Number).filter((value) => Number.isInteger(value)))].sort((a, b) => a - b);
+      values.forEach((value) => { tailCounts[String(value % 10)] += 1; });
+      for (let left = 0; left < values.length; left += 1) for (let right = left + 1; right < values.length; right += 1) {
+        const pair = `${String(values[left]).padStart(2, "0")}、${String(values[right]).padStart(2, "0")}`;
+        coOccurrence.set(pair, (coOccurrence.get(pair) || 0) + 1);
+      }
+      let run: number[] = [];
+      const sequences: number[][] = [];
+      values.forEach((value, index) => {
+        if (!run.length || value === run[run.length - 1] + 1) run.push(value);
+        else { if (run.length >= 2) sequences.push(run); run = [value]; }
+        if (index === values.length - 1 && run.length >= 2) sequences.push(run);
+      });
+      if (sequences.length) ladderDraws += 1;
+      sequences.forEach((sequence) => { sequenceCount += 1; longest = Math.max(longest, sequence.length); const label = sequence.map((value) => String(value).padStart(2, "0")).join("–"); ladderPatterns.set(label, (ladderPatterns.get(label) || 0) + 1); });
+    });
     const sumAverage = sums.length ? sums.reduce((total, value) => total + value, 0) / sums.length : null;
     const sumVariance = sumAverage == null || !sums.length ? null : sums.reduce((total, value) => total + (value - sumAverage) ** 2, 0) / sums.length;
     const rangeAverage = draws.length ? draws.reduce((total, draw) => { const values = draw.numbers.map(Number); return total + Math.max(...values) - Math.min(...values); }, 0) / draws.length : null;
@@ -1347,6 +1385,9 @@ export function BingoResearchView() {
       consecutiveRate: draws.length ? consecutiveDraws / draws.length : null,
       omissionNumbers,
       trendNumbers,
+      ladderAnalysis: { drawRate: draws.length ? ladderDraws / draws.length : null, ladderDraws, sequenceCount, longest: longest || null, topPatterns: [...ladderPatterns.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 10), rule: "同一期排序後，連續整數至少 2 號視為一組階梯牌；只作描述性統計，不進入預測權重。" },
+      coOccurrence: [...coOccurrence.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([pair, count]) => ({ pair, count, rate: draws.length ? count / draws.length : null })),
+      tailAnalysis: { counts: tailCounts, total: Object.values(tailCounts).reduce((total, count) => total + count, 0), hotTails: Object.entries(tailCounts).sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 3).map(([tail, count]) => ({ tail, count })), rule: "尾號取每個開獎號碼除以 10 的餘數；同一期开奖结果的 20 個號碼各計一次。" },
       sizePercentages: Object.fromEntries(Object.entries(sizeCounts).map(([key, value]) => [key, percentage(value, sizeTotal)])),
       oddEvenPercentages: Object.fromEntries(Object.entries(oddEvenCounts).map(([key, value]) => [key, percentage(value, oddEvenTotal)])),
     };
@@ -1359,6 +1400,9 @@ export function BingoResearchView() {
       ...incoming,
       sizePercentages: { ...technicalAnalysisFallback.sizePercentages, ...(incoming.sizePercentages || {}) },
       oddEvenPercentages: { ...technicalAnalysisFallback.oddEvenPercentages, ...(incoming.oddEvenPercentages || {}) },
+      ladderAnalysis: { ...technicalAnalysisFallback.ladderAnalysis, ...(incoming.ladderAnalysis || {}), topPatterns: incoming.ladderAnalysis?.topPatterns || technicalAnalysisFallback.ladderAnalysis.topPatterns },
+      coOccurrence: Array.isArray(incoming.coOccurrence) ? incoming.coOccurrence : technicalAnalysisFallback.coOccurrence,
+      tailAnalysis: { ...technicalAnalysisFallback.tailAnalysis, ...(incoming.tailAnalysis || {}), counts: { ...technicalAnalysisFallback.tailAnalysis.counts, ...(incoming.tailAnalysis?.counts || {}) }, hotTails: incoming.tailAnalysis?.hotTails || technicalAnalysisFallback.tailAnalysis.hotTails },
     };
   }, [latest?.technicalAnalysis, technicalAnalysisFallback]);
   const backtestReady = hasBacktestEvaluation(latest);
@@ -1713,6 +1757,23 @@ export function BingoResearchView() {
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">先看四個摘要數字；完整頻率、區間與熱冷號碼收在下方。這是描述性研究，不代表能改變隨機開獎機率。</p>
                 <NumberTrendBoard draws={sorted} />
+                <details open className="mt-3 rounded-2xl border border-violet-300/25 bg-violet-300/5 p-3">
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-violet-100">階梯牌深度研究<span className="float-right text-[10px] font-normal text-muted-foreground">偵測規則・出現率・常見組合</span></summary>
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <div className="rounded-xl border border-violet-200/20 bg-background/40 p-2 text-center"><div className="text-[10px] text-muted-foreground">含階梯期數</div><div className="mt-1 text-lg font-bold tabular-nums text-violet-100">{technicalAnalysis.ladderAnalysis.ladderDraws} 期</div></div>
+                    <div className="rounded-xl border border-violet-200/20 bg-background/40 p-2 text-center"><div className="text-[10px] text-muted-foreground">出現率</div><div className="mt-1 text-lg font-bold tabular-nums text-violet-100">{technicalAnalysis.ladderAnalysis.drawRate == null ? "—" : `${(technicalAnalysis.ladderAnalysis.drawRate * 100).toFixed(1)}%`}</div></div>
+                    <div className="rounded-xl border border-violet-200/20 bg-background/40 p-2 text-center"><div className="text-[10px] text-muted-foreground">階梯組數</div><div className="mt-1 text-lg font-bold tabular-nums text-violet-100">{technicalAnalysis.ladderAnalysis.sequenceCount}</div></div>
+                    <div className="rounded-xl border border-violet-200/20 bg-background/40 p-2 text-center"><div className="text-[10px] text-muted-foreground">最長階梯</div><div className="mt-1 text-lg font-bold tabular-nums text-violet-100">{technicalAnalysis.ladderAnalysis.longest == null ? "—" : `${technicalAnalysis.ladderAnalysis.longest} 號`}</div></div>
+                  </div>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-violet-200/15 bg-background/35 p-3"><div className="text-xs font-semibold text-violet-100">常見階梯牌</div><div className="mt-2 flex flex-wrap gap-1.5">{technicalAnalysis.ladderAnalysis.topPatterns.length ? technicalAnalysis.ladderAnalysis.topPatterns.map(([pattern, count]) => <span key={pattern} className="rounded-full bg-violet-300/10 px-2 py-1 text-xs tabular-nums text-violet-100">{pattern} × {count}</span>) : <span className="text-xs text-muted-foreground">—</span>}</div></div>
+                    <div className="rounded-xl border border-violet-200/15 bg-background/35 p-3 text-xs leading-5 text-muted-foreground"><div className="font-semibold text-violet-100">偵測規則</div><p className="mt-1">{technicalAnalysis.ladderAnalysis.rule}</p><p className="mt-1 text-amber-200/80">階梯牌是歷史結構標記，不代表下一期機率上升，也不自動取得預測權重。</p></div>
+                  </div>
+                </details>
+                <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                  <details open className="rounded-2xl border border-cyan-300/25 bg-cyan-300/5 p-3"><summary className="cursor-pointer list-none text-sm font-semibold text-cyan-100">同出分析<span className="float-right text-[10px] font-normal text-muted-foreground">號碼對・共同出現期數</span></summary><div className="mt-3 grid grid-cols-2 gap-1.5 sm:grid-cols-3">{technicalAnalysis.coOccurrence.length ? technicalAnalysis.coOccurrence.slice(0, 12).map((item) => <div key={item.pair} className="rounded-lg bg-background/40 px-2 py-1.5 text-center"><div className="font-bold tabular-nums text-cyan-100">{item.pair}</div><div className="text-[10px] text-muted-foreground">{item.count} 期 · {item.rate == null ? "—" : `${(item.rate * 100).toFixed(1)}%`}</div></div>) : <span className="col-span-full text-xs text-muted-foreground">尚無足夠同出資料</span>}</div><p className="mt-2 text-[10px] leading-4 text-muted-foreground">同出只代表兩號在同一期同時出現的歷史次數，不表示彼此有因果關係。</p></details>
+                  <details open className="rounded-2xl border border-orange-300/25 bg-orange-300/5 p-3"><summary className="cursor-pointer list-none text-sm font-semibold text-orange-100">尾號分析<span className="float-right text-[10px] font-normal text-muted-foreground">0–9 尾數分布</span></summary><div className="mt-3 grid grid-cols-5 gap-1.5">{Array.from({ length: 10 }, (_, tail) => { const key = String(tail); const count = technicalAnalysis.tailAnalysis.counts[key] || 0; const rate = technicalAnalysis.tailAnalysis.total ? count / technicalAnalysis.tailAnalysis.total : null; return <div key={key} className="rounded-lg bg-background/40 px-1.5 py-1.5 text-center"><div className="text-lg font-bold tabular-nums text-orange-100">{key}</div><div className="text-[10px] text-muted-foreground">{count} 次</div><div className="text-[9px] tabular-nums text-orange-200/80">{rate == null ? "—" : `${(rate * 100).toFixed(1)}%`}</div></div>; })}</div><p className="mt-2 text-[10px] leading-4 text-muted-foreground">{technicalAnalysis.tailAnalysis.rule}</p></details>
+                </div>
                 <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">平均和值</div><div className="mt-1 text-xl font-bold tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</div></div>
                   <div className="rounded-xl border border-violet-300/25 bg-violet-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">跨期平均重複球</div><div className="mt-1 text-xl font-bold tabular-nums text-violet-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</div></div>

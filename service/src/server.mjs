@@ -1556,8 +1556,43 @@ async function hydrateEvaluationModels(history = []) {
 
 function technicalAnalysis(history = []) {
   const draws = history.slice(0, 30);
+  const normalizedNumbers = (draw) => [...new Set((draw.numbers || []).map((number) => Number(number)).filter((number) => Number.isInteger(number) && number >= 1 && number <= 80))].sort((a, b) => a - b);
+  const numberKey = (number) => String(number).padStart(2, '0');
   const frequency = new Map();
-  draws.forEach((draw) => (draw.numbers || []).forEach((number) => { const key = String(number).padStart(2, '0'); frequency.set(key, (frequency.get(key) || 0) + 1); }));
+  const tailCounts = Object.fromEntries(Array.from({ length: 10 }, (_, tail) => [String(tail), 0]));
+  const coOccurrence = new Map();
+  const ladderPatterns = new Map();
+  let ladderDraws = 0;
+  let ladderSequences = 0;
+  let longestLadder = 0;
+  draws.forEach((draw) => {
+    const values = normalizedNumbers(draw);
+    values.forEach((number) => {
+      const key = numberKey(number);
+      frequency.set(key, (frequency.get(key) || 0) + 1);
+      tailCounts[String(number % 10)] += 1;
+    });
+    for (let left = 0; left < values.length; left += 1) {
+      for (let right = left + 1; right < values.length; right += 1) {
+        const key = `${numberKey(values[left])}、${numberKey(values[right])}`;
+        coOccurrence.set(key, (coOccurrence.get(key) || 0) + 1);
+      }
+    }
+    let run = [];
+    const sequences = [];
+    values.forEach((value, index) => {
+      if (!run.length || value === run[run.length - 1] + 1) run.push(value);
+      else { if (run.length >= 2) sequences.push(run); run = [value]; }
+      if (index === values.length - 1 && run.length >= 2) sequences.push(run);
+    });
+    if (sequences.length) ladderDraws += 1;
+    sequences.forEach((sequence) => {
+      ladderSequences += 1;
+      longestLadder = Math.max(longestLadder, sequence.length);
+      const label = sequence.map(numberKey).join('–');
+      ladderPatterns.set(label, (ladderPatterns.get(label) || 0) + 1);
+    });
+  });
   const zones = [0, 0, 0, 0];
   draws.forEach((draw) => (draw.numbers || []).forEach((number) => { zones[Math.min(3, Math.floor((Number(number) - 1) / 20))] += 1; }));
   const countBy = (field) => draws.reduce((result, draw) => { const key = normalizeDrawCategory(draw[field] || '', field); result[key] = (result[key] || 0) + 1; return result; }, {});
@@ -1587,6 +1622,21 @@ function technicalAnalysis(history = []) {
     consecutiveRate: draws.length ? consecutive / draws.length : null,
     omissionNumbers: allNumbers.sort((a, b) => b.omission - a.omission || a.count - b.count || Number(a.number) - Number(b.number)).slice(0, 10),
     trendNumbers,
+    ladderAnalysis: {
+      drawRate: draws.length ? ladderDraws / draws.length : null,
+      ladderDraws,
+      sequenceCount: ladderSequences,
+      longest: longestLadder || null,
+      topPatterns: [...ladderPatterns.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 10),
+      rule: '同一期排序後，連續整數至少 2 號視為一組階梯牌；只作描述性統計，不進入預測權重。',
+    },
+    coOccurrence: [...coOccurrence.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([pair, count]) => ({ pair, count, rate: draws.length ? count / draws.length : null })),
+    tailAnalysis: {
+      counts: tailCounts,
+      total: Object.values(tailCounts).reduce((total, count) => total + count, 0),
+      hotTails: Object.entries(tailCounts).sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0])).slice(0, 3).map(([tail, count]) => ({ tail, count })),
+      rule: '尾號取每個開獎號碼除以 10 的餘數；同一期开奖结果的 20 個號碼各計一次。',
+    },
     sizePercentages: Object.fromEntries(Object.entries(sizeCounts).map(([key, value]) => [key, percentage(value, sizeTotal)])),
     oddEvenPercentages: Object.fromEntries(Object.entries(oddEvenCounts).map(([key, value]) => [key, percentage(value, oddEvenTotal)])),
   };

@@ -23,7 +23,9 @@ const profileValidationWindow = 18;
 const profileHoldoutWindow = profitabilityBacktestWindow;
 // 資料保存至少涵蓋一個月；最新基準之外，模型選擇使用較長 walk-forward。
 const retentionDays = 14;
-const persistedHistoryLimit = 2500;
+// API 與 Worker 共用同一份服務程式；400 筆已涵蓋 300 期模型歷史與目前 14 日資料窗口，
+// 避免 API 讀取 2500 筆完整模型 JSON 時在同步期間造成記憶體峰值。
+const persistedHistoryLimit = 400;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
 const reproducibilityVersion = 'bingo-research-v82-long-window-invalidation';

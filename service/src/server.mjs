@@ -24,7 +24,7 @@ const retentionDays = 7;
 const persistedHistoryLimit = 2500;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
-const reproducibilityVersion = 'bingo-research-v78-differentiated-model-families';
+const reproducibilityVersion = 'bingo-research-v79-ranked-candidate-ensemble';
 const profileCacheTtlMs = 5 * 60 * 1000;
 const profileCache = new Map();
 const singleBetCost = 25;
@@ -740,7 +740,6 @@ function frequencyBaselinePrediction(history, count = 10) {
   return Array.from({ length: 80 }, (_, index) => index + 1)
     .sort((a, b) => frequencies[b] - frequencies[a] || a - b)
     .slice(0, count)
-    .sort((a, b) => a - b)
     .map((number) => String(number).padStart(2, '0'));
 }
 
@@ -748,7 +747,6 @@ function betaBaselinePrediction(history, count = 10) {
   return Array.from({ length: 80 }, (_, index) => index + 1)
     .sort((a, b) => hypergeometricInclusion(b, history) - hypergeometricInclusion(a, history) || a - b)
     .slice(0, count)
-    .sort((a, b) => a - b)
     .map((number) => String(number).padStart(2, '0'));
 }
 
@@ -756,7 +754,6 @@ function uniformBaselinePrediction(seed, count = 10) {
   return Array.from({ length: 80 }, (_, index) => index + 1)
     .sort((a, b) => deterministicTie(`${seed}|uniform`, a) - deterministicTie(`${seed}|uniform`, b) || a - b)
     .slice(0, count)
-    .sort((a, b) => a - b)
     .map((number) => String(number).padStart(2, '0'));
 }
 
@@ -802,7 +799,8 @@ function quantitativeNumberPrediction(kind, seed, count, history) {
     if (kind === 'markov') probability = markovInclusion(number, history);
     return { number, probability, tie: deterministicTie(`${seed}|${kind}`, number) };
   }).sort((a, b) => b.probability - a.probability || a.tie - b.tie || a.number - b.number);
-  return scored.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
+  // 保留模型內部排名；後續聚合會用第 1 名、第 2 名的衰減權重。
+  return scored.slice(0, count).map((item) => String(item.number).padStart(2, '0'));
 }
 
 function technicalFeatureSignals(number, history) {
@@ -830,7 +828,6 @@ function technicalFeaturePrediction(seed, count, history) {
     return { number, ...signals, tie: deterministicTie(`${seed}|technical`, number) };
   }).sort((a, b) => b.score - a.score || a.tie - b.tie || a.number - b.number)
     .slice(0, count)
-    .sort((a, b) => a.number - b.number)
     .map((item) => String(item.number).padStart(2, '0'));
 }
 
@@ -1013,7 +1010,7 @@ function exclusionPrediction(seed, count, history = [], target = '10星') {
     })
     .sort((a, b) => b.score - a.score || a.number - b.number);
   return {
-    numbers: candidates.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0')),
+    numbers: candidates.slice(0, count).map((item) => String(item.number).padStart(2, '0')),
     validation,
     activeFilters: active.map((filter) => filter.key),
     excludedNumbers: [...usableExcluded].sort((a, b) => a - b).map((number) => String(number).padStart(2, '0')),
@@ -1109,7 +1106,8 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, t
     return { number, score: traditional * (1 - empiricalWeight) + empirical + adapter * targetWeight + deterministicTie(seed, number) * 0.000001 };
   });
   const ranked = values.sort((a, b) => b.score - a.score || a.number - b.number);
-  return ranked.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
+  // 不可在這裡改按號碼排序，否則跨模型聚合無法知道候選的原始名次。
+  return ranked.slice(0, count).map((item) => String(item.number).padStart(2, '0'));
 }
 
 const NUMBER_ZONES = [
@@ -2344,7 +2342,7 @@ function buildWeightedRegressionModel(snapshot, history, castingAt, options = {}
     }
     return { number, score: logisticProbability(trainLogistic(numberSamples, numberLabels, 40, 0.06, 0.5), currentFeatures) };
   }).sort((a, b) => b.score - a.score || a.number - b.number) : [];
-  const picks = (count) => scores.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
+  const picks = (count) => scores.slice(0, count).map((item) => String(item.number).padStart(2, '0'));
   const basic = Object.fromEntries(Array.from({ length: 10 }, (_, index) => [`${index + 1}星`, picks(index + 1)]));
   const superNumber = picks(1)[0] || '';
   const recentGate = options.skipGate ? { eligible: false, reason: '驗證中' } : recentRegressionGate(history, castingAt);
@@ -2361,7 +2359,7 @@ function buildWeightedRegressionModel(snapshot, history, castingAt, options = {}
       trainingSamples: samples.length, regularization: 0.35, recentGate,
     },
     official: { size: sizeProbability >= 0.5 ? '大' : '小', oddEven: oddEvenProbability >= 0.5 ? '單' : '雙', superNumber, basic },
-    research: { numberPicks: basic['10星'], numberPicks20: scores.slice(0, 20).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0')), sumBand: '由模型候選另行統計', oddEvenCount: '由模型候選另行統計', highLowCount: '由模型候選另行統計', zones: ['趨勢加權回歸'], targetResearch: {} },
+    research: { numberPicks: basic['10星'], numberPicks20: scores.slice(0, 20).map((item) => String(item.number).padStart(2, '0')), sumBand: '由模型候選另行統計', oddEvenCount: '由模型候選另行統計', highLowCount: '由模型候選另行統計', zones: ['趨勢加權回歸'], targetResearch: {} },
   };
 }
 
@@ -2455,6 +2453,7 @@ function aggregateModel(models, history) {
   const weightedNumbers = (target) => {
     const size = Number(String(target).replace('星', ''));
     const totals = new Map();
+    const support = new Map();
     const addNumbers = (fallback = false) => ensembleModels.forEach((model) => {
       const weight = fallback ? 1 : weightFor(model, target);
       if (weight <= 0) return;
@@ -2469,14 +2468,16 @@ function aggregateModel(models, history) {
       uniquePicks.forEach((number, index) => {
         const rankContribution = (1 / Math.sqrt(index + 1)) / rankMass;
         totals.set(number, (totals.get(number) || 0) + weight * rankContribution);
+        support.set(number, (support.get(number) || 0) + 1);
       });
     });
     addNumbers();
     if (!totals.size) addNumbers(true);
-    const selected = [...totals.entries()]
+    const ranked = [...totals.entries()]
       .sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0]))
-      .slice(0, size)
-      .map(([number]) => number);
+      .map(([number, score], index) => ({ number, score, support: support.get(number) || 0, rank: index + 1 }));
+    candidateRankings[target] = ranked.slice(0, 20);
+    const selected = ranked.slice(0, size).map(({ number }) => number);
     // 防止某些正式模型輸出不完整，最後仍補足合法且不重複的號碼。
     if (selected.length < size) {
       for (let number = 1; number <= 80 && selected.length < size; number += 1) {
@@ -2486,6 +2487,7 @@ function aggregateModel(models, history) {
     }
     return selected.sort((a, b) => Number(a) - Number(b));
   };
+  const candidateRankings = {};
   const superVotes = new Map();
   const addSuperVotes = (fallback = false) => ensembleModels.forEach((model) => {
     const number = normalizeNumberValue(model.official?.superNumber);
@@ -2529,6 +2531,7 @@ function aggregateModel(models, history) {
       commonCasting: '多模型聚合不另起卦；它整合各子模型在同一固定輸入下的結果。',
       commonCastingValue: '多模型加權整合',
       targetRules: Object.fromEntries(predictionTargets.map((target) => [target, '以各子模型同一玩法的樣本外權重乘名次衰減形成號碼分數，再取前 k；不是每模型固定配額，也不產生獨立卦象。'])),
+      candidateScoring: '每個模型先保留原生號碼排名；跨模型以品質權重 × 1/√名次正規化加總，並記錄支持模型數；同分時以號碼小者固定破平。',
     },
     official: { size: weightedCategory('size'), oddEven: weightedCategory('oddEven'), superNumber, basic },
     research: {
@@ -2538,6 +2541,7 @@ function aggregateModel(models, history) {
       highLowCount: '由共識號碼另行統計',
       zones: zonePredictions.map((zone) => zone.label),
       zonePredictions,
+      candidateRankings,
     },
   };
 }

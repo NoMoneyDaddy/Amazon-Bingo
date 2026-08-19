@@ -60,6 +60,7 @@ type Model = {
     empiricalWeights?: Record<string, number>;
     weightedModelCount?: number;
     aggregation?: string;
+    candidateScoring?: string;
     evolution?: Evolution;
     exclusionFilters?: Record<string, unknown>;
     recentGate?: Record<string, unknown>;
@@ -81,6 +82,7 @@ type Model = {
   research: {
     numberPicks: string[];
     numberPicks20?: string[];
+    candidateRankings?: Record<string, Array<{ number: string; score: number; support: number; rank: number }>>;
     sumBand: string;
     oddEvenCount: string;
     highLowCount: string;
@@ -330,11 +332,13 @@ function normalizeModel(value: Partial<Model> | null | undefined): Model {
     },
     research: {
       numberPicks: sanitizeBingoNumbers(research.numberPicks),
+      numberPicks20: sanitizeBingoNumbers(research.numberPicks20),
       sumBand: research.sumBand || "—",
       oddEvenCount: research.oddEvenCount || "—",
       highLowCount: research.highLowCount || "—",
       zones: Array.isArray(research.zones) ? research.zones : [],
       zonePredictions: Array.isArray(research.zonePredictions) ? research.zonePredictions : undefined,
+      candidateRankings: research.candidateRankings && typeof research.candidateRankings === "object" ? research.candidateRankings : undefined,
       targetResearch,
     },
   };
@@ -2216,6 +2220,32 @@ export function BingoResearchView() {
                             ) : null;
                           })()}
                         </div>
+                      ) : null}
+                      {model.name === "多模型聚合" && model.research.candidateRankings ? (
+                        <details className="mt-3 border-t border-cyan-300/20 pt-3">
+                          <summary className="cursor-pointer select-none text-xs font-semibold text-cyan-100">逐號候選排序與支持度</summary>
+                          <div className="mt-2 text-[10px] leading-4 text-muted-foreground">各模型先保留自己的原生排名，再以樣本外權重乘 1/√名次聚合；以下分數只供研究比較，不是中獎機率。</div>
+                          <div className="mt-2 grid gap-2 sm:grid-cols-3">
+                            {["1星", "5星", "10星"].map((target) => {
+                              const rows = model.research.candidateRankings?.[target] || [];
+                              const selectedCount = Number(target.replace("星", ""));
+                              return (
+                                <div key={target} className="rounded-lg border border-cyan-300/15 bg-background/35 px-2 py-2">
+                                  <div className="flex items-center justify-between gap-2 text-[10px] font-semibold text-cyan-200">
+                                    <span>{target} 前 20 候選</span><span className="font-normal text-muted-foreground">前 {selectedCount} 入選</span>
+                                  </div>
+                                  <div className="mt-1.5 grid grid-cols-2 gap-1">
+                                    {rows.map((row) => (
+                                      <div key={`${target}-${row.number}`} className={`flex items-center justify-between rounded px-1.5 py-1 tabular-nums ${row.rank <= selectedCount ? "bg-emerald-300/10 text-emerald-100" : "bg-slate-800/50 text-slate-300"}`}>
+                                        <span>#{row.rank} {row.number}</span><span className="text-[9px] text-muted-foreground">{row.support}模</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </details>
                       ) : null}
                       {model.research.targetResearch && (
                         <div className="mt-3 border-t border-border pt-3">

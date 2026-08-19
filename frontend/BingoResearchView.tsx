@@ -972,11 +972,25 @@ function formatNetProfit(value: number | null) {
   return `${value > 0 ? "+" : ""}${Math.round(value).toLocaleString("zh-TW")} 元`;
 }
 
-function PredictionValue({ value }: { value: string }) {
-  const parts = value.split("、").filter(Boolean);
+function normalizePredictionDisplayValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value
+      .flatMap((item) => Array.isArray(item) ? item : [item])
+      .filter((item) => item != null && typeof item !== "object")
+      .map((item) => String(item).trim())
+      .filter(Boolean)
+      .join("、");
+  }
+  if (typeof value === "string" || typeof value === "number") return String(value);
+  return "—";
+}
+
+function PredictionValue({ value }: { value: unknown }) {
+  const displayValue = normalizePredictionDisplayValue(value);
+  const parts = displayValue.split("、").filter(Boolean);
   const isNumbers = parts.length > 0 && parts.every((part) => /^\d{1,2}$/.test(part));
   if (!isNumbers) {
-    return <span className="break-words text-sm font-semibold text-cyan-300 sm:text-base">{value}</span>;
+    return <span className="break-words text-sm font-semibold text-cyan-300 sm:text-base">{displayValue}</span>;
   }
   return (
     <div className="flex min-w-0 flex-wrap gap-1" role="list" aria-label={`預測號碼 ${parts.join("、")}`}>

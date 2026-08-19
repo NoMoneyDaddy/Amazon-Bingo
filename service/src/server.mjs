@@ -3584,7 +3584,8 @@ const server = http.createServer(async (req, res) => {
         const cached = {
           ...persisted[0],
           profitabilityEvaluation: ensureFollowBacktestVisible(persisted[0].profitabilityEvaluation),
-          history: compactHistoryForResponse(selectRecentHistory(persisted, retentionDays).slice(0, responseHistoryLimit)),
+          // 即時輪詢只供首頁刷新；限制歷史筆數，避免前端每次輪詢都解析與合併 1200 筆資料。
+          history: compactHistoryForResponse(selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit), quickDecisionBacktestWindow),
           historyDays: retentionDays,
           modelStatus: persisted[0].models?.length && !evaluationIncomplete ? 'formal' : 'queued',
         };

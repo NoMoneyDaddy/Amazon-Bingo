@@ -1850,7 +1850,6 @@ export function BingoResearchView() {
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">先看四個摘要數字；完整頻率、區間與熱冷號碼收在下方。這是描述性研究，不代表能改變隨機開獎機率。</p>
-                <NumberTrendBoard draws={sorted} analysis={technicalAnalysis} />
                 <details open className="mt-3 rounded-2xl border border-violet-300/25 bg-violet-300/5 p-3">
                   <summary className="cursor-pointer list-none text-sm font-semibold text-violet-100">階梯牌深度研究<span className="float-right text-[10px] font-normal text-muted-foreground">偵測規則・出現率・常見組合</span></summary>
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">

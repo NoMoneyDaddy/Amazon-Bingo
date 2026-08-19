@@ -1084,6 +1084,124 @@ function modelPlainLanguage(name: string) {
   return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
 
+function NumberTrendBoard({ draws }: { draws: DrawSnapshot[] }) {
+  const [showAssist, setShowAssist] = useState(false);
+  const [showGap, setShowGap] = useState(true);
+  const [showHighEnergy, setShowHighEnergy] = useState(true);
+  const [showLadder, setShowLadder] = useState(true);
+  const recent = draws.slice(0, 30);
+  const shortWindow = recent.slice(0, 10);
+  const stats = useMemo(() => {
+    const frequency = new Map<string, number>();
+    const recentFrequency = new Map<string, number>();
+    const superFrequency = new Map<string, number>();
+    const positions = new Map<string, number[]>();
+    recent.forEach((draw, index) => {
+      draw.numbers.forEach((raw) => {
+        const number = normalizeNumber(raw);
+        frequency.set(number, (frequency.get(number) || 0) + 1);
+        if (index < 10) recentFrequency.set(number, (recentFrequency.get(number) || 0) + 1);
+        const list = positions.get(number) || [];
+        list.push(index);
+        positions.set(number, list);
+      });
+      const superNumber = normalizeNumber(draw.superNumber);
+      if (superNumber) superFrequency.set(superNumber, (superFrequency.get(superNumber) || 0) + 1);
+    });
+    return Array.from({ length: 80 }, (_, index) => {
+      const number = String(index + 1).padStart(2, "0");
+      const occurrence = positions.get(number) || [];
+      const gaps = occurrence.slice(1).map((value, gapIndex) => value - occurrence[gapIndex]);
+      const lastGap = occurrence.length > 1 ? occurrence[occurrence.length - 1] - occurrence[occurrence.length - 2] : null;
+      const previousGap = occurrence.length > 2 ? occurrence[occurrence.length - 2] - occurrence[occurrence.length - 3] : null;
+      return {
+        number,
+        count: frequency.get(number) || 0,
+        recentCount: recentFrequency.get(number) || 0,
+        omission: occurrence.length ? occurrence[0] : recent.length,
+        superCount: superFrequency.get(number) || 0,
+        ladder: lastGap != null && previousGap != null && lastGap >= 2 && Math.abs(lastGap - previousGap) <= 1,
+        gapAverage: gaps.length ? gaps.reduce((sum, value) => sum + value, 0) / gaps.length : null,
+      };
+    });
+  }, [recent]);
+  const maximumRecentCount = Math.max(1, ...stats.map((item) => item.recentCount));
+  const markerClass = (item: (typeof stats)[number]) => {
+    if (showHighEnergy && item.superCount > 0) return "border-pink-400/80 bg-pink-500/20 text-pink-100 shadow-[0_0_8px_rgba(236,72,153,0.35)]";
+    if (showLadder && item.ladder) return "border-violet-400/80 bg-violet-500/20 text-violet-100 shadow-[0_0_8px_rgba(139,92,246,0.28)]";
+    if (showGap && item.omission >= 5) return "border-amber-300/60 bg-amber-300/10 text-amber-100";
+    if (item.recentCount > 0) return "border-emerald-400/45 bg-emerald-400/10 text-emerald-100";
+    return "border-slate-700/60 bg-slate-900/60 text-slate-500";
+  };
+  const markerLabel = (item: (typeof stats)[number]) => {
+    if (showHighEnergy && item.superCount > 0) return "超獎";
+    if (showLadder && item.ladder) return "階梯";
+    if (showGap && item.omission >= 5) return `遺漏${item.omission}`;
+    return item.recentCount ? `近10期 ${item.recentCount}` : "—";
+  };
+  return (
+    <details open className="mt-4 rounded-2xl border border-fuchsia-300/25 bg-slate-950/55 p-3">
+      <summary className="cursor-pointer list-none text-sm font-semibold text-fuchsia-100">
+        號碼走勢與標記圖層
+        <span className="float-right text-[10px] font-normal text-muted-foreground">近期軌跡・遺漏・階梯</span>
+      </summary>
+      <div className="mt-3 flex flex-wrap gap-2 border-b border-fuchsia-300/15 pb-3 text-[11px]">
+        {([
+          ["輔助標記", showAssist, setShowAssist],
+          ["遺漏", showGap, setShowGap],
+          ["標記超獎高能", showHighEnergy, setShowHighEnergy],
+          ["標記超獎階梯", showLadder, setShowLadder],
+        ] as Array<[string, boolean, (value: boolean) => void]>).map(([label, checked, setter]) => (
+          <label key={label} className="flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 text-slate-200">
+            <input type="checkbox" checked={Boolean(checked)} onChange={(event) => (setter as (value: boolean) => void)(event.target.checked)} />
+            <span>{label}</span>
+          </label>
+        ))}
+      </div>
+      <div className="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-[10px] text-muted-foreground">
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-emerald-400" />一般</span>
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-violet-500" />超級／階梯</span>
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-pink-500" />超獎高能</span>
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-amber-300" />遺漏較久</span>
+      </div>
+      <div className="mt-3 rounded-xl border border-slate-800 bg-black/25 p-2">
+        <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
+          <span>近期開獎軌跡</span><span>最近 {shortWindow.length} 期 · 超獎以粉色標記</span>
+        </div>
+        <div className="mt-2 space-y-1">
+          {shortWindow.map((draw) => {
+            const superNumber = normalizeNumber(draw.superNumber);
+            return <div key={draw.period} className="grid grid-cols-[3.5rem_repeat(10,minmax(0,1fr))] gap-1">
+              <span className="self-center truncate text-[9px] tabular-nums text-slate-500">{draw.period.slice(-4)}</span>
+              {draw.numbers.map((raw, index) => {
+                const number = normalizeNumber(raw);
+                return <span key={`${draw.period}-${number}-${index}`} className={`flex h-6 items-center justify-center rounded border text-[9px] font-bold tabular-nums ${number === superNumber ? "border-pink-400/80 bg-pink-500/20 text-pink-100" : "border-emerald-400/25 bg-emerald-400/5 text-emerald-200"}`}>{number}</span>;
+              })}
+            </div>;
+          })}
+          {!shortWindow.length ? <div className="py-4 text-center text-xs text-muted-foreground">尚無足夠開獎資料</div> : null}
+        </div>
+      </div>
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {Array.from({ length: 4 }, (_, zone) => {
+          const zoneStats = stats.slice(zone * 20, zone * 20 + 20);
+          return <div key={zone} className="rounded-xl border border-slate-800 bg-slate-900/55 p-2">
+            <div className="flex items-center justify-between text-[10px] text-slate-300"><strong>{zone * 20 + 1}–{zone * 20 + 20}</strong><span>近10期熱度</span></div>
+            <div className="mt-2 grid grid-cols-4 gap-1">
+              {zoneStats.map((item) => <div key={item.number} className={`rounded-md border px-1 py-1 text-center ${markerClass(item)}`} title={`號碼 ${item.number}；${markerLabel(item)}；總出現 ${item.count} 期`}>
+                <div className="text-[11px] font-bold tabular-nums">{item.number}</div>
+                <div className="mt-0.5 text-[8px] leading-3 opacity-80">{markerLabel(item)}</div>
+                {showAssist ? <div className="mt-1 h-0.5 rounded bg-slate-700"><div className="h-full rounded bg-cyan-300" style={{ width: `${Math.max(8, item.recentCount / maximumRecentCount * 100)}%` }} /></div> : null}
+              </div>)}
+            </div>
+          </div>;
+        })}
+      </div>
+      <p className="mt-3 text-[10px] leading-4 text-muted-foreground">標記是近期資料的描述性分層：階梯代表最近兩段遺漏間隔接近，不代表下一期較可能開出；圖層不會自動取得預測權重。</p>
+    </details>
+  );
+}
+
 const UI_PREFERENCES_KEY = "bingoResearch.uiPreferences.v2";
 
 function readUiPreferences(): { expandedPlayDetails: string[]; profitStrategy: ProfitStrategy } {
@@ -1594,6 +1712,7 @@ export function BingoResearchView() {
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">先看四個摘要數字；完整頻率、區間與熱冷號碼收在下方。這是描述性研究，不代表能改變隨機開獎機率。</p>
+                <NumberTrendBoard draws={sorted} />
                 <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                   <div className="rounded-xl border border-cyan-300/25 bg-cyan-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">平均和值</div><div className="mt-1 text-xl font-bold tabular-nums text-cyan-100">{technicalAnalysis.averageSum == null ? "—" : technicalAnalysis.averageSum.toFixed(1)}</div></div>
                   <div className="rounded-xl border border-violet-300/25 bg-violet-300/10 p-3 text-center"><div className="text-[10px] text-muted-foreground">跨期平均重複球</div><div className="mt-1 text-xl font-bold tabular-nums text-violet-100">{technicalAnalysis.repeatAverage == null ? "—" : technicalAnalysis.repeatAverage.toFixed(1)}</div></div>

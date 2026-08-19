@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "endpoints": [
     { "path": "/health", "method": "GET", "public": true },
-    { "path": "/api/latest", "method": "GET", "public": true }
+    { "path": "/api/latest", "method": "GET", "public": true },
+    { "path": "/api/progress", "method": "GET", "public": true }
   ],
   "schedule": [],
   "webhook": []

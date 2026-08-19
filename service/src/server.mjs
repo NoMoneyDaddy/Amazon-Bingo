@@ -70,6 +70,43 @@ const formalModelCache = new Map();
 const formalModelInFlight = new Map();
 const formalModelCacheTtlMs = 15 * 60 * 1000;
 const sourceRuntimeStats = new Map();
+let computationProgress = {
+  status: 'idle',
+  stage: 'idle',
+  percent: 0,
+  message: '等待計算',
+  updatedAt: Date.now(),
+  runId: '',
+};
+
+function setComputationProgress(patch = {}) {
+  computationProgress = { ...computationProgress, ...patch, updatedAt: Date.now() };
+  if (pool) {
+    void (async () => {
+      try {
+        await ensureDatabase();
+        await pool.query(`INSERT INTO bingo_progress (id, progress, updated_at)
+          VALUES (1, $1::jsonb, NOW())
+          ON CONFLICT (id) DO UPDATE SET progress=EXCLUDED.progress, updated_at=NOW()`, [JSON.stringify(computationProgress)]);
+      } catch (error) {
+        console.error(JSON.stringify({ event: 'progress-persist-failed', message: error instanceof Error ? error.message : String(error) }));
+      }
+    })();
+  }
+  return computationProgress;
+}
+
+async function readComputationProgress() {
+  if (!pool) return computationProgress;
+  try {
+    await ensureDatabase();
+    const result = await pool.query('SELECT progress FROM bingo_progress WHERE id = 1');
+    if (result.rows[0]?.progress) computationProgress = { ...computationProgress, ...result.rows[0].progress };
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'progress-read-failed', message: error instanceof Error ? error.message : String(error) }));
+  }
+  return computationProgress;
+}
 
 function sourceStat(name) {
   if (!sourceRuntimeStats.has(name)) sourceRuntimeStats.set(name, { success: 0, failure: 0, latencyMs: null, latestPeriod: '', lastError: '' });
@@ -273,6 +310,11 @@ async function ensureDatabase() {
     algorithm_version TEXT NOT NULL,
     profile JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS bingo_progress (
+    id INTEGER PRIMARY KEY,
+    progress JSONB NOT NULL DEFAULT '{}'::jsonb,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );`);
   databaseReady = true;
 }
@@ -2941,6 +2983,8 @@ function requestedCastingTime(value) {
 }
 
 async function latest(daysOverride = null, existingHistory = [], requestedCastingAt = '', options = {}) {
+  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  setComputationProgress({ status: 'running', stage: 'source-sync', percent: 5, message: '同步官方開獎資料', runId });
   const health = [];
   const apiSource = { name: '台灣彩券官方 API', authority: 'official', initialRank: 1000 };
   const attempts = [{ ...apiSource, run: () => fetchOfficial(daysOverride) }, ...fallbackSources
@@ -2961,6 +3005,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         || normalizeDrawCategory(previousLatest.oddEven, 'oddEven') !== normalizeDrawCategory(snapshot.oddEven, 'oddEven');
       const latencyMs = Date.now() - startedAt;
       const stat = updateSourceStat(attempt.name, true, latencyMs, snapshot.period);
+      setComputationProgress({ stage: 'source-normalize', percent: 20, message: `已取得第 ${snapshot.period} 期，整理歷史資料`, runId });
       health.push({ name: attempt.name, ok: true, latencyMs, records: (result.history || [snapshot]).length, latestPeriod: snapshot.period, stability: stat.success / (stat.success + stat.failure) });
       const syncedAt = Date.now();
       const fetchedHistory = normalizeSourceDrawTimes(result.history || [snapshot]);
@@ -3012,8 +3057,10 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         let models = previous?.models || item.models || [];
         let modelError = '';
         if (isNextPrediction && !options.deferLatestModel) {
+          setComputationProgress({ stage: 'model-build', percent: 35, message: '建立多模型預測', runId });
           try {
             models = await buildModelsCached(modelSnapshot, modelHistory, { evolve: true, castingAt: modelCastingAt });
+            setComputationProgress({ stage: 'model-build', percent: 60, message: `完成 ${models.length} 個模型`, runId });
           } catch (error) {
             modelError = error instanceof Error ? error.message : String(error);
             models = [];
@@ -3044,6 +3091,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const shouldComputeEvaluation = !options.deferEvaluationModels
         && (latestDrawChanged || !hasCompleteProfitabilityEvaluation(existingHistory[0]?.profitabilityEvaluation));
       if (shouldComputeEvaluation && history.slice(1, profitabilityBacktestWindow + 1).some((item) => !Array.isArray(item.models) || !item.models.length)) {
+        setComputationProgress({ stage: 'historical-models', percent: 64, message: '補建回測所需的歷史模型', runId });
         await hydrateEvaluationModels(history);
       }
       const evaluation = !shouldComputeEvaluation
@@ -3054,12 +3102,18 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           zoneProfitabilityEvaluation: history[0]?.zoneProfitabilityEvaluation || [],
           technicalAnalysis: history[0]?.technicalAnalysis || {},
         }
-        : await evaluateInWorker(history);
+        : await (async () => {
+          setComputationProgress({ stage: 'backtest', percent: 72, message: '執行樣本外回測與機率校準', runId });
+          const result = await evaluateInWorker(history);
+          setComputationProgress({ stage: 'technical-analysis', percent: 88, message: '整理技術分析與隨機性審計', runId });
+          return result;
+        })();
       // 模型、預測、回測與技術摘要必須同一批寫入，避免重開後只剩開獎資料或號碼。
       history[0] = { ...history[0], ...evaluation };
       // days=1 只需要保存最新快照；整個歷史窗口由 days>1 的同步路徑定期補齊。
       // 這可避免每次即時輪詢都把數百筆模型 JSON 重寫進 PostgreSQL。
       const snapshotsToPersist = daysOverride === 1 ? history.slice(0, 1) : history;
+      setComputationProgress({ stage: 'persist', percent: 94, message: '保存模型與分析結果', runId });
       await persistSnapshots(snapshotsToPersist);
       const backup = options.deferLatestModel
         ? { enabled: Boolean(githubToken), repo: githubRepo, path: githubBackupPath, deferred: true }
@@ -3067,6 +3121,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       const responseHistory = daysOverride && daysOverride > 1
         ? compactHistoryForResponse(selectRecentHistory(history, retentionDays).slice(0, responseHistoryLimit))
         : compactHistoryForResponse(history.slice(0, fastResponseHistoryLimit));
+      setComputationProgress({ status: 'complete', stage: 'complete', percent: 100, message: '計算完成', runId });
       return { ...history[0], history: responseHistory, historyDays: retentionDays, modelStatus: history[0].modelStatus, modelError: history[0].modelError, sourceHealth: health, sourceRanking: sourceRanking(history[0].period, health), audit: researchAudit(rawHistory), behaviorAudit: behaviorAudit(rawHistory), backtestIntegrity: leakageGuard(rawHistory, nextPeriod), ...evaluation, theoreticalRiskBaseline: theoreticalRiskBaseline(), researchEvidence: researchEvidenceRegistry, backup };
     } catch (error) {
       const latencyMs = Date.now() - startedAt;
@@ -3075,6 +3130,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
       health.push({ name: attempt.name, ok: false, latencyMs, error: errorMessage, stability: stat.success / (stat.success + stat.failure) });
     }
   }
+  setComputationProgress({ status: 'error', stage: 'error', percent: 100, message: '所有資料來源均失敗', runId });
   throw new Error(`所有開獎來源均失敗：${health.map((item) => `${item.name}=${item.error || 'OK'}`).join('；')}`);
 }
 
@@ -3281,6 +3337,10 @@ function send(res, status, body, req = null) {
 const server = http.createServer(async (req, res) => {
   if (req.method === 'OPTIONS') return send(res, 204, {});
   if (req.method === 'GET' && req.url === '/health') return send(res, 200, { ok: true, service: 'bingo-api' });
+  if (req.method === 'GET' && req.url.startsWith('/api/progress')) {
+    const progress = await readComputationProgress();
+    return send(res, 200, progress, req);
+  }
   if (req.method === 'GET' && req.url.startsWith('/api/latest')) {
     try {
       const requestUrl = new URL(req.url, 'http://localhost');

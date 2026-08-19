@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CustomScrollbar, PluginTopbar, Button, create } from "@cubelv/sdk";
 
 const API_URL = "https://bingo-api.zeabur.app/api/latest";
+const PROGRESS_URL = "https://bingo-api.zeabur.app/api/progress";
 const OFFICIAL_API_URL = "https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult";
 const MODEL_NAMES = [
   "梅花易數",
@@ -184,6 +185,14 @@ type DrawSnapshot = {
   profitabilityEvaluation?: ProfitabilityPlay[];
   zoneProfitabilityEvaluation?: ZoneProfitabilityResult[];
   technicalAnalysis?: TechnicalAnalysisData;
+};
+type ComputationProgress = {
+  status: "idle" | "running" | "complete" | "error";
+  stage: string;
+  percent: number;
+  message: string;
+  updatedAt: number;
+  runId: string;
 };
 
 type ZoneProfitabilityResult = {
@@ -723,6 +732,25 @@ async function fetchLatest(days = 1, castingAt = new Date().toISOString(), prior
     };
   } catch {
     throw lastError instanceof Error ? lastError : new Error("資料暫時無法更新");
+  }
+}
+
+async function fetchComputationProgress(): Promise<ComputationProgress | null> {
+  try {
+    const response = await fetch(PROGRESS_URL, { cache: "no-store" });
+    if (!response.ok) return null;
+    const value = await response.json() as Partial<ComputationProgress>;
+    if (typeof value.stage !== "string" || typeof value.percent !== "number") return null;
+    return {
+      status: value.status === "running" || value.status === "complete" || value.status === "error" ? value.status : "idle",
+      stage: value.stage,
+      percent: Math.max(0, Math.min(100, value.percent)),
+      message: value.message || "等待計算",
+      updatedAt: Number(value.updatedAt || Date.now()),
+      runId: value.runId || "",
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -1372,6 +1400,7 @@ export function BingoResearchView() {
     [draws],
   );
   const [syncing, setSyncing] = useState(false);
+  const [computationProgress, setComputationProgress] = useState<ComputationProgress | null>(null);
   const syncingRef = useRef(false);
   const [error, setError] = useState("");
   const [lastSync, setLastSync] = useState<number | null>(null);
@@ -1391,6 +1420,19 @@ export function BingoResearchView() {
     }
   }, [expandedPlayDetails, profitStrategy]);
   const latest = sorted[0];
+  useEffect(() => {
+    let active = true;
+    const poll = async () => {
+      const progress = await fetchComputationProgress();
+      if (active && progress) setComputationProgress(progress);
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 2_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
   const recentStats = useMemo(() => recentNumberStats(sorted), [sorted]);
   const latestModels = useMemo(
     () => (latest ? parseModels(latest) : []),
@@ -1799,6 +1841,18 @@ export function BingoResearchView() {
                     {latest?.modelStatus !== "formal" ? (
                       <div className="mb-2 rounded border border-rose-300/25 bg-rose-300/10 px-2 py-1.5 text-rose-100">
                         正式模型狀態：{latest?.modelStatus === "queued" ? "計算中，尚未產生預測" : latest?.modelStatus === "error" ? "計算失敗，未使用備援號碼" : "尚未取得"}；目前只顯示官方開獎資料。
+                      </div>
+                    ) : null}
+                    {computationProgress?.status === "running" || latest?.modelStatus === "queued" ? (
+                      <div className="mb-2 rounded border border-cyan-300/25 bg-cyan-300/10 px-2.5 py-2" role="status" aria-live="polite">
+                        <div className="flex items-center justify-between gap-2 text-[11px] text-cyan-100">
+                          <span>{computationProgress?.message || "後端正在計算"}</span>
+                          <span className="tabular-nums">{Math.round(computationProgress?.percent || 0)}%</span>
+                        </div>
+                        <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-cyan-950/70">
+                          <div className="h-full rounded-full bg-cyan-300 transition-all duration-500" style={{ width: `${Math.max(3, Math.min(100, computationProgress?.percent || 3))}%` }} />
+                        </div>
+                        <div className="mt-1 text-[10px] text-cyan-200/70">階段：{computationProgress?.stage || "等待後端回報"} · 每 2 秒更新</div>
                       </div>
                     ) : null}
                     <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">

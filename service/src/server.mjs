@@ -56,6 +56,7 @@ const githubToken = process.env.GITHUB_TOKEN || '';
 const githubRepo = process.env.GITHUB_BACKUP_REPO || 'NoMoneyDaddy/Amazon-Bingo';
 const githubBackupPath = process.env.GITHUB_BACKUP_PATH || 'backups/bingo-model-profile.json';
 const upstreamTimeoutMs = 15_000;
+const sourceFetchConcurrency = 3;
 const persistedCacheTtlMs = 5_000;
 let databaseReady = false;
 let lastPersistedPeriod = '';
@@ -3174,19 +3175,64 @@ function requestedCastingTime(value) {
   return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : '';
 }
 
+async function fetchSourcesConcurrently(attempts, concurrency = sourceFetchConcurrency) {
+  const results = [];
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < attempts.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      const attempt = attempts[index];
+      const startedAt = Date.now();
+      try {
+        const result = await attempt.run();
+        results.push({ attempt, result, latencyMs: Date.now() - startedAt, error: '' });
+      } catch (error) {
+        results.push({ attempt, result: null, latencyMs: Date.now() - startedAt, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, attempts.length) }, () => worker()));
+  return results;
+}
+
 async function latest(daysOverride = null, existingHistory = [], requestedCastingAt = '', options = {}) {
   const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  setComputationProgress({ status: 'running', stage: 'source-sync', percent: 5, message: '同步官方開獎資料', runId });
+  setComputationProgress({ status: 'running', stage: 'source-sync', percent: 5, message: '併發同步官方與備援資料', runId });
   const health = [];
   const apiSource = { name: '台灣彩券官方 API', authority: 'official', initialRank: 1000 };
   const attempts = [{ ...apiSource, run: () => fetchOfficial(daysOverride) }, ...fallbackSources
     .slice()
     .sort((a, b) => sourceRankingScore(b, existingHistory[0]?.period) - sourceRankingScore(a, existingHistory[0]?.period))
     .map((source) => ({ ...source, run: () => fetchMirror(source) }))];
-  for (const attempt of attempts) {
-    const startedAt = Date.now();
+  const sourceResults = await fetchSourcesConcurrently(attempts, sourceFetchConcurrency);
+  sourceResults.forEach(({ attempt, result, error, latencyMs }) => {
+    const snapshot = result?.snapshot || result;
+    const stat = updateSourceStat(attempt.name, Boolean(result), latencyMs, snapshot?.period || '', error);
+    health.push({
+      name: attempt.name,
+      ok: Boolean(result),
+      latencyMs,
+      records: result ? (result.history || [snapshot]).length : undefined,
+      latestPeriod: snapshot?.period || '',
+      error: error ? String(error) : undefined,
+      stability: stat.success / (stat.success + stat.failure),
+    });
+  });
+  const successfulSources = sourceResults
+    .filter((item) => item.result)
+    .sort((a, b) => {
+      const aSnapshot = a.result.snapshot || a.result;
+      const bSnapshot = b.result.snapshot || b.result;
+      return Number(bSnapshot?.period || 0) - Number(aSnapshot?.period || 0)
+        || (b.attempt.authority === 'official' ? 1 : 0) - (a.attempt.authority === 'official' ? 1 : 0)
+        || a.latencyMs - b.latencyMs;
+    });
+  for (const candidate of successfulSources) {
+    const attempt = candidate.attempt;
+    const startedAt = Date.now() - candidate.latencyMs;
     try {
-      const result = await attempt.run();
+      const result = candidate.result;
       const snapshot = result.snapshot || result;
       const previousLatest = existingHistory[0];
       const latestDrawChanged = !previousLatest
@@ -3195,10 +3241,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         || normalizeNumberValue(previousLatest.superNumber) !== normalizeNumberValue(snapshot.superNumber)
         || normalizeDrawCategory(previousLatest.size, 'size') !== normalizeDrawCategory(snapshot.size, 'size')
         || normalizeDrawCategory(previousLatest.oddEven, 'oddEven') !== normalizeDrawCategory(snapshot.oddEven, 'oddEven');
-      const latencyMs = Date.now() - startedAt;
-      const stat = updateSourceStat(attempt.name, true, latencyMs, snapshot.period);
-      setComputationProgress({ stage: 'source-normalize', percent: 20, message: `已取得第 ${snapshot.period} 期，整理歷史資料`, runId });
-      health.push({ name: attempt.name, ok: true, latencyMs, records: (result.history || [snapshot]).length, latestPeriod: snapshot.period, stability: stat.success / (stat.success + stat.failure) });
+      setComputationProgress({ stage: 'source-normalize', percent: 20, message: `已取得第 ${snapshot.period} 期，整理併發來源結果`, runId });
       const syncedAt = Date.now();
       const fetchedHistory = normalizeSourceDrawTimes(result.history || [snapshot]);
       const historyByPeriod = new Map(existingHistory.map((item) => [String(item.period), item]));

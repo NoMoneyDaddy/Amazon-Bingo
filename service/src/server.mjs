@@ -60,6 +60,9 @@ const upstreamTimeoutMs = 15_000;
 const sourceFetchConcurrency = 3;
 const redisUrl = process.env.REDIS_URL || '';
 const redisLockTtlMs = 180_000;
+const workerMode = process.env.WORKER_MODE === '1';
+const redisJobStream = 'bingo:jobs';
+const redisJobGroup = 'bingo-workers';
 const persistedCacheTtlMs = 5_000;
 let databaseReady = false;
 let lastPersistedPeriod = '';
@@ -77,6 +80,8 @@ const formalModelCacheTtlMs = 15 * 60 * 1000;
 const sourceRuntimeStats = new Map();
 let redisClient;
 let redisConnectPromise;
+let redisQueueClient;
+let redisQueueConnectPromise;
 let computationProgress = {
   status: 'idle',
   stage: 'idle',
@@ -118,6 +123,23 @@ async function getRedisClient() {
       return null;
     });
   return redisConnectPromise;
+}
+
+async function getRedisQueueClient() {
+  if (!redisUrl) return null;
+  if (redisQueueClient?.isReady) return redisQueueClient;
+  if (redisQueueConnectPromise) return redisQueueConnectPromise;
+  redisQueueClient = createClient({ url: redisUrl });
+  redisQueueClient.on('error', (error) => console.error(JSON.stringify({ event: 'redis-queue-error', message: error instanceof Error ? error.message : String(error) })));
+  redisQueueConnectPromise = redisQueueClient.connect()
+    .then(() => redisQueueClient)
+    .catch((error) => {
+      console.error(JSON.stringify({ event: 'redis-queue-connect-failed', message: error instanceof Error ? error.message : String(error) }));
+      redisQueueConnectPromise = undefined;
+      redisQueueClient = undefined;
+      return null;
+    });
+  return redisQueueConnectPromise;
 }
 
 async function acquireRefreshLock(key, ttlMs = redisLockTtlMs) {
@@ -365,6 +387,23 @@ async function ensureDatabase() {
     progress JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );`);
+  await pool.query(`CREATE TABLE IF NOT EXISTS bingo_jobs (
+    run_id TEXT PRIMARY KEY,
+    job_key TEXT NOT NULL UNIQUE,
+    job_type TEXT NOT NULL,
+    target_period TEXT NOT NULL DEFAULT '',
+    days INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+    error TEXT NOT NULL DEFAULT '',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    started_at TIMESTAMPTZ,
+    heartbeat_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );`);
+  await pool.query('CREATE INDEX IF NOT EXISTS bingo_jobs_status_idx ON bingo_jobs (status, updated_at DESC)');
   databaseReady = true;
 }
 
@@ -3243,8 +3282,50 @@ async function fetchSourcesConcurrently(attempts, concurrency = sourceFetchConcu
   return results;
 }
 
+async function updateJobState(runId, patch = {}) {
+  if (!pool || !runId) return;
+  await ensureDatabase();
+  const fields = [];
+  const values = [runId];
+  const add = (column, value) => { values.push(value); fields.push(`${column}=$${values.length}`); };
+  if (patch.status) add('status', patch.status);
+  if (patch.attempts != null) add('attempts', patch.attempts);
+  if (patch.error != null) add('error', String(patch.error).slice(0, 1000));
+  if (patch.started) fields.push('started_at=COALESCE(started_at,NOW())');
+  if (patch.heartbeat) fields.push('heartbeat_at=NOW()');
+  if (patch.finished) fields.push('finished_at=NOW()');
+  if (!fields.length) return;
+  fields.push('updated_at=NOW()');
+  await pool.query(`UPDATE bingo_jobs SET ${fields.join(', ')} WHERE run_id=$1`, values);
+}
+
+async function enqueueRefreshJob(persisted = [], days = 1) {
+  const client = await getRedisQueueClient();
+  if (!client) return false;
+  try {
+    try { await client.xGroupCreate(redisJobStream, redisJobGroup, '0', { MKSTREAM: true }); }
+    catch (error) { if (!String(error?.message || error).includes('BUSYGROUP')) throw error; }
+    const targetPeriod = String(persisted[0]?.period || 'latest');
+    const jobKey = `refresh:${targetPeriod}:${days}`;
+    const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const dedupe = await client.set(`bingo:job:${jobKey}`, runId, { NX: true, PX: redisLockTtlMs });
+    if (dedupe !== 'OK') return true;
+    if (pool) {
+      await ensureDatabase();
+      await pool.query(`INSERT INTO bingo_jobs (run_id, job_key, job_type, target_period, days, status, payload)
+        VALUES ($1,$2,'refresh',$3,$4,'queued',$5::jsonb)
+        ON CONFLICT (job_key) DO NOTHING`, [runId, jobKey, targetPeriod, days, JSON.stringify({ targetPeriod, days })]);
+    }
+    await client.xAdd(redisJobStream, '*', { runId, jobType: 'refresh', targetPeriod, days: String(days), jobKey });
+    return true;
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'redis-enqueue-failed', message: error instanceof Error ? error.message : String(error) }));
+    return false;
+  }
+}
+
 async function latest(daysOverride = null, existingHistory = [], requestedCastingAt = '', options = {}) {
-  const runId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const runId = options.runId || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   setComputationProgress({ status: 'running', stage: 'source-sync', percent: 5, message: '併發同步官方與備援資料', runId });
   const health = [];
   const apiSource = { name: '台灣彩券官方 API', authority: 'official', initialRank: 1000 };
@@ -3507,56 +3588,97 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   };
 }
 
+async function executeRefreshJob(persisted, days = 1, runId = '') {
+  const lockKey = `bingo:refresh:${persisted[0]?.period || 'latest'}:${days}`;
+  const lock = await acquireRefreshLock(lockKey);
+  if (lock === false) return { skipped: true };
+  try {
+    await updateJobState(runId, { status: 'running', started: true, heartbeat: true });
+    const probe = await latest(1, persisted, '', { deferLatestModel: true, deferEvaluationModels: true, runId });
+    const complete = Boolean(probe?.models?.length) && hasCompleteProfitabilityEvaluation(probe?.profitabilityEvaluation);
+    const changed = String(probe?.predictionTargetPeriod || '') !== String(persisted[0]?.predictionTargetPeriod || '')
+      || String(probe?.period || '') !== String(persisted[0]?.period || '');
+    if (!complete || changed || days > 1) {
+      const refreshed = await readPersistedCached(persistedHistoryLimit);
+      const result = await precomputeLatestSnapshot(refreshed, runId);
+      const lightweight = { ...result, history: compactHistoryForResponse(result.history?.slice(0, fastResponseHistoryLimit) || [], quickDecisionBacktestWindow) };
+      writeLatestResponseCache('latest-1', lightweight);
+      return lightweight;
+    }
+    writeLatestResponseCache('latest-1', probe);
+    return probe;
+  } finally {
+    await releaseRefreshLock(lock);
+  }
+}
+
 function refreshInBackground(persisted, days = 1) {
   if (refreshInFlight) {
     evaluationRefreshQueued = true;
     return;
   }
   refreshInFlight = true;
-  const lockKey = `bingo:refresh:${persisted[0]?.period || 'latest'}:${days}`;
-  void (async () => {
-    const lock = await acquireRefreshLock(lockKey);
-    if (lock === false) {
+  if (redisUrl) {
+    void enqueueRefreshJob(persisted, days)
+      .then((queued) => {
+        if (!queued) return executeRefreshJob(persisted, days);
+        return null;
+      })
+      .catch((error) => console.error(JSON.stringify({ event: 'background-enqueue-failed', message: error instanceof Error ? error.message : String(error) })))
+      .finally(() => { refreshInFlight = false; });
+    return;
+  }
+  void executeRefreshJob(persisted, days)
+    .catch((error) => console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' })))
+    .finally(() => {
       refreshInFlight = false;
-      return;
-    }
-    // 先用輕量同步確認官方期號；只有新期號、模型缺失或回測不完整時，
-    // 才啟動完整預計算，避免每次開插件都重跑全部算法。
-    try {
-      const probe = await latest(1, persisted, '', { deferLatestModel: true, deferEvaluationModels: true });
-      const complete = Boolean(probe?.models?.length) && hasCompleteProfitabilityEvaluation(probe?.profitabilityEvaluation);
-      const changed = String(probe?.predictionTargetPeriod || '') !== String(persisted[0]?.predictionTargetPeriod || '')
-        || String(probe?.period || '') !== String(persisted[0]?.period || '');
-      if (!complete || changed || days > 1) {
-        const refreshed = await readPersistedCached(persistedHistoryLimit);
-        const result = await precomputeLatestSnapshot(refreshed);
-        // 完整預計算結果仍保存至資料庫，但即時快取只保留首頁刷新所需的輕量歷史。
-        const lightweight = {
-          ...result,
-          history: compactHistoryForResponse(result.history?.slice(0, fastResponseHistoryLimit) || [], quickDecisionBacktestWindow),
-        };
-        writeLatestResponseCache('latest-1', lightweight);
-        return lightweight;
-      }
-      writeLatestResponseCache('latest-1', probe);
-      return probe;
-    } catch (error) {
-      console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' }));
-    } finally {
-      await releaseRefreshLock(lock);
-      refreshInFlight = false;
-      if (evaluationRefreshQueued) {
-        evaluationRefreshQueued = false;
-        setImmediate(() => refreshInBackground(persisted, 1));
-      }
-    }
-  })();
+      if (evaluationRefreshQueued) { evaluationRefreshQueued = false; setImmediate(() => refreshInBackground(persisted, 1)); }
+    });
 }
 
-async function precomputeLatestSnapshot(persisted = []) {
+async function runRedisWorker() {
+  const client = await getRedisQueueClient();
+  if (!client) throw new Error('WORKER_MODE 需要 REDIS_URL');
+  try { await client.xGroupCreate(redisJobStream, redisJobGroup, '0', { MKSTREAM: true }); }
+  catch (error) { if (!String(error?.message || error).includes('BUSYGROUP')) throw error; }
+  const consumer = `${process.env.HOSTNAME || 'bingo-worker'}-${process.pid}`;
+  console.log(JSON.stringify({ event: 'worker-ready', stream: redisJobStream, group: redisJobGroup, consumer }));
+  while (true) {
+    const batches = await client.xReadGroup(redisJobGroup, consumer, [{ key: redisJobStream, id: '>' }], { COUNT: 1, BLOCK: 5000 });
+    if (!batches?.length) continue;
+    for (const message of batches[0].messages || []) {
+      const values = message.message || {};
+      const runId = values.runId || message.id;
+      const days = Number(values.days || 1);
+      const attempts = Number(values.attempts || 0);
+      try {
+        await updateJobState(runId, { status: 'running', started: true, heartbeat: true });
+        const heartbeat = setInterval(() => { void updateJobState(runId, { heartbeat: true }); }, 10_000);
+        try {
+          const persisted = await readPersistedCached(persistedHistoryLimit);
+          await executeRefreshJob(persisted, days, runId);
+          await updateJobState(runId, { status: 'completed', finished: true, heartbeat: true });
+        } finally { clearInterval(heartbeat); }
+        await client.xAck(redisJobStream, redisJobGroup, message.id);
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : String(error);
+        if (attempts < 2) {
+          await client.xAdd(redisJobStream, '*', { ...values, attempts: String(attempts + 1) });
+          await updateJobState(runId, { status: 'queued', attempts: attempts + 1, error: messageText, heartbeat: true });
+        } else {
+          await updateJobState(runId, { status: 'failed', attempts: attempts + 1, error: messageText, finished: true });
+        }
+        console.error(JSON.stringify({ event: 'worker-job-failed', runId, attempts: attempts + 1, message: messageText }));
+        await client.xAck(redisJobStream, redisJobGroup, message.id);
+      }
+    }
+  }
+}
+
+async function precomputeLatestSnapshot(persisted = [], runId = '') {
   // 預計算至少抓完整保存窗口，確保模型與 walk-forward 回測有共同、足夠的歷史資料。
   const refreshDays = retentionDays;
-  const result = await latest(refreshDays, persisted, '', {});
+  const result = await latest(refreshDays, persisted, '', { runId });
   if (!result?.models?.length || !hasCompleteProfitabilityEvaluation(result.profitabilityEvaluation)) {
     throw new Error('預計算未產生完整模型與回測快照');
   }
@@ -3591,9 +3713,8 @@ function nextDrawAt(now = new Date()) {
 async function scheduledSync(forceRepair = false) {
   try {
     const persisted = await readPersistedCached(persistedHistoryLimit);
-    const result = await precomputeLatestSnapshot(persisted);
-    writeLatestResponseCache('latest-1', result);
-    console.log(JSON.stringify({ event: 'sync-ok', period: result.period, historyDays: result.historyDays, persisted: Boolean(pool) }));
+    refreshInBackground(persisted, retentionDays);
+    console.log(JSON.stringify({ event: 'sync-enqueued', period: persisted[0]?.period || '', historyDays: retentionDays, persisted: Boolean(pool) }));
   } catch (error) {
     console.error(JSON.stringify({ event: 'sync-failed', message: error instanceof Error ? error.message : '同步失敗' }));
   } finally {
@@ -3731,7 +3852,12 @@ const server = http.createServer(async (req, res) => {
   send(res, 404, { error: 'Not found' });
 });
 
-if (isMainThread) {
+if (isMainThread && workerMode) {
+  void runRedisWorker().catch((error) => {
+    console.error(JSON.stringify({ event: 'worker-fatal', message: error instanceof Error ? error.message : String(error) }));
+    process.exitCode = 1;
+  });
+} else if (isMainThread) {
   server.listen(port, '0.0.0.0', () => {
     console.log(`bingo-api listening on ${port}; database=${Boolean(pool)}`);
     void prunePersistedHistory();

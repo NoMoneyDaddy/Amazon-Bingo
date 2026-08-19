@@ -2458,9 +2458,17 @@ function aggregateModel(models, history) {
     const addNumbers = (fallback = false) => ensembleModels.forEach((model) => {
       const weight = fallback ? 1 : weightFor(model, target);
       if (weight <= 0) return;
-      (model.official.basic?.[target] || []).forEach((rawNumber) => {
-        const number = normalizeNumberValue(rawNumber);
-        if (Number(number) >= 1 && Number(number) <= 80) totals.set(number, (totals.get(number) || 0) + weight);
+      // 混合式取號：模型權重決定「這個模型有多重要」，名次衰減決定
+      // 同一模型的第 1 名比第 10 名更重要；不把每個模型硬分配固定數量。
+      // 10 星使用各模型的 20 號研究母體，先形成候選池，再取最高分的 10 號。
+      const picks = target === '10星'
+        ? (model.research?.numberPicks20 || model.official.basic?.[target] || [])
+        : (model.research?.targetResearch?.[target]?.numberPicks || model.official.basic?.[target] || []);
+      const uniquePicks = [...new Set(picks.map(normalizeNumberValue).filter((number) => Number(number) >= 1 && Number(number) <= 80))];
+      const rankMass = uniquePicks.reduce((sum, _, index) => sum + 1 / Math.sqrt(index + 1), 0) || 1;
+      uniquePicks.forEach((number, index) => {
+        const rankContribution = (1 / Math.sqrt(index + 1)) / rankMass;
+        totals.set(number, (totals.get(number) || 0) + weight * rankContribution);
       });
     });
     addNumbers();
@@ -2513,12 +2521,14 @@ function aggregateModel(models, history) {
       castingSource: 'weighted-model-consensus',
       castingAt: models[0]?.calculation?.castingAt || '',
       historySamples: history.length,
-      aggregation: hasValidatedWeight ? '品質分數 × 樣本收縮 × 近期閘門；不以單一期高 ROI 主導' : '已完成長窗口無洩漏驗證的統計基線採等權研究共識，不代表超越基準',
+      aggregation: hasValidatedWeight
+        ? '混合式取號：模型品質分數 × 樣本收縮 × 近期閘門，再以模型內名次衰減聚合；10 星先用 20 號研究母體取前 10 號'
+        : '混合式取號：可檢驗模型等權，但模型內仍按候選名次衰減；不代表超越基準',
       weightedModelCount,
       ensembleUniverse: ensembleModels.map((model) => model.name),
       commonCasting: '多模型聚合不另起卦；它整合各子模型在同一固定輸入下的結果。',
       commonCastingValue: '多模型加權整合',
-      targetRules: Object.fromEntries(predictionTargets.map((target) => [target, '依各子模型同一玩法的回測權重加權投票，不產生獨立卦象。'])),
+      targetRules: Object.fromEntries(predictionTargets.map((target) => [target, '以各子模型同一玩法的樣本外權重乘名次衰減形成號碼分數，再取前 k；不是每模型固定配額，也不產生獨立卦象。'])),
     },
     official: { size: weightedCategory('size'), oddEven: weightedCategory('oddEven'), superNumber, basic },
     research: {

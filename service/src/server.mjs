@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { isMainThread, Worker } from 'node:worker_threads';
 import { gzipSync } from 'node:zlib';
 import pg from 'pg';
+import { createClient } from 'redis';
 
 const { Pool } = pg;
 
@@ -57,6 +58,8 @@ const githubRepo = process.env.GITHUB_BACKUP_REPO || 'NoMoneyDaddy/Amazon-Bingo'
 const githubBackupPath = process.env.GITHUB_BACKUP_PATH || 'backups/bingo-model-profile.json';
 const upstreamTimeoutMs = 15_000;
 const sourceFetchConcurrency = 3;
+const redisUrl = process.env.REDIS_URL || '';
+const redisLockTtlMs = 180_000;
 const persistedCacheTtlMs = 5_000;
 let databaseReady = false;
 let lastPersistedPeriod = '';
@@ -72,6 +75,8 @@ const formalModelCache = new Map();
 const formalModelInFlight = new Map();
 const formalModelCacheTtlMs = 15 * 60 * 1000;
 const sourceRuntimeStats = new Map();
+let redisClient;
+let redisConnectPromise;
 let computationProgress = {
   status: 'idle',
   stage: 'idle',
@@ -96,6 +101,48 @@ function setComputationProgress(patch = {}) {
     })();
   }
   return computationProgress;
+}
+
+async function getRedisClient() {
+  if (!redisUrl) return null;
+  if (redisClient?.isReady) return redisClient;
+  if (redisConnectPromise) return redisConnectPromise;
+  redisClient = createClient({ url: redisUrl });
+  redisClient.on('error', (error) => console.error(JSON.stringify({ event: 'redis-error', message: error instanceof Error ? error.message : String(error) })));
+  redisConnectPromise = redisClient.connect()
+    .then(() => redisClient)
+    .catch((error) => {
+      console.error(JSON.stringify({ event: 'redis-connect-failed', message: error instanceof Error ? error.message : String(error) }));
+      redisConnectPromise = undefined;
+      redisClient = undefined;
+      return null;
+    });
+  return redisConnectPromise;
+}
+
+async function acquireRefreshLock(key, ttlMs = redisLockTtlMs) {
+  const client = await getRedisClient();
+  if (!client) return null;
+  const token = `${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  try {
+    const acquired = await client.set(key, token, { NX: true, PX: ttlMs });
+    return acquired === 'OK' ? { client, key, token } : false;
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'redis-lock-failed', message: error instanceof Error ? error.message : String(error) }));
+    return null;
+  }
+}
+
+async function releaseRefreshLock(lock) {
+  if (!lock) return;
+  try {
+    await lock.client.eval('if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end', {
+      keys: [lock.key],
+      arguments: [lock.token],
+    });
+  } catch (error) {
+    console.error(JSON.stringify({ event: 'redis-unlock-failed', message: error instanceof Error ? error.message : String(error) }));
+  }
 }
 
 async function readComputationProgress() {
@@ -3466,10 +3513,17 @@ function refreshInBackground(persisted, days = 1) {
     return;
   }
   refreshInFlight = true;
-  // 先用輕量同步確認官方期號；只有新期號、模型缺失或回測不完整時，
-  // 才啟動完整預計算，避免每次開插件都重跑全部算法。
-  void latest(1, persisted, '', { deferLatestModel: true, deferEvaluationModels: true })
-    .then(async (probe) => {
+  const lockKey = `bingo:refresh:${persisted[0]?.period || 'latest'}:${days}`;
+  void (async () => {
+    const lock = await acquireRefreshLock(lockKey);
+    if (lock === false) {
+      refreshInFlight = false;
+      return;
+    }
+    // 先用輕量同步確認官方期號；只有新期號、模型缺失或回測不完整時，
+    // 才啟動完整預計算，避免每次開插件都重跑全部算法。
+    try {
+      const probe = await latest(1, persisted, '', { deferLatestModel: true, deferEvaluationModels: true });
       const complete = Boolean(probe?.models?.length) && hasCompleteProfitabilityEvaluation(probe?.profitabilityEvaluation);
       const changed = String(probe?.predictionTargetPeriod || '') !== String(persisted[0]?.predictionTargetPeriod || '')
         || String(probe?.period || '') !== String(persisted[0]?.period || '');
@@ -3486,15 +3540,17 @@ function refreshInBackground(persisted, days = 1) {
       }
       writeLatestResponseCache('latest-1', probe);
       return probe;
-    })
-    .catch((error) => console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' })))
-    .finally(() => {
+    } catch (error) {
+      console.error(JSON.stringify({ event: 'background-sync-failed', message: error instanceof Error ? error.message : '背景同步失敗' }));
+    } finally {
+      await releaseRefreshLock(lock);
       refreshInFlight = false;
       if (evaluationRefreshQueued) {
         evaluationRefreshQueued = false;
         setImmediate(() => refreshInBackground(persisted, 1));
       }
-    });
+    }
+  })();
 }
 
 async function precomputeLatestSnapshot(persisted = []) {

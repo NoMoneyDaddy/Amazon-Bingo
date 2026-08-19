@@ -23,9 +23,9 @@ const profileValidationWindow = 18;
 const profileHoldoutWindow = profitabilityBacktestWindow;
 // 資料保存至少涵蓋一個月；最新基準之外，模型選擇使用較長 walk-forward。
 const retentionDays = 14;
-// API 與 Worker 共用同一份服務程式；400 筆已涵蓋 300 期模型歷史與目前 14 日資料窗口，
-// 避免 API 讀取 2500 筆完整模型 JSON 時在同步期間造成記憶體峰值。
-const persistedHistoryLimit = 400;
+// Worker 需要較長的模型歷史；API 只保留最新資料與展示窗口，避免把大量完整模型 JSON
+// 常駐在 API 記憶體中。歷史原始開獎資料仍由 Worker 的官方同步重新取得。
+const persistedHistoryLimit = process.env.WORKER_MODE === '1' ? 400 : 80;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;
 const reproducibilityVersion = 'bingo-research-v82-long-window-invalidation';
@@ -3792,7 +3792,7 @@ function readLatestResponseCache(key) {
 
 function writeLatestResponseCache(key, body) {
   latestResponseCache.set(key, { storedAt: Date.now(), body });
-  if (latestResponseCache.size > 4) latestResponseCache.delete(latestResponseCache.keys().next().value);
+  if (latestResponseCache.size > 2) latestResponseCache.delete(latestResponseCache.keys().next().value);
   return body;
 }
 
@@ -3839,7 +3839,7 @@ function send(res, status, body, req = null) {
     if (!compressed) {
       compressed = gzipSync(json);
       compressedPayloadCache.set(etag, compressed);
-      if (compressedPayloadCache.size > 8) compressedPayloadCache.delete(compressedPayloadCache.keys().next().value);
+      if (compressedPayloadCache.size > 2) compressedPayloadCache.delete(compressedPayloadCache.keys().next().value);
     }
     headers['content-encoding'] = 'gzip';
     res.writeHead(status, headers);
@@ -3866,6 +3866,8 @@ const server = http.createServer(async (req, res) => {
       const priorityRefresh = requestUrl.searchParams.get('priority') === '1';
       const responseCacheKey = daysOverride === 1 ? 'latest-1' : '';
       if (priorityRefresh && daysOverride === 1) {
+        const cachedPriority = readLatestResponseCache('latest-priority');
+        if (cachedPriority) return send(res, 200, cachedPriority, req);
         const persistedForPriority = await readPersistedCached(persistedHistoryLimit);
         // 即時入口只讀保存快照；模型與回測交給 Worker，避免每次首頁同步在 API 容器重算造成記憶體峰值。
         const prioritySnapshot = persistedForPriority[0]
@@ -3881,14 +3883,15 @@ const server = http.createServer(async (req, res) => {
           .catch(() => undefined);
         // 臨場判斷不等待完整回測：先回傳模型與最近 10 期快速比較，20 期完整研究交給背景更新。
         const quickEvaluation = fastProfitabilityEvaluation(quickHistory, quickDecisionBacktestWindow);
-        return send(res, 200, {
+        const priorityResponse = {
           ...prioritySnapshot,
           history: quickHistory,
           profitabilityEvaluation: quickEvaluation,
           quickBacktestIntegrity: quickIntegrity,
           evaluationMode: 'quick',
           modelStatus: prioritySnapshot.models?.length ? 'formal' : 'queued',
-        }, req);
+        };
+        return send(res, 200, writeLatestResponseCache('latest-priority', priorityResponse), req);
       }
       if (responseCacheKey) {
         const cachedResponse = readLatestResponseCache(responseCacheKey);

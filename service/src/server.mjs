@@ -3433,8 +3433,13 @@ function refreshInBackground(persisted, days = 1) {
       if (!complete || changed || days > 1) {
         const refreshed = await readPersistedCached(persistedHistoryLimit);
         const result = await precomputeLatestSnapshot(refreshed);
-        writeLatestResponseCache('latest-1', result);
-        return result;
+        // 完整預計算結果仍保存至資料庫，但即時快取只保留首頁刷新所需的輕量歷史。
+        const lightweight = {
+          ...result,
+          history: compactHistoryForResponse(result.history?.slice(0, fastResponseHistoryLimit) || [], quickDecisionBacktestWindow),
+        };
+        writeLatestResponseCache('latest-1', lightweight);
+        return lightweight;
       }
       writeLatestResponseCache('latest-1', probe);
       return probe;

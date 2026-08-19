@@ -1099,6 +1099,86 @@ function modelPlainLanguage(name: string) {
   return "取太乙行九宮的結構做九宮循環索引，不冒充完整太乙排盤。";
 }
 
+type LadderSegment = { start: number; length: number };
+
+function getLadderSegments(draw: DrawSnapshot): LadderSegment[] {
+  const values = [...new Set(draw.numbers.map(Number).filter((value) => Number.isInteger(value) && value >= 1 && value <= 80))]
+    .sort((a, b) => a - b);
+  const segments: LadderSegment[] = [];
+  let run: number[] = [];
+  values.forEach((value, index) => {
+    if (!run.length || value === run[run.length - 1] + 1) run.push(value);
+    else {
+      if (run.length >= 2) segments.push({ start: run[0], length: run.length });
+      run = [value];
+    }
+    if (index === values.length - 1 && run.length >= 2) segments.push({ start: run[0], length: run.length });
+  });
+  return segments;
+}
+
+function LadderChart({ draws }: { draws: DrawSnapshot[] }) {
+  const rows = draws.slice(0, 10).map((draw) => ({
+    draw,
+    numbers: new Set(draw.numbers.map(Number)),
+    segments: getLadderSegments(draw),
+    superNumber: Number(draw.superNumber),
+  }));
+  const columnWidth = 24;
+  const chartWidth = columnWidth * 80;
+  return (
+    <div className="mt-3 overflow-hidden rounded-xl border border-violet-300/20 bg-black/30">
+      <div className="flex items-center justify-between gap-2 border-b border-violet-300/15 px-2.5 py-2 text-[10px] text-muted-foreground">
+        <span className="font-semibold text-violet-100">階梯圖・最近 {rows.length} 期</span>
+        <span className="shrink-0 text-violet-200/80">左右滑動查看 01–80</span>
+      </div>
+      <div className="overflow-x-auto overscroll-x-contain px-2 pb-2 [touch-action:pan-x]">
+        <div className="min-w-0" style={{ width: chartWidth }}>
+          <div className="relative ml-[3.5rem] h-7 border-b border-slate-700/80" style={{ width: chartWidth }}>
+            {[0, 20, 40, 60].map((start) => (
+              <span key={start} className="absolute bottom-1 text-[9px] font-bold tabular-nums text-slate-400" style={{ left: start * columnWidth + 4 }}>
+                {String(start + 1).padStart(2, "0")}–{String(start + 20).padStart(2, "0")}
+              </span>
+            ))}
+            {Array.from({ length: 80 }, (_, index) => (
+              <span key={index} className="absolute bottom-0 h-1 border-l border-slate-700/60" style={{ left: index * columnWidth }} />
+            ))}
+          </div>
+          <div className="space-y-1.5 pt-1">
+            {rows.map(({ draw, numbers, segments, superNumber }) => (
+              <div key={draw.period} className="flex h-8 items-center">
+                <span className="w-[3.5rem] shrink-0 pr-1 text-right text-[9px] font-semibold tabular-nums text-slate-400">{draw.period.slice(-5)}</span>
+                <div className="relative h-8 shrink-0 border-b border-slate-800/80" style={{ width: chartWidth }}>
+                  {[20, 40, 60].map((column) => <span key={column} className="absolute inset-y-0 border-l border-violet-300/15" style={{ left: column * columnWidth }} />)}
+                  {segments.map((segment) => (
+                    <span
+                      key={`${draw.period}-${segment.start}`}
+                      className="absolute top-1/2 h-1 -translate-y-1/2 rounded-full bg-violet-300/80 shadow-[0_0_8px_rgba(196,181,253,0.7)]"
+                      style={{ left: (segment.start - 1) * columnWidth + columnWidth / 2, width: (segment.length - 1) * columnWidth }}
+                      aria-label={`${segment.start} 至 ${segment.start + segment.length - 1} 階梯`}
+                    />
+                  ))}
+                  {Array.from(numbers).map((number) => {
+                    const isSuper = number === superNumber;
+                    const inLadder = segments.some((segment) => number >= segment.start && number < segment.start + segment.length);
+                    return <span key={`${draw.period}-${number}`} className={`absolute top-1/2 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-[8px] font-bold tabular-nums ${isSuper ? "z-20 border-pink-100 bg-pink-500 text-white shadow-[0_0_0_2px_rgba(244,114,182,0.35)]" : inLadder ? "z-10 border-violet-100 bg-violet-500 text-white" : "border-slate-500 bg-slate-800 text-slate-300"}`} style={{ left: (number - 1) * columnWidth + columnWidth / 2 }}>{String(number).padStart(2, "0")}</span>;
+                  })}
+                </div>
+              </div>
+            ))}
+            {!rows.length ? <div className="py-6 text-center text-xs text-muted-foreground">尚無足夠開獎資料</div> : null}
+          </div>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-x-4 gap-y-1 border-t border-violet-300/15 px-2.5 py-2 text-[10px] text-muted-foreground">
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-violet-500" />階梯號碼</span>
+        <span><i className="mr-1 inline-block h-1 w-3 rounded-full bg-violet-300" />連續階梯</span>
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-pink-500" />超級獎號</span>
+      </div>
+    </div>
+  );
+}
+
 function NumberTrendBoard({ draws }: { draws: DrawSnapshot[] }) {
   const [showAssist, setShowAssist] = useState(false);
   const [showGap, setShowGap] = useState(true);
@@ -1197,6 +1277,7 @@ function NumberTrendBoard({ draws }: { draws: DrawSnapshot[] }) {
           {!shortWindow.length ? <div className="py-4 text-center text-xs text-muted-foreground">尚無足夠開獎資料</div> : null}
         </div>
       </div>
+      <LadderChart draws={recent} />
       <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
         {Array.from({ length: 4 }, (_, zone) => {
           const zoneStats = stats.slice(zone * 20, zone * 20 + 20);

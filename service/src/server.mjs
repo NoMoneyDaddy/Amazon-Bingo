@@ -3828,7 +3828,10 @@ async function getPriorityResponse(castingAt = '') {
       const prioritySnapshot = persistedForPriority[0]
         ? {
             ...persistedForPriority[0],
-            history: compactHistoryForResponse(selectRecentHistory(persistedForPriority, retentionDays).slice(0, fastResponseHistoryLimit), quickDecisionBacktestWindow),
+            history: compactHistoryForResponse(
+              selectRecentHistory(persistedForPriority, retentionDays).slice(0, fastResponseHistoryLimit),
+              hasCompleteProfitabilityEvaluation(persistedForPriority[0].profitabilityEvaluation) ? 0 : quickDecisionBacktestWindow,
+            ),
           }
         : await latest(1, [], castingAt, { deferLatestModel: true, deferEvaluationModels: true });
       const quickHistory = prioritySnapshot.history || [prioritySnapshot];
@@ -3947,7 +3950,10 @@ const server = http.createServer(async (req, res) => {
           ...persisted[0],
           profitabilityEvaluation: ensureFollowBacktestVisible(persisted[0].profitabilityEvaluation),
           // 即時輪詢只供首頁刷新；限制歷史筆數，避免前端每次輪詢都解析與合併 1200 筆資料。
-          history: compactHistoryForResponse(selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit), quickDecisionBacktestWindow),
+          history: compactHistoryForResponse(
+            selectRecentHistory(persisted, retentionDays).slice(0, fastResponseHistoryLimit),
+            evaluationIncomplete ? quickDecisionBacktestWindow : 0,
+          ),
           historyDays: retentionDays,
           modelStatus: persisted[0].models?.length && !evaluationIncomplete ? 'formal' : 'queued',
         };

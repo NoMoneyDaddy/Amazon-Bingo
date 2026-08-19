@@ -3534,7 +3534,8 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
           calibratedProbabilityEvaluation: history[0]?.calibratedProbabilityEvaluation || [],
           profitabilityEvaluation: history[0]?.profitabilityEvaluation || [],
           zoneProfitabilityEvaluation: history[0]?.zoneProfitabilityEvaluation || [],
-          technicalAnalysis: history[0]?.technicalAnalysis || {},
+          // 即時／快速路徑也要同步提供結構數學分析；它是純描述性計算，不等待完整回測。
+          technicalAnalysis: Object.keys(history[0]?.technicalAnalysis || {}).length ? history[0].technicalAnalysis : technicalAnalysis(rawHistory),
         }
         : await (async () => {
           setComputationProgress({ stage: 'backtest', percent: 72, message: '執行樣本外回測與機率校準', runId });

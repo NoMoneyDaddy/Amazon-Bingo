@@ -2699,6 +2699,15 @@ function ensureEvaluationWorker() {
   if (evaluationWorker) return evaluationWorker;
   evaluationWorker = new Worker(new URL('./evaluation-worker.mjs', import.meta.url));
   evaluationWorker.on('message', (message) => {
+    if (message?.progress) {
+      setComputationProgress({
+        stage: message.progress.stage,
+        percent: message.progress.percent,
+        message: message.progress.message,
+        runId: message.runId || computationProgress.runId,
+      });
+      return;
+    }
     const pending = pendingEvaluationRequests.get(message?.requestId);
     if (!pending) return;
     pendingEvaluationRequests.delete(message.requestId);
@@ -2718,11 +2727,11 @@ function ensureEvaluationWorker() {
   return evaluationWorker;
 }
 
-function evaluateInWorker(history = []) {
+function evaluateInWorker(history = [], runId = '') {
   return new Promise((resolve, reject) => {
     const requestId = ++evaluationRequestId;
     pendingEvaluationRequests.set(requestId, { resolve, reject });
-    ensureEvaluationWorker().postMessage({ requestId, history: history.slice(0, evaluationHistoryLimit) });
+    ensureEvaluationWorker().postMessage({ requestId, history: history.slice(0, evaluationHistoryLimit), runId });
   });
 }
 
@@ -3104,8 +3113,7 @@ async function latest(daysOverride = null, existingHistory = [], requestedCastin
         }
         : await (async () => {
           setComputationProgress({ stage: 'backtest', percent: 72, message: '執行樣本外回測與機率校準', runId });
-          const result = await evaluateInWorker(history);
-          setComputationProgress({ stage: 'technical-analysis', percent: 88, message: '整理技術分析與隨機性審計', runId });
+          const result = await evaluateInWorker(history, runId);
           return result;
         })();
       // 模型、預測、回測與技術摘要必須同一批寫入，避免重開後只剩開獎資料或號碼。

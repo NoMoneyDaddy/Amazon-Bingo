@@ -480,14 +480,49 @@ function parseChineseCalendarParts(value) {
   const normalizedMonth = monthPart.replace(/^閏/, '').replace('腊', '臘');
   const month = normalizedMonth === '臘月' ? 12 : monthNames.indexOf(normalizedMonth) + 1;
   const hour24 = Number(parts.find((part) => part.type === 'hour')?.value || 0);
-  const hourBranch = Math.floor(((hour24 + 1) % 24) / 2) + 1;
+  const hourBranchIndex = Math.floor(((hour24 + 1) % 24) / 2);
+  const hourBranch = hourBranchIndex + 1;
+  const lunarYear = Number(parts.find((part) => part.type === 'relatedYear')?.value || date.getUTCFullYear());
   return {
-    year: Number(parts.find((part) => part.type === 'relatedYear')?.value || date.getUTCFullYear()),
-    yearBranch: ((Number(parts.find((part) => part.type === 'relatedYear')?.value || date.getUTCFullYear()) - 4) % 12 + 12) % 12 + 1,
+    year: lunarYear,
+    yearBranch: ((lunarYear - 4) % 12 + 12) % 12 + 1,
+    yearBranchIndex: ((lunarYear - 4) % 12 + 12) % 12,
     month: Math.max(1, month),
+    monthBranchIndex: (Math.max(1, month) + 1) % 12,
     day: Number(parts.find((part) => part.type === 'day')?.value || 1),
     hour: hourBranch,
+    hourBranchIndex,
     hour24,
+  };
+}
+
+function gregorianJulianDayNumber(date) {
+  const utcYear = date.getUTCFullYear();
+  const utcMonth = date.getUTCMonth() + 1;
+  const utcDay = date.getUTCDate();
+  const adjustedYear = utcMonth <= 2 ? utcYear - 1 : utcYear;
+  const adjustedMonth = utcMonth <= 2 ? utcMonth + 12 : utcMonth;
+  const century = Math.floor(adjustedYear / 100);
+  return Math.floor(365.25 * (adjustedYear + 4716)) + Math.floor(30.6001 * (adjustedMonth + 1)) + utcDay + 2 - century + Math.floor(century / 4) - 1524;
+}
+
+function fourPillars(value) {
+  const taipei = parseTaipeiParts(value);
+  const date = new Date(Date.UTC(taipei.year, taipei.month - 1, taipei.day));
+  const lunar = parseChineseCalendarParts(value);
+  const yearStem = ((lunar.year - 4) % 10 + 10) % 10;
+  const dayCycle = ((gregorianJulianDayNumber(date) + 49) % 60 + 60) % 60;
+  const dayStem = dayCycle % 10;
+  const dayBranch = dayCycle % 12;
+  const monthStem = (yearStem % 5 * 2 + lunar.month + 1) % 10;
+  const hourStem = (dayStem % 5 * 2 + lunar.hourBranchIndex) % 10;
+  return {
+    yearStem, yearBranch: lunar.yearBranchIndex,
+    monthStem, monthBranch: lunar.monthBranchIndex,
+    dayStem, dayBranch,
+    hourStem, hourBranch: lunar.hourBranchIndex,
+    yearElement: Math.floor(yearStem / 2), monthElement: Math.floor(monthStem / 2),
+    dayElement: Math.floor(dayStem / 2), hourElement: Math.floor(hourStem / 2),
   };
 }
 
@@ -596,11 +631,9 @@ function statisticalCasting(snapshot, target) {
 
 function zodiacElementCasting(snapshot, target) {
   const input = targetInput(snapshot, target);
-  const lunar = parseChineseCalendarParts(input.castingAt);
-  const stem = ((lunar.year - 4) % 10 + 10) % 10;
-  const branch = ((lunar.year - 4) % 12 + 12) % 12;
-  const elements = ['木', '木', '火', '火', '土', '土', '金', '金', '水', '水'];
-  return { input, stem, branch, element: elements[stem], digits: [], formula: `固定輸入=${input.castingAt}；以農曆年干支取年元素=${elements[stem]}、生肖支序=${branch + 1}；號碼只做固定五行映射與統計排序，屬研究適配，不宣稱命理因果。` };
+  const pillars = fourPillars(input.castingAt);
+  const elements = ['木', '火', '土', '金', '水'];
+  return { input, stem: pillars.yearStem, branch: pillars.yearBranch, element: elements[pillars.yearElement], pillars, digits: [], formula: `固定輸入=${input.castingAt}；以農曆年、月、日、時四柱干支建立五行與地支序列，再與號碼五行／支序固定映射及歷史統計分開回測；目前未納入節氣換月與完整命理排局，不宣稱命理因果。` };
 }
 
 function historicalFrequencies(history) {
@@ -833,7 +866,13 @@ function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, t
   const longFrequencies = windowFrequencies(history, 300);
   const values = Array.from({ length: 80 }, (_, index) => index + 1).map((number) => {
     const traditional = tradition.kind === 'bazi'
-      ? ((['木', '火', '土', '金', '水'][(number - 1) % 5] === tradition.element ? 0.38 : 0.06) + (number % 12 === tradition.branch + 1 ? 0.18 : 0))
+      ? (() => {
+        const elements = tradition.elements || [tradition.elementIndex].filter(Number.isFinite);
+        const branches = tradition.branches || [tradition.branch].filter(Number.isFinite);
+        const elementHits = elements.filter((element) => (number - 1) % 5 === element).length;
+        const branchHits = branches.filter((branch) => (number - 1) % 12 === branch).length;
+        return 0.04 + elementHits * 0.055 + branchHits * 0.025;
+      })()
       : tradition.kind === 'hypergeometric'
       ? hypergeometricInclusion(number, history)
       : tradition.kind === 'multiscale'
@@ -1920,7 +1959,7 @@ function traditionFor(kind, casting) {
   if (kind === 'bayesian') return { kind, window: casting.window };
   if (kind === 'hypergeometric') return { kind, window: casting.window };
   if (kind === 'multiscale') return { kind, window: casting.window };
-  if (kind === 'bazi') return { kind, element: casting.element, branch: casting.branch };
+  if (kind === 'bazi') return { kind, element: casting.element, elementIndex: casting.pillars?.yearElement, branch: casting.branch, elements: [casting.pillars?.yearElement, casting.pillars?.monthElement, casting.pillars?.dayElement, casting.pillars?.hourElement].filter(Number.isFinite), branches: [casting.pillars?.yearBranch, casting.pillars?.monthBranch, casting.pillars?.dayBranch, casting.pillars?.hourBranch].filter(Number.isFinite) };
   return { kind, palace: casting.palace, star: casting.star, door: casting.door, cycle: casting.cycle };
 }
 
@@ -2304,6 +2343,7 @@ export function buildModels(snapshot, history = [], options = {}) {
         if (method.kind === 'meihua') return [target, `共同卦象：上卦${casting.upper}／下卦${casting.lower}／動爻${casting.moving}`];
         if (method.kind === 'qimen') return [target, `九宮${casting.palace}／九星${casting.star}／八門${casting.door}`];
         if (method.kind === 'taiyi') return [target, `行宮${casting.palace}／循環${casting.cycle}`];
+        if (method.kind === 'bazi') return [target, `年${casting.pillars.yearStem}/${casting.pillars.yearBranch}・月${casting.pillars.monthStem}/${casting.pillars.monthBranch}・日${casting.pillars.dayStem}/${casting.pillars.dayBranch}・時${casting.pillars.hourStem}/${casting.pillars.hourBranch}`];
         if (method.kind === 'statistics') return [target, '固定統計窗口 60 期／目標期前資料'];
         if (method.kind === 'bayesian') return [target, 'Beta／Dirichlet 平滑窗口 60 期／目標期前資料'];
         if (method.kind === 'hypergeometric') return [target, '80 選 20 不放回集合包含率／目標期前資料'];

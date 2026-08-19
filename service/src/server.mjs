@@ -763,6 +763,47 @@ function quantitativeNumberPrediction(kind, seed, count, history) {
   return scored.slice(0, count).sort((a, b) => a.number - b.number).map((item) => String(item.number).padStart(2, '0'));
 }
 
+function technicalFeatureSignals(number, history) {
+  const recent = history.slice(0, 10);
+  const comparison = history.slice(10, 30);
+  const recentRate = windowFrequency(number, recent, 10);
+  const comparisonRate = windowFrequency(number, comparison, 20);
+  const longRate = windowFrequency(number, history, 60);
+  const omissionIndex = history.findIndex((draw) => (draw.numbers || []).some((value) => Number(value) === number));
+  const omissionSignal = omissionIndex < 0 ? 0 : clamp(1 - omissionIndex / 20, 0, 1);
+  const tail = number % 10;
+  const tailHits = recent.reduce((sum, draw) => sum + (draw.numbers || []).filter((value) => Number(value) % 10 === tail).length, 0);
+  const tailSignal = recent.length ? clamp(tailHits / (recent.length * 2), 0, 1) : 0.25;
+  const trendSignal = clamp(0.5 + (recentRate - comparisonRate) * 1.5, 0, 1);
+  const frequencySignal = clamp(longRate / 0.25, 0, 1);
+  // 階梯與同出只做描述性研究；不把它們偷偷混入技術預測分數。
+  const score = trendSignal * 0.45 + frequencySignal * 0.25 + omissionSignal * 0.2 + tailSignal * 0.1;
+  return { trendSignal, frequencySignal, omissionSignal, tailSignal, score };
+}
+
+function technicalFeaturePrediction(seed, count, history) {
+  return Array.from({ length: 80 }, (_, index) => {
+    const number = index + 1;
+    const signals = technicalFeatureSignals(number, history);
+    return { number, ...signals, tie: deterministicTie(`${seed}|technical`, number) };
+  }).sort((a, b) => b.score - a.score || a.tie - b.tie || a.number - b.number)
+    .slice(0, count)
+    .sort((a, b) => a.number - b.number)
+    .map((item) => String(item.number).padStart(2, '0'));
+}
+
+function technicalCategoryPrediction(history, field) {
+  const allowed = field === 'size' ? ['大', '小'] : ['單', '雙'];
+  const recent = history.slice(0, 10);
+  const comparison = history.slice(10, 30);
+  const score = (value) => {
+    const recentRate = recent.filter((item) => normalizeDrawCategory(item[field], field) === value).length / Math.max(1, recent.length);
+    const comparisonRate = comparison.filter((item) => normalizeDrawCategory(item[field], field) === value).length / Math.max(1, comparison.length);
+    return recentRate * 0.6 + comparisonRate * 0.2 + (recentRate - comparisonRate) * 0.2;
+  };
+  return [...allowed].sort((a, b) => score(b) - score(a) || allowed.indexOf(a) - allowed.indexOf(b))[0];
+}
+
 function deterministicBootstrap(values, seed = '') {
   if (!values.length) return { mean: null, lower: null, upper: null, samples: 0 };
   const replications = Math.min(400, Math.max(200, values.length * 20));
@@ -938,6 +979,7 @@ function exclusionPrediction(seed, count, history = [], target = '10星') {
 }
 
 function scoreNumbers(seed, count, tradition, history, empiricalWeight = 0.32, target = '') {
+  if (tradition.kind === 'technical') return technicalFeaturePrediction(seed, count, history);
   // 這些模型使用各自獨立的生成機制，不再套用術數適配器與共用頻率混合分數。
   if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(tradition.kind)) {
     return quantitativeNumberPrediction(tradition.kind, seed, count, history);
@@ -1036,6 +1078,14 @@ const NUMBER_ZONES = [
 ];
 
 function zonePredictionSet(seed, tradition, history, empiricalWeight, target = '10星', picksPerZone = 5) {
+  if (tradition.kind === 'technical') {
+    const ranked = technicalFeaturePrediction(seed, 80, history).map(Number);
+    return NUMBER_ZONES.map((zone) => ({
+      key: zone.key,
+      label: zone.label,
+      numbers: ranked.filter((number) => number >= zone.min && number <= zone.max).slice(0, picksPerZone).sort((a, b) => a - b).map((number) => String(number).padStart(2, '0')),
+    }));
+  }
   if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(tradition.kind)) {
     const ranked = quantitativeNumberPrediction(tradition.kind, seed, 80, history).map(Number);
     return NUMBER_ZONES.map((zone) => ({
@@ -1191,6 +1241,7 @@ const modelSources = {
   '奇門遁甲（九宮研究版）': [{ name: '北海道大學：奇門遁甲的基礎研究', url: 'https://eprints.lib.hokudai.ac.jp/repo/huscap/all/44606/' }, { name: 'EASTM：中國軍事占卜史研究', url: 'https://core.ac.uk/download/pdf/228877365.pdf' }],
   '太乙九宮（研究版）': [{ name: 'Extrême-Orient：太乙、奇門遁甲與六壬研究', url: 'https://journals.openedition.org/extremeorient/pdf/270' }, { name: '柏林自由大學：中國帝制時期的認知占卜', url: 'https://refubium.fu-berlin.de/handle/fub188/154' }],
   '民俗統計基線': [{ name: '台灣彩券官方開獎時間與隨機開獎說明', url: 'https://www.taiwanlottery.com/run_lottery/schedule/' }],
+  '技術分析特徵基線': [{ name: '時間序列 walk-forward 驗證原則', url: 'https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html' }, { name: '機率校準與 Brier 評分', url: 'https://scikit-learn.org/stable/modules/calibration.html' }],
   '均勻隨機理論基準': [{ name: '台灣彩券官方開獎規則／時程', url: 'https://www.taiwanlottery.com/run_lottery/schedule/' }],
   '頻率窗口基線': [{ name: '彩票 k/N 隨機性統計審計', url: 'https://arxiv.org/abs/0806.4595' }],
   '生肖五行研究版': [{ name: '中國哲學書電子化計劃：周易與五行資料', url: 'https://ctext.org/datawiki.pl?if=en&res=484682' }],
@@ -1204,6 +1255,7 @@ const modelSources = {
   '機器學習負對照': [{ name: '序列式機率預測與評估', url: 'https://arxiv.org/abs/0905.1673' }, { name: 'Strictly Proper Scoring Rules, Prediction, and Estimation', url: 'https://doi.org/10.1198/016214506000001437' }],
 };
 const researchEvidenceRegistry = [
+  { name: '技術分析特徵邊界', status: '趨勢／頻率／遺漏／尾號可作候選特徵；階梯／同出只作描述性分析，未通過樣本外閘門不得進共識', source: '本研究台特徵規格', url: 'https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html' },
   { name: '均勻隨機與超幾何基準', status: '以 80 選 20 不放回理論作為所有模型的最低比較線；不把基準當成預測優勢', source: 'Coronel-Brizio et al., 2008', url: 'https://arxiv.org/abs/0806.4595' },
   { name: '時間序列 walk-forward', status: '訓練資料永遠早於測試資料；禁止隨機切分造成未來資訊洩漏', source: 'scikit-learn TimeSeriesSplit', url: 'https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.TimeSeriesSplit.html' },
   { name: '機率校準', status: '以 Brier／log loss 評估預測機率與實際結果，不以命中率單獨決定模型優劣', source: 'scikit-learn Probability Calibration', url: 'https://scikit-learn.org/stable/modules/calibration.html' },
@@ -1269,6 +1321,7 @@ function quantitativeCategoryPrediction(kind, seed, history, field) {
 }
 
 function modelCategoryPrediction(kind, seed, casting, history, field, empiricalWeight) {
+  if (kind === 'technical') return technicalCategoryPrediction(history, field);
   if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(kind)) {
     return quantitativeCategoryPrediction(kind, seed, history, field);
   }
@@ -1833,6 +1886,7 @@ function technicalAnalysis(history = []) {
     const gapStd = gapVariance == null ? null : Math.sqrt(gapVariance);
     return { ...item, meanGap, gapStd, repeatRate: intervals.length ? intervals.filter((value) => value === 1).length / intervals.length : null, regularity: meanGap && gapStd != null ? gapStd / meanGap : null };
   }).filter((item) => item.count >= 3).sort((a, b) => (a.regularity ?? Infinity) - (b.regularity ?? Infinity) || b.count - a.count).slice(0, 10);
+  const predictiveFeatureCandidates = technicalFeaturePrediction('technical-audit', 10, draws);
   const percentage = (value, total) => total ? `${(value / total * 100).toFixed(1)}%` : '—';
   const sizeTotal = Object.values(sizeCounts).reduce((total, value) => total + value, 0); const oddEvenTotal = Object.values(oddEvenCounts).reduce((total, value) => total + value, 0);
   return {
@@ -1847,6 +1901,12 @@ function technicalAnalysis(history = []) {
     consecutiveRate: draws.length ? consecutive / draws.length : null,
     omissionNumbers: allNumbers.sort((a, b) => b.omission - a.omission || a.count - b.count || Number(a.number) - Number(b.number)).slice(0, 10),
     trendNumbers,
+    predictiveFeatureAudit: {
+      candidates: predictiveFeatureCandidates,
+      features: ['近10期相對前20期趨勢', '近60期期級頻率', '遺漏訊號', '近10期尾號分布'],
+      weights: { trend: 0.45, frequency: 0.25, omission: 0.2, tail: 0.1 },
+      rule: '這組特徵由技術分析特徵基線共用；每個目標期只使用更早資料，是否進入正式共識由樣本外閘門決定。階梯與同出仍只作描述性分析。',
+    },
     ladderAnalysis: {
       drawRate: draws.length ? ladderDraws / draws.length : null,
       ladderDraws,
@@ -1996,7 +2056,7 @@ function evolveProfiles(history = []) {
     ['梅花易數', 'meihua', 11], ['六爻八卦', 'sixyao', 37], ['河圖洛書', 'luoshu', 61],
     ['數字卦（楚簡研究版）', 'numeral-gua', 73], ['奇門遁甲（九宮研究版）', 'qimen', 89],
     ['太乙九宮（研究版）', 'taiyi', 97], ['民俗統計基線', 'statistics', 113],
-    ['均勻隨機理論基準', 'uniform', 127], ['頻率窗口基線', 'frequency', 131],
+    ['技術分析特徵基線', 'technical', 121], ['均勻隨機理論基準', 'uniform', 127], ['頻率窗口基線', 'frequency', 131],
     ['生肖五行研究版', 'bazi', 137], ['三才數理研究版', 'sanCai', 139],
     ['貝葉斯 Beta-Binomial 基線', 'bayesian', 149], ['指數衰減 EWMA 基線', 'ewma', 157],
     ['二狀態 Markov 研究版', 'markov', 163], ['超幾何集合審計基準', 'hypergeometric', 167],
@@ -2086,6 +2146,7 @@ function castingFor(kind, snapshot, target, castingAt) {
   if (kind === 'numeral-gua') return numeralGuaCasting(snapshot, target);
   if (kind === 'qimen') return qimenCasting(snapshot, target);
   if (kind === 'statistics') return statisticalCasting(snapshot, target);
+  if (kind === 'technical') return statisticalCasting(snapshot, target);
   if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(kind)) return statisticalCasting(snapshot, target);
   if (kind === 'bayesian') return statisticalCasting(snapshot, target);
   if (kind === 'hypergeometric') return statisticalCasting(snapshot, target);
@@ -2101,6 +2162,7 @@ function traditionFor(kind, casting) {
   if (kind === 'luoshu') return { kind, center: casting.center };
   if (kind === 'numeral-gua') return { kind, digits: casting.digits };
   if (kind === 'statistics') return { kind, window: casting.window };
+  if (kind === 'technical') return { kind, window: casting.window };
   if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(kind)) return { kind, window: casting.window };
   if (kind === 'bayesian') return { kind, window: casting.window };
   if (kind === 'hypergeometric') return { kind, window: casting.window };
@@ -2306,7 +2368,7 @@ function aggregateModel(models, history) {
   const quantitativeModels = eligibleModels.filter((model) => {
     const tier = String(model.calculation?.evidenceTier || '');
     return tier.includes('可檢驗統計') || tier.includes('可重現機器學習')
-      || ['frequency', 'bayesian', 'ewma', 'markov'].includes(model.calculation?.method);
+      || ['technical', 'frequency', 'bayesian', 'ewma', 'markov'].includes(model.calculation?.method);
   });
   const ensembleModels = quantitativeModels.length ? quantitativeModels : eligibleModels;
   const hasValidatedWeight = ensembleModels.some((model) => predictionTargets.some((target) => {
@@ -2442,6 +2504,7 @@ export function buildModels(snapshot, history = [], options = {}) {
     { name: '奇門遁甲（九宮研究版）', kind: 'qimen', status: '九宮／九星／八門核心＋目標玩法適配，非完整排局', seedOffset: 89 },
     { name: '太乙九宮（研究版）', kind: 'taiyi', status: '行九宮核心＋目標玩法適配，非完整太乙排局', seedOffset: 97 },
     { name: '民俗統計基線', kind: 'statistics', status: '熱度／遺漏／和值／奇偶／區間統計基線，非因果預測', seedOffset: 113 },
+    { name: '技術分析特徵基線', kind: 'technical', status: '共用技術分析的趨勢／頻率／遺漏／尾號特徵，須通過樣本外驗證才可進共識', seedOffset: 121 },
     { name: '均勻隨機理論基準', kind: 'uniform', status: '每個號碼等機率的理論對照，不宣稱預測優勢', seedOffset: 127 },
     { name: '頻率窗口基線', kind: 'frequency', status: '只用目標期以前 60 期的出現率排序，不加入術數特徵', seedOffset: 131 },
     { name: '生肖五行研究版', kind: 'bazi', status: '農曆年干支／五行固定映射＋統計適配，非完整八字排盤', seedOffset: 137 },
@@ -2498,6 +2561,7 @@ export function buildModels(snapshot, history = [], options = {}) {
         if (method.kind === 'qimen') return [target, `九宮${casting.palace}／九星${casting.star}／八門${casting.door}`];
         if (method.kind === 'taiyi') return [target, `行宮${casting.palace}／循環${casting.cycle}`];
         if (method.kind === 'sanCai') return [target, `天${casting.heaven}／人${casting.human}／地才＝號碼區域＋尾數`];
+        if (method.kind === 'technical') return [target, '技術特徵：趨勢／頻率／遺漏／尾號'];
         if (method.kind === 'bazi') return [target, `年${casting.pillars.yearStem}/${casting.pillars.yearBranch}・月${casting.pillars.monthStem}/${casting.pillars.monthBranch}・日${casting.pillars.dayStem}/${casting.pillars.dayBranch}・時${casting.pillars.hourStem}/${casting.pillars.hourBranch}`];
         if (method.kind === 'statistics') return [target, '固定統計窗口 60 期／目標期前資料'];
         if (['uniform', 'frequency', 'bayesian', 'ewma', 'markov', 'hypergeometric'].includes(method.kind)) return [target, casting.formula];
@@ -2545,7 +2609,10 @@ export function buildModels(snapshot, history = [], options = {}) {
     }
   }
   const allModels = [...baseModels, ...regressionModel];
-  return [...allModels, aggregateModel(allModels, history)];
+  const normalizedModels = allModels.map((model) => model.calculation?.method === 'technical'
+    ? { ...model, calculation: { ...model.calculation, evidenceTier: '可檢驗統計基線', predictionEligible: true, commonCastingValue: '技術特徵：趨勢／頻率／遺漏／尾號' } }
+    : model);
+  return [...normalizedModels, aggregateModel(normalizedModels, history)];
 }
 
 let modelWorker;

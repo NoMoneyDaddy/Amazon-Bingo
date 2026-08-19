@@ -13,6 +13,7 @@ const MODEL_NAMES = [
   "生肖五行研究版",
   "三才數理研究版",
   "民俗統計基線",
+  "技術分析特徵基線",
   "均勻隨機理論基準",
   "頻率窗口基線",
   "貝葉斯 Beta-Binomial 基線",
@@ -242,6 +243,12 @@ type TechnicalAnalysisData = {
   consecutiveRate: number | null;
   omissionNumbers: Array<{ number: string; count: number; omission: number }>;
   trendNumbers: Array<{ number: string; count: number; omission: number; change: number }>;
+  predictiveFeatureAudit?: {
+    candidates: string[];
+    features: string[];
+    weights: Record<string, number>;
+    rule: string;
+  };
   sizePercentages: Record<string, string>;
   oddEvenPercentages: Record<string, string>;
   ladderAnalysis: {
@@ -1116,6 +1123,7 @@ function modelPlainLanguage(name: string) {
   if (name === "奇門遁甲（九宮研究版）") return "取九宮、九星、八門三個結構做簡化特徵，不冒充完整奇門排盤。";
   if (name === "多模型聚合") return "依各模型歷史回測表現加權整合，產生共識候選，不把共識當成保證。";
   if (name === "民俗統計基線") return "獨立計算熱度、遺漏、和值、奇偶與區間特徵，作為可比較的統計基線，不宣稱因果。";
+  if (name === "技術分析特徵基線") return "共用近 10 期相對前 20 期趨勢、近 60 期頻率、遺漏與尾號特徵；只有通過樣本外驗證才進入共識，階梯與同出維持描述性分析。";
   if (name === "均勻隨機理論基準") return "假設 80 個號碼完全等權，只作理論隨機對照；若其他模型沒有超越它，就不應宣稱有預測優勢。";
   if (name === "頻率窗口基線") return "只用目標期以前 60 期的期級出現率排序，不混入術數、遺漏或人為號碼映射。";
   if (name === "貝葉斯 Beta-Binomial 基線") return "用 25% 理論包含率作 Beta 先驗，對每個號碼的期級出現率收縮，降低短樣本極端值。";
@@ -1880,6 +1888,13 @@ export function BingoResearchView() {
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">先看四個摘要數字；完整頻率、區間與熱冷號碼收在下方。這是描述性研究，不代表能改變隨機開獎機率。</p>
+                {technicalAnalysis.predictiveFeatureAudit ? <details className="mt-3 rounded-2xl border border-emerald-300/25 bg-emerald-300/5 p-3">
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-emerald-100">技術特徵與預測接口<span className="float-right text-[10px] font-normal text-muted-foreground">可驗證特徵・非自動加權</span></summary>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    <div className="rounded-xl border border-emerald-200/15 bg-background/35 p-3"><div className="text-xs font-semibold text-emerald-100">候選排序</div><div className="mt-2 flex flex-wrap gap-1.5">{technicalAnalysis.predictiveFeatureAudit.candidates.map((number) => <span key={number} className="rounded-full bg-emerald-300/10 px-2 py-1 text-xs tabular-nums text-emerald-100">{number}</span>)}</div></div>
+                    <div className="rounded-xl border border-emerald-200/15 bg-background/35 p-3 text-xs leading-5 text-muted-foreground"><div className="font-semibold text-emerald-100">使用特徵</div><p className="mt-1">{technicalAnalysis.predictiveFeatureAudit.features.join("、")}</p><p className="mt-1">權重：趨勢 {technicalAnalysis.predictiveFeatureAudit.weights.trend ?? "—"}／頻率 {technicalAnalysis.predictiveFeatureAudit.weights.frequency ?? "—"}／遺漏 {technicalAnalysis.predictiveFeatureAudit.weights.omission ?? "—"}／尾號 {technicalAnalysis.predictiveFeatureAudit.weights.tail ?? "—"}</p><p className="mt-1 text-amber-200/80">{technicalAnalysis.predictiveFeatureAudit.rule}</p></div>
+                  </div>
+                </details> : null}
                 <details open className="mt-3 rounded-2xl border border-violet-300/25 bg-violet-300/5 p-3">
                   <summary className="cursor-pointer list-none text-sm font-semibold text-violet-100">階梯牌深度研究<span className="float-right text-[10px] font-normal text-muted-foreground">偵測規則・出現率・常見組合</span></summary>
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">

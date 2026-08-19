@@ -2037,6 +2037,9 @@ function technicalAnalysis(history = []) {
   const frequency = new Map();
   const tailCounts = Object.fromEntries(Array.from({ length: 10 }, (_, tail) => [String(tail), 0]));
   const coOccurrence = new Map();
+  const tripleOccurrence = new Map();
+  const consecutivePairs = new Map();
+  const consecutiveTriples = new Map();
   const ladderPatterns = new Map();
   let ladderDraws = 0;
   let ladderSequences = 0;
@@ -2087,6 +2090,14 @@ function technicalAnalysis(history = []) {
         coOccurrence.set(key, (coOccurrence.get(key) || 0) + 1);
       }
     }
+    for (let left = 0; left < values.length; left += 1) {
+      for (let middle = left + 1; middle < values.length; middle += 1) {
+        for (let right = middle + 1; right < values.length; right += 1) {
+          const key = `${numberKey(values[left])}、${numberKey(values[middle])}、${numberKey(values[right])}`;
+          tripleOccurrence.set(key, (tripleOccurrence.get(key) || 0) + 1);
+        }
+      }
+    }
     let run = [];
     const sequences = [];
     values.forEach((value, index) => {
@@ -2105,6 +2116,14 @@ function technicalAnalysis(history = []) {
       longestLadder = Math.max(longestLadder, sequence.length);
       const label = sequence.map(numberKey).join('–');
       ladderPatterns.set(label, (ladderPatterns.get(label) || 0) + 1);
+      for (let index = 0; index + 1 < sequence.length; index += 1) {
+        const pair = `${numberKey(sequence[index])}、${numberKey(sequence[index + 1])}`;
+        consecutivePairs.set(pair, (consecutivePairs.get(pair) || 0) + 1);
+      }
+      for (let index = 0; index + 2 < sequence.length; index += 1) {
+        const triple = `${numberKey(sequence[index])}、${numberKey(sequence[index + 1])}、${numberKey(sequence[index + 2])}`;
+        consecutiveTriples.set(triple, (consecutiveTriples.get(triple) || 0) + 1);
+      }
     });
   });
   const zones = [0, 0, 0, 0];
@@ -2122,6 +2141,30 @@ function technicalAnalysis(history = []) {
   const short = draws.slice(0, 10); const prior = draws.slice(10, 30); const countWindow = (window) => { const result = new Map(); window.forEach((draw) => (draw.numbers || []).forEach((number) => { const key = String(number).padStart(2, '0'); result.set(key, (result.get(key) || 0) + 1); })); return result; };
   const shortFrequency = countWindow(short); const priorFrequency = countWindow(prior);
   const trendNumbers = allNumbers.map((item) => ({ ...item, change: (shortFrequency.get(item.number) || 0) / Math.max(1, short.length) - (priorFrequency.get(item.number) || 0) / Math.max(1, prior.length) })).sort((a, b) => b.change - a.change || b.count - a.count).slice(0, 8);
+  const sequence = sums.slice().reverse();
+  const meanSequence = sequence.length ? sequence.reduce((total, value) => total + value, 0) / sequence.length : null;
+  const firstDifference = sequence.length > 1 ? sequence.slice(1).map((value, index) => value - sequence[index]) : [];
+  const secondDifference = firstDifference.length > 1 ? firstDifference.slice(1).map((value, index) => value - firstDifference[index]) : [];
+  const cumulativeDeviation = meanSequence == null ? null : sequence.reduce((total, value) => total + (value - meanSequence), 0);
+  const linearSlope = sequence.length > 1 ? (() => { const xMean = (sequence.length - 1) / 2; const yMean = sequence.reduce((total, value) => total + value, 0) / sequence.length; const numerator = sequence.reduce((total, value, index) => total + (index - xMean) * (value - yMean), 0); const denominator = sequence.reduce((total, _, index) => total + (index - xMean) ** 2, 0); return denominator ? numerator / denominator : null; })() : null;
+  const dft = (values) => {
+    const centred = values.length ? values.map((value) => value - values.reduce((total, item) => total + item, 0) / values.length) : [];
+    if (centred.length < 4) return { dominantFrequency: null, dominantPeriod: null, spectralPower: null, harmonics: [] };
+    const harmonics = [];
+    for (let k = 1; k <= Math.floor(centred.length / 2); k += 1) {
+      let real = 0; let imaginary = 0;
+      centred.forEach((value, index) => { const angle = 2 * Math.PI * k * index / centred.length; real += value * Math.cos(angle); imaginary -= value * Math.sin(angle); });
+      harmonics.push({ frequency: k / centred.length, period: centred.length / k, power: (real * real + imaginary * imaginary) / centred.length });
+    }
+    harmonics.sort((a, b) => b.power - a.power);
+    return { dominantFrequency: harmonics[0]?.frequency ?? null, dominantPeriod: harmonics[0]?.period ?? null, spectralPower: harmonics[0]?.power ?? null, harmonics: harmonics.slice(0, 5) };
+  };
+  const coordinate = (number) => ({ row: Math.floor((number - 1) / 10), column: (number - 1) % 10, quadrant: Math.min(3, Math.floor((number - 1) / 20)) + 1 });
+  const diagonalCounts = { downRight: 0, downLeft: 0, total: 0 };
+  const quadrantRelations = { same: 0, adjacent: 0, opposite: 0 };
+  ladderPatterns.forEach((_, pattern) => { const values = pattern.split('–').map(Number); for (let index = 0; index + 1 < values.length; index += 1) { const a = coordinate(values[index]); const b = coordinate(values[index + 1]); const rowDelta = b.row - a.row; const columnDelta = b.column - a.column; if (rowDelta === 1 && columnDelta === 1) { diagonalCounts.downRight += 1; diagonalCounts.total += 1; } if (rowDelta === 1 && columnDelta === -1) { diagonalCounts.downLeft += 1; diagonalCounts.total += 1; } const distance = Math.abs(a.quadrant - b.quadrant); if (distance === 0) quadrantRelations.same += 1; else if (distance === 1) quadrantRelations.adjacent += 1; else quadrantRelations.opposite += 1; } });
+  const angleValues = draws.flatMap((draw) => normalizedNumbers(draw).map((number) => 2 * Math.PI * (number - 1) / 80));
+  const trigMean = angleValues.length ? { sin: angleValues.reduce((total, angle) => total + Math.sin(angle), 0) / angleValues.length, cos: angleValues.reduce((total, angle) => total + Math.cos(angle), 0) / angleValues.length } : { sin: null, cos: null };
   const regularityNumbers = allNumbers.map((item) => {
     const occurrences = draws.reduce((indexes, draw, index) => (draw.numbers || []).some((value) => numberKey(Number(value)) === item.number) ? [...indexes, index] : indexes, []);
     const intervals = occurrences.slice(1).map((value, index) => value - occurrences[index]);
@@ -2163,6 +2206,34 @@ function technicalAnalysis(history = []) {
       const stat = ladderVariantStats[spec.key];
       return { key: spec.key, label: spec.label, drawRate: draws.length ? stat.draws / draws.length : null, draws: stat.draws, sequences: stat.sequences, longest: stat.longest || null, topPatterns: [...stat.patterns.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 6), rule: spec.rule };
     }),
+    structuralMath: {
+      coOccurrence: {
+        pairs: [...coOccurrence.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([pattern, count]) => ({ pattern, count, rate: draws.length ? count / draws.length : null })),
+        triples: [...tripleOccurrence.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([pattern, count]) => ({ pattern, count, rate: draws.length ? count / draws.length : null })),
+        rule: '二同出／三同出按同一期組合計數；只描述共同出現，不代表因果或下一期機率。',
+      },
+      consecutive: {
+        pairs: [...consecutivePairs.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([pattern, count]) => ({ pattern, count, rate: draws.length ? count / draws.length : null })),
+        triples: [...consecutiveTriples.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([pattern, count]) => ({ pattern, count, rate: draws.length ? count / draws.length : null })),
+        rule: '二連／三連取排序後相鄰差 1 的連續片段；較長片段會展開計入其二連與三連子片段。',
+      },
+      ladderGeometry: {
+        grid: '1–80 映射為 8 列 × 10 欄；對角線定義為列差 1 且欄差 ±1。',
+        diagonalCounts,
+        quadrantRelations,
+        rule: '階梯片段的相鄰號碼計算對角連線與象限關係；不把幾何結果轉成預測權重。',
+      },
+      trigonometry: {
+        meanSin: trigMean.sin,
+        meanCos: trigMean.cos,
+        resultant: trigMean.sin == null ? null : Math.sqrt(trigMean.sin ** 2 + trigMean.cos ** 2),
+        formula: 'θ=2π(n−1)/80；彙整所有開獎號碼的 sinθ、cosθ 向量平均。',
+      },
+      fourier: { sumSeries: dft(sequence), frequencySeries: dft(sequence.map((value, index) => value - (sequence[index - 1] || value))), rule: '對和值序列做離散傅立葉轉換；頻率峰值只代表樣本內週期結構，須以樣本外驗證。' },
+      calculus: { firstDifference, secondDifference, linearSlope, cumulativeDeviation, formula: '以和值序列的一階差分、二階差分、累積偏差與線性斜率描述變化；不宣稱存在可交易趨勢。' },
+      sampleSize: draws.length,
+      descriptiveOnly: true,
+    },
     numberRegularity: regularityNumbers,
     numberRegularityRule: '以近 30 期每個號碼的出現間隔計算平均間隔、間隔標準差、連續跨期比例；樣本少於 3 次不列入穩定度排序。',
     coOccurrence: [...coOccurrence.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).slice(0, 12).map(([pair, count]) => ({ pair, count, rate: draws.length ? count / draws.length : null })),

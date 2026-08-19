@@ -3838,21 +3838,15 @@ const server = http.createServer(async (req, res) => {
       const responseCacheKey = daysOverride === 1 ? 'latest-1' : '';
       if (priorityRefresh && daysOverride === 1) {
         const persistedForPriority = await readPersistedCached(persistedHistoryLimit);
-        const hasAnySavedModels = persistedForPriority.some((item) => item.models?.length);
-        const prioritySnapshot = await latest(1, persistedForPriority, castingAt, {
-          // 冷啟動只在整個保存集都沒有模型時建立；有歷史模型就先沿用，避免首頁等待數十秒。
-          deferLatestModel: hasAnySavedModels,
-          deferEvaluationModels: true,
-          quickModelHistoryCount: quickDecisionBacktestWindow,
-        });
+        // 即時入口只讀保存快照；模型與回測交給 Worker，避免每次首頁同步在 API 容器重算造成記憶體峰值。
+        const prioritySnapshot = persistedForPriority[0]
+          ? {
+              ...persistedForPriority[0],
+              history: compactHistoryForResponse(selectRecentHistory(persistedForPriority, retentionDays).slice(0, fastResponseHistoryLimit), quickDecisionBacktestWindow),
+            }
+          : await latest(1, [], castingAt, { deferLatestModel: true, deferEvaluationModels: true });
         const quickHistory = prioritySnapshot.history || [prioritySnapshot];
-        let quickIntegrity = quickBacktestLeakageGuard(quickHistory, quickDecisionBacktestWindow);
-        if (quickIntegrity.excludedSamples > 0) {
-          // 快速回測必須固定完成 10 個目標期；只補建缺少的歷史模型，
-          // 並沿用每期「目標期以前」的資料，不能以目前模型代替。
-          await hydrateEvaluationModels(quickHistory, quickDecisionBacktestWindow);
-          quickIntegrity = quickBacktestLeakageGuard(quickHistory, quickDecisionBacktestWindow);
-        }
+        const quickIntegrity = quickBacktestLeakageGuard(quickHistory, quickDecisionBacktestWindow);
         void readPersistedCached(persistedHistoryLimit)
           .then((rows) => refreshInBackground(rows, 1))
           .catch(() => undefined);

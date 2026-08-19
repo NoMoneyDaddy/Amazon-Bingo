@@ -86,6 +86,7 @@ type Model = {
     numberPicks: string[];
     numberPicks20?: string[];
     candidateRankings?: Record<string, Array<{ number: string; score: number; support: number; rank: number }>>;
+    compositionDiagnostics?: Record<string, { samples: number; topMean?: number | null; balancedMean?: number | null; lift?: number | null; selected: string; rule: string }>;
     sumBand: string;
     oddEvenCount: string;
     highLowCount: string;
@@ -229,6 +230,11 @@ type ProfitabilityPlay = {
     averageProfit: number | null;
     positiveExpected: boolean;
     profitRate: number | null;
+    hitRate?: number | null;
+    validSamples?: number;
+    excludedSamples?: number;
+    categoryHits?: number;
+    baselineHitRate?: number | null;
     estimatedRate?: number | null;
     confidence?: number | null;
     fallback?: string;
@@ -361,6 +367,7 @@ function normalizeModel(value: Partial<Model> | null | undefined): Model {
       zones: Array.isArray(research.zones) ? research.zones : [],
       zonePredictions: Array.isArray(research.zonePredictions) ? research.zonePredictions : undefined,
       candidateRankings: research.candidateRankings && typeof research.candidateRankings === "object" ? research.candidateRankings : undefined,
+      compositionDiagnostics: research.compositionDiagnostics && typeof research.compositionDiagnostics === "object" ? research.compositionDiagnostics : undefined,
       targetResearch,
     },
   };
@@ -1960,7 +1967,7 @@ export function BingoResearchView() {
                             <span className="mt-1 block text-[10px] text-muted-foreground sm:hidden">點擊看回測</span>
                           </div>
                           <span className="min-w-0 text-right text-[10px] font-semibold leading-4 text-amber-200 sm:text-right sm:text-xs">
-                            {best.samples ? <><span className="block">盈利機率 {(best.wins / best.samples * 100).toFixed(1)}%</span><span className="block font-normal tabular-nums text-slate-300">正盈利 {best.wins} 期／共 {best.samples} 期</span><span className={`block font-normal tabular-nums ${best.profit > 0 ? "text-emerald-300" : "text-rose-300"}`}>累計賺賠 {formatNetProfit(best.profit)}</span></> : backtestReady ? "尚無回測資料" : "後端正在計算回測"}
+                            {best.samples ? <><span className="block">{play.key === "size" || play.key === "oddEven" ? `有效命中率 ${best.hitRate == null ? "—" : `${(best.hitRate * 100).toFixed(1)}%`}` : `盈利機率 ${(best.wins / best.samples * 100).toFixed(1)}%`}</span><span className="block font-normal tabular-nums text-slate-300">{play.key === "size" || play.key === "oddEven" ? `有效期 ${best.validSamples || "—"}／和局 ${best.excludedSamples || "—"}` : `正盈利 ${best.wins} 期／共 ${best.samples} 期`}</span><span className={`block font-normal tabular-nums ${best.profit > 0 ? "text-emerald-300" : "text-rose-300"}`}>累計賺賠 {formatNetProfit(best.profit)}</span></> : backtestReady ? "尚無回測資料" : "後端正在計算回測"}
                           </span>
                           </>; })()}
                         </summary>
@@ -2288,6 +2295,7 @@ export function BingoResearchView() {
                               );
                             })}
                           </div>
+                          {model.research.compositionDiagnostics?.["10星"] ? <div className="mt-2 rounded-lg border border-violet-300/15 bg-violet-300/5 px-2 py-1.5 text-[10px] leading-4 text-violet-100/80">配號策略：{model.research.compositionDiagnostics["10星"].selected === "zone-balanced" ? "區間平衡" : "排名前 K"} · 回測 {model.research.compositionDiagnostics["10星"].samples || "—"} 期 · 前 K 平均命中 {model.research.compositionDiagnostics["10星"].topMean == null ? "—" : model.research.compositionDiagnostics["10星"].topMean.toFixed(2)} · 平衡平均命中 {model.research.compositionDiagnostics["10星"].balancedMean == null ? "—" : model.research.compositionDiagnostics["10星"].balancedMean.toFixed(2)}<div className="mt-0.5">{model.research.compositionDiagnostics["10星"].rule}</div></div> : null}
                         </details>
                       ) : null}
                       {model.research.targetResearch && (

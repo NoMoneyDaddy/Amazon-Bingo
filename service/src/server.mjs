@@ -1664,7 +1664,7 @@ function profitabilityEvaluation(history = []) {
     const evaluate = (currentModel, mode) => {
       const rowResult = buildEvaluationRows(currentModel, mode);
       const rows = rowResult.rows;
-      let wins = 0; let trials = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;
+      let wins = 0; let trials = 0; let validTrials = 0; let excludedTrials = 0; let categoryHits = 0; let profit = 0; let payoutTotal = 0; let matches = 0; let targetCount = 0;
       const periodResults = [];
       rows.forEach(({ actual, model }) => {
         const predicted = play.key === 'size'
@@ -1683,6 +1683,15 @@ function profitabilityEvaluation(history = []) {
           ? predictedNumbers.filter((number) => actualNumbers.has(normalizeNumberValue(number))).length
           : (payout > 0 ? 1 : 0);
         const targetCountForPeriod = Array.isArray(predicted) ? predictedNumbers.length : 1;
+        if (play.key === 'size' || play.key === 'oddEven') {
+          const field = play.key === 'size' ? 'size' : 'oddEven';
+          const observed = normalizeDrawCategory(actual?.[field], field);
+          const expected = normalizeDrawCategory(predicted, field);
+          if (['大', '小', '單', '雙'].includes(observed)) {
+            validTrials += 1;
+            categoryHits += expected === observed ? 1 : 0;
+          } else excludedTrials += 1;
+        }
         periodResults.push({
           period: String(actual.period || ''), drawAt: actual.drawAt || '',
           prediction: Array.isArray(predicted) ? predicted.join('、') : String(predicted || '—'),
@@ -1722,7 +1731,12 @@ function profitabilityEvaluation(history = []) {
       return {
         mode, model: currentModel.name, samples: trials, wins, profit, payoutTotal, costTotal: trials * betCostForTarget(play.key),
         matches, targetCount, averageProfit, positiveExpected: averageProfit != null && averageProfit > 0,
-        profitRate, estimatedRate: evolution?.estimatedRate ?? null,
+        profitRate, hitRate: (play.key === 'size' || play.key === 'oddEven') && validTrials ? categoryHits / validTrials : (trials ? wins / trials : null),
+        validSamples: (play.key === 'size' || play.key === 'oddEven') ? validTrials : trials,
+        excludedSamples: (play.key === 'size' || play.key === 'oddEven') ? excludedTrials : 0,
+        categoryHits: (play.key === 'size' || play.key === 'oddEven') ? categoryHits : matches,
+        baselineHitRate: (play.key === 'size' || play.key === 'oddEven') ? 0.5 : null,
+        estimatedRate: evolution?.estimatedRate ?? null,
         confidence: evolution?.confidence ?? -1, validationProfit, validationTrials,
         prediction: prediction || '—', periodResults,
         fallback: rowResult.fallback ? '缺少歷史模型，使用同算法重建備援' : '',
@@ -1735,7 +1749,7 @@ function profitabilityEvaluation(history = []) {
       || (b.confidence ?? -1) - (a.confidence ?? -1)
       || (b.estimatedRate ?? -1) - (a.estimatedRate ?? -1)
       || String(a.model).localeCompare(String(b.model));
-    const empty = (mode) => ({ mode, model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, estimatedRate: null, confidence: -1, validationProfit: null, validationTrials: 0, prediction: '—', periodResults: [] });
+    const empty = (mode) => ({ mode, model: '—', samples: 0, wins: 0, profit: 0, payoutTotal: 0, costTotal: 0, matches: 0, targetCount: 0, averageProfit: null, positiveExpected: false, profitRate: null, hitRate: null, validSamples: 0, excludedSamples: 0, categoryHits: 0, baselineHitRate: null, estimatedRate: null, confidence: -1, validationProfit: null, validationTrials: 0, prediction: '—', periodResults: [] });
     const candidateModels = (selectionModels.length ? selectionModels : currentModels).filter((model) => model.name !== '多模型聚合');
     // 14 個模型 × 2 種模式 × 10 個目標期會造成數百次模型重建，讓背景回測長時間沒有結果。
     // 先依樣本外驗證證據縮小到前 4 名；完整模型仍保留在模型明細，逐期重型計算只處理有競爭力的候選。
@@ -1858,6 +1872,41 @@ function profitabilityFactorResearch(history = []) {
     return { key: factor.key, label: factor.label, description: factor.description, samples: usable.length, split: middle, high, low, lift, status: high.samples && low.samples ? '研究比較' : '分組不足', rule: '只用目標期以前資料；高組含切點，低組低於切點。未進行多重比較校正，不直接取得預測權重。' };
   };
   return { version: 'profit-factor-v1', targets: Object.fromEntries(targets.map((target) => { const rows = rowsFor(target); return [target, { samples: rows.length, factors: factorDefinitions.map((factor) => summarize(target, factor, rows)) }]; })), caveat: '盈利因子是樣本外描述性研究；正盈利不代表下一期可複製，也不代表改變官方隨機開獎機率。' };
+}
+
+function zoneBalancedComposition(ranked, size) {
+  const selected = [];
+  const perZone = Math.max(1, Math.floor(size / NUMBER_ZONES.length));
+  NUMBER_ZONES.forEach((zone) => {
+    ranked.filter((item) => Number(item.number) >= zone.min && Number(item.number) <= zone.max)
+      .slice(0, perZone).forEach((item) => { if (!selected.some((value) => value.number === item.number)) selected.push(item); });
+  });
+  ranked.forEach((item) => { if (selected.length < size && !selected.some((value) => value.number === item.number)) selected.push(item); });
+  return selected.slice(0, size);
+}
+
+function evaluateCompositionStrategies(history = [], target = '10星', size = 10) {
+  const rows = [];
+  for (let index = 1; index < Math.min(history.length, profitabilityBacktestWindow + 1); index += 1) {
+    const actual = history[index - 1];
+    const model = history[index]?.models?.find((item) => item.name === '多模型聚合');
+    const ranked = model?.research?.candidateRankings?.[target];
+    if (!actual || !Array.isArray(ranked) || ranked.length < size) continue;
+    const actualNumbers = new Set((actual.numbers || []).map(normalizeNumberValue));
+    const top = ranked.slice(0, size).map((item) => normalizeNumberValue(item.number));
+    const balanced = zoneBalancedComposition(ranked, size).map((item) => normalizeNumberValue(item.number));
+    rows.push({ top: top.filter((number) => actualNumbers.has(number)).length, balanced: balanced.filter((number) => actualNumbers.has(number)).length });
+  }
+  const mean = (key) => rows.length ? rows.reduce((sum, row) => sum + row[key], 0) / rows.length : null;
+  const topMean = mean('top'); const balancedMean = mean('balanced');
+  return {
+    samples: rows.length,
+    topMean,
+    balancedMean,
+    lift: topMean != null && balancedMean != null ? balancedMean - topMean : null,
+    selected: rows.length >= 8 && balancedMean != null && topMean != null && balancedMean >= topMean + 0.25 ? 'zone-balanced' : 'ranked-top-k',
+    rule: '只使用已完成的歷史聚合候選與更早實際開獎；至少 8 期且平均命中提升 0.25 才啟用區間平衡，否則維持直接取前 K。',
+  };
 }
 
 async function hydrateEvaluationModels(history = []) {
@@ -2553,7 +2602,9 @@ function aggregateModel(models, history) {
       .sort((a, b) => b[1] - a[1] || Number(a[0]) - Number(b[0]))
       .map(([number, score], index) => ({ number, score, support: support.get(number) || 0, rank: index + 1 }));
     candidateRankings[target] = ranked.slice(0, 20);
-    const selected = ranked.slice(0, size).map(({ number }) => number);
+    const composition = target === '10星' ? evaluateCompositionStrategies(history, target, size) : { samples: 0, topMean: null, balancedMean: null, lift: null, selected: 'ranked-top-k', rule: '目前只對 10 星研究區間平衡配號；其他星級維持模型原生前 K。' };
+    const selectedItems = composition.selected === 'zone-balanced' ? zoneBalancedComposition(ranked, size) : ranked.slice(0, size);
+    const selected = selectedItems.map(({ number }) => number);
     // 防止某些正式模型輸出不完整，最後仍補足合法且不重複的號碼。
     if (selected.length < size) {
       for (let number = 1; number <= 80 && selected.length < size; number += 1) {
@@ -2618,6 +2669,7 @@ function aggregateModel(models, history) {
       zones: zonePredictions.map((zone) => zone.label),
       zonePredictions,
       candidateRankings,
+      compositionDiagnostics: Object.fromEntries(predictionTargets.map((target) => [target, target === '10星' ? evaluateCompositionStrategies(history, target, 10) : { selected: 'ranked-top-k', samples: 0, rule: '其他星級維持模型原生前 K。' }])),
     },
   };
 }

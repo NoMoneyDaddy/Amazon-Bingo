@@ -80,8 +80,6 @@ const formalModelCacheTtlMs = 15 * 60 * 1000;
 const sourceRuntimeStats = new Map();
 let redisClient;
 let redisConnectPromise;
-let redisQueueClient;
-let redisQueueConnectPromise;
 let computationProgress = {
   status: 'idle',
   stage: 'idle',
@@ -123,23 +121,6 @@ async function getRedisClient() {
       return null;
     });
   return redisConnectPromise;
-}
-
-async function getRedisQueueClient() {
-  if (!redisUrl) return null;
-  if (redisQueueClient?.isReady) return redisQueueClient;
-  if (redisQueueConnectPromise) return redisQueueConnectPromise;
-  redisQueueClient = createClient({ url: redisUrl });
-  redisQueueClient.on('error', (error) => console.error(JSON.stringify({ event: 'redis-queue-error', message: error instanceof Error ? error.message : String(error) })));
-  redisQueueConnectPromise = redisQueueClient.connect()
-    .then(() => redisQueueClient)
-    .catch((error) => {
-      console.error(JSON.stringify({ event: 'redis-queue-connect-failed', message: error instanceof Error ? error.message : String(error) }));
-      redisQueueConnectPromise = undefined;
-      redisQueueClient = undefined;
-      return null;
-    });
-  return redisQueueConnectPromise;
 }
 
 async function acquireRefreshLock(key, ttlMs = redisLockTtlMs) {
@@ -3385,7 +3366,7 @@ async function updateJobState(runId, patch = {}) {
 }
 
 async function enqueueRefreshJob(persisted = [], days = 1) {
-  const client = await getRedisQueueClient();
+  const client = await getRedisClient();
   if (!client) return false;
   try {
     try { await client.xGroupCreate(redisJobStream, redisJobGroup, '0', { MKSTREAM: true }); }
@@ -3723,7 +3704,7 @@ function refreshInBackground(persisted, days = 1) {
 }
 
 async function runRedisWorker() {
-  const client = await getRedisQueueClient();
+  const client = await getRedisClient();
   if (!client) throw new Error('WORKER_MODE 需要 REDIS_URL');
   try { await client.xGroupCreate(redisJobStream, redisJobGroup, '0', { MKSTREAM: true }); }
   catch (error) { if (!String(error?.message || error).includes('BUSYGROUP')) throw error; }

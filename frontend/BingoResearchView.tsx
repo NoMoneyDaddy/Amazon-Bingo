@@ -1885,8 +1885,8 @@ export function BingoResearchView() {
                     <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-cyan-300/15 pt-2">
                       <span className="text-[10px] font-semibold text-cyan-200">切換回測模式</span>
                       <div className="flex min-h-10 w-full rounded-lg border border-cyan-300/25 bg-background/40 p-1 sm:w-auto" role="group" aria-label="回測模式">
-                        <Button type="button" variant="ghost" size="sm" className={`min-h-8 flex-1 px-3 text-[11px] font-semibold sm:flex-none ${profitStrategy === "fixed" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); changeProfitStrategy("fixed"); }} aria-pressed={profitStrategy === "fixed"}>固定連買 10 期</Button>
-                        <Button type="button" variant="ghost" size="sm" className={`min-h-8 flex-1 px-3 text-[11px] font-semibold sm:flex-none ${profitStrategy === "follow" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.preventDefault(); event.stopPropagation(); changeProfitStrategy("follow"); }} aria-pressed={profitStrategy === "follow"}>連續跟買 10 期</Button>
+                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "fixed" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => changeProfitStrategy("fixed")} aria-pressed={profitStrategy === "fixed"}>固定連買 10 期</button>
+                        <button type="button" className={`min-h-8 flex-1 rounded-md px-3 text-[11px] font-semibold transition-colors sm:flex-none ${profitStrategy === "follow" ? "bg-cyan-300/20 text-cyan-100" : "text-muted-foreground hover:text-cyan-100"}`} onClick={() => changeProfitStrategy("follow")} aria-pressed={profitStrategy === "follow"}>連續跟買 10 期</button>
                       </div>
                     </div>
                   </div>

@@ -13,6 +13,8 @@ const defaultHistoryDays = 7;
 const maxModelHistory = 300;
 const liveModelHistoryLimit = 180;
 const profitabilityBacktestWindow = 10;
+// 回測評估含 prequential 與校準巢狀迴圈；限制輸入窗口避免 300 期造成 O(n³) Worker 阻塞。
+const evaluationHistoryLimit = 60;
 // 顯示回測維持 10 期；模型調參另用較長樣本，並保留最新 10 期作為未參與調參的隔離窗口。
 const minimumValidationSamples = 18;
 const profileValidationWindow = 18;
@@ -2464,7 +2466,7 @@ function buildModelsInWorker(snapshot, history = [], options = {}) {
   return new Promise((resolve, reject) => {
     const requestId = ++modelRequestId;
     pendingModelRequests.set(requestId, { resolve, reject });
-    ensureModelWorker().postMessage({ requestId, snapshot, history, options });
+    ensureModelWorker().postMessage({ requestId, snapshot, history: history.slice(0, liveModelHistoryLimit), options });
   });
 }
 
@@ -2495,14 +2497,22 @@ function evaluateInWorker(history = []) {
   return new Promise((resolve, reject) => {
     const requestId = ++evaluationRequestId;
     pendingEvaluationRequests.set(requestId, { resolve, reject });
-    ensureEvaluationWorker().postMessage({ requestId, history });
+    ensureEvaluationWorker().postMessage({ requestId, history: history.slice(0, evaluationHistoryLimit) });
   });
 }
 
-function evaluateInWorkerWithTimeout(history = [], timeoutMs = 5000) {
+function evaluateInWorkerWithTimeout(history = [], timeoutMs = 12000) {
   let timer;
   const timeout = new Promise((_, reject) => {
-    timer = setTimeout(() => reject(new Error(`回測 Worker 超時（${timeoutMs}ms）`)), timeoutMs);
+    timer = setTimeout(() => {
+      const error = new Error(`回測 Worker 超時（${timeoutMs}ms）`);
+      const worker = evaluationWorker;
+      evaluationWorker = undefined;
+      for (const pending of pendingEvaluationRequests.values()) pending.reject(error);
+      pendingEvaluationRequests.clear();
+      void worker?.terminate();
+      reject(error);
+    }, timeoutMs);
   });
   return Promise.race([evaluateInWorker(history), timeout]).finally(() => clearTimeout(timer));
 }
@@ -2930,7 +2940,7 @@ async function persistedResponse(persisted, requestedCastingAt = '') {
   let computedEvaluation = null;
   if (!hasStoredEvaluation) {
     try {
-      computedEvaluation = await evaluateInWorkerWithTimeout(evaluationHistory, 5000);
+      computedEvaluation = await evaluateInWorkerWithTimeout(evaluationHistory, 12000);
     } catch (error) {
       console.error(JSON.stringify({ event: 'evaluation-timeout-fast-fallback', message: error instanceof Error ? error.message : '回測 Worker 超時' }));
       computedEvaluation = {

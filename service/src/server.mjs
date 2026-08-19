@@ -10,7 +10,7 @@ const { Pool } = pg;
 const port = Number(process.env.PORT || 8080);
 const sourceUrl = 'https://www.taiwanlottery.com/lotto/result/bingo_bingo/';
 const apiBaseUrl = 'https://api.taiwanlottery.com/TLCAPIWeB/Lottery/BingoResult';
-const defaultHistoryDays = 7;
+const defaultHistoryDays = 30;
 const maxModelHistory = 300;
 const liveModelHistoryLimit = 180;
 const profitabilityBacktestWindow = 20;
@@ -22,7 +22,7 @@ const minimumValidationSamples = 18;
 const profileValidationWindow = 18;
 const profileHoldoutWindow = profitabilityBacktestWindow;
 // 資料保存至少涵蓋一個月；最新基準之外，模型選擇使用較長 walk-forward。
-const retentionDays = 7;
+const retentionDays = 30;
 const persistedHistoryLimit = 2500;
 const fastResponseHistoryLimit = maxModelHistory + 1;
 const responseHistoryLimit = 1200;

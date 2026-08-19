@@ -464,12 +464,13 @@ function hasFormalModels(models: Model[]): boolean {
   return models.some((model) => !isLocalFallbackModel(model));
 }
 
-const LATEST_REFRESH_MS = 30_000;
+const HISTORY_WINDOW_DAYS = 30;
+const LATEST_REFRESH_MS = 5_000;
 const HISTORY_REFRESH_MS = 5 * 60_000;
 const SYNC_POLICY = {
   overview: { latest: LATEST_REFRESH_MS, history: HISTORY_REFRESH_MS },
-  technical: { latest: 60_000, history: HISTORY_REFRESH_MS },
-  history: { latest: HISTORY_REFRESH_MS, history: HISTORY_REFRESH_MS },
+  technical: { latest: 15_000, history: HISTORY_REFRESH_MS },
+  history: { latest: 30_000, history: HISTORY_REFRESH_MS },
 } as const;
 
 function syncPolicyForPage(page: Page) {
@@ -1699,7 +1700,7 @@ export function BingoResearchView() {
       if (shouldRefreshHistory) {
         const refreshFormalHistory = async (attempt = 0): Promise<void> => {
           try {
-            const fullSnapshot = await fetchLatest(7, castingAt);
+          const fullSnapshot = await fetchLatest(HISTORY_WINDOW_DAYS, castingAt);
             const fullRecords = fullSnapshot.history?.length
               ? [{ ...fullSnapshot, history: undefined }, ...fullSnapshot.history.slice(1)]
               : [fullSnapshot];
@@ -1734,17 +1735,25 @@ export function BingoResearchView() {
     if (shouldRefreshLatest) void sync();
   }, [page, sync]);
   useEffect(() => {
-    // 每 10 秒檢查一次「是否該同步」，但只有超過當前頁面的新鮮度門檻才真正請求。
-    // 首頁在開獎前後維持高優先級；技術頁與歷史頁降低頻率，避免搶占資料與 CPU。
-    const timer = window.setInterval(() => {
+    // 以短輪詢配合頁面新鮮度門檻；首頁約 5 秒確認一次，API 快取仍會吸收重複請求。
+    const syncIfStale = () => {
       const runtime = useBingoRuntimeStore.getState();
       const policy = syncPolicyForPage(page);
       const nowMs = Date.now();
       const latestStale = !runtime.draws.length || nowMs - runtime.latestSyncedAt >= policy.latest;
       const historyStale = !runtime.draws.length || nowMs - runtime.historySyncedAt >= policy.history;
       if (latestStale || (page === "history" && historyStale)) void sync(false);
-    }, 10_000);
-    return () => window.clearInterval(timer);
+    };
+    const timer = window.setInterval(syncIfStale, 2_000);
+    const onVisible = () => { if (document.visibilityState === "visible") syncIfStale(); };
+    const onOnline = () => syncIfStale();
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("online", onOnline);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("online", onOnline);
+    };
   }, [page, sync]);
   useEffect(() => {
     const timer = setInterval(() => setNow(new Date()), 1000);
@@ -1862,6 +1871,10 @@ export function BingoResearchView() {
                     <p id="latest-draw-heading" className="text-xs text-slate-400">最新開獎：等待首次同步</p>
                   )}
                 </section>
+                <div className="flex min-w-0 items-center justify-between gap-2 border-x border-b border-primary/25 bg-card/70 px-3 py-1.5 text-[10px] text-muted-foreground">
+                  <span className="min-w-0 truncate">資料：{latest?.sourceLabel || "官方資料服務"}</span>
+                  <span className="shrink-0 tabular-nums">{lastSync ? `同步 ${new Date(lastSync).toLocaleTimeString("zh-TW", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}` : "等待同步"} · {sorted.length} 期</span>
+                </div>
                 {latest && predictionStatus !== "current" && (
                   <div role="alert" className="border border-rose-300/60 bg-rose-950/45 px-3 py-2 text-xs leading-5 text-rose-100">
                     <strong>注意：預測非最新期數</strong>

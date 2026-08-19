@@ -1100,6 +1100,18 @@ function modelPlainLanguage(name: string) {
 }
 
 type LadderSegment = { start: number; length: number };
+const TAIL_COLORS = [
+  "var(--chart-oceanBlue)",
+  "var(--chart-cherryRed)",
+  "var(--chart-mintGreen)",
+  "var(--chart-lavenderPurple)",
+  "var(--chart-sunsetOrange)",
+  "var(--chart-tropicalCyan)",
+  "var(--chart-orchidMagenta)",
+  "var(--chart-tangerineOrange)",
+  "var(--chart-turquoiseTeal)",
+  "var(--chart-slateGrey)",
+] as const;
 
 function getLadderSegments(draw: DrawSnapshot): LadderSegment[] {
   const values = [...new Set(draw.numbers.map(Number).filter((value) => Number.isInteger(value) && value >= 1 && value <= 80))]
@@ -1117,7 +1129,7 @@ function getLadderSegments(draw: DrawSnapshot): LadderSegment[] {
   return segments;
 }
 
-function LadderChart({ draws, showAssist, showGap, showHighEnergy, showLadder }: { draws: DrawSnapshot[]; showAssist: boolean; showGap: boolean; showHighEnergy: boolean; showLadder: boolean }) {
+function LadderChart({ draws, analysis, showAssist, showGap, showHeat, showTail, showCoOccurrence, showHighEnergy, showLadder }: { draws: DrawSnapshot[]; analysis: TechnicalAnalysisData; showAssist: boolean; showGap: boolean; showHeat: boolean; showTail: boolean; showCoOccurrence: boolean; showHighEnergy: boolean; showLadder: boolean }) {
   const omissionByNumber = new Map<number, number>();
   draws.forEach((draw, index) => draw.numbers.forEach((raw) => {
     const number = Number(raw);
@@ -1129,6 +1141,10 @@ function LadderChart({ draws, showAssist, showGap, showHighEnergy, showLadder }:
     segments: showLadder ? getLadderSegments(draw) : [],
     superNumber: Number(draw.superNumber),
   }));
+  const hotNumbers = new Set(analysis.hotNumbers.slice(0, 10).map(([number]) => Number(number)));
+  const trendNumbers = new Set(analysis.trendNumbers.slice(0, 8).map((item) => Number(item.number)));
+  const omissionNumbers = new Set(analysis.omissionNumbers.slice(0, 10).map((item) => Number(item.number)));
+  const coOccurrencePairs = analysis.coOccurrence.slice(0, 8).map((item) => item.pair.split("、").map(Number));
   const columnWidth = 24;
   const chartWidth = columnWidth * 80;
   return (
@@ -1154,7 +1170,12 @@ function LadderChart({ draws, showAssist, showGap, showHighEnergy, showLadder }:
               <div key={draw.period} className="flex h-8 items-center">
                 <span className="w-[3.5rem] shrink-0 pr-1 text-right text-[9px] font-semibold tabular-nums text-slate-400">{draw.period.slice(-5)}</span>
                 <div className="relative h-8 shrink-0 border-b border-slate-800/80" style={{ width: chartWidth }}>
+                  {showTail ? Array.from({ length: 80 }, (_, index) => <span key={`tail-${index}`} className="absolute inset-y-0" style={{ left: index * columnWidth, width: columnWidth, backgroundColor: `color-mix(in srgb, ${TAIL_COLORS[index % 10]} 8%, transparent)` }} />) : null}
                   {[20, 40, 60].map((column) => <span key={column} className="absolute inset-y-0 border-l border-violet-300/15" style={{ left: column * columnWidth }} />)}
+                  {showCoOccurrence ? coOccurrencePairs.map(([left, right], index) => {
+                    if (!numbers.has(left) || !numbers.has(right)) return null;
+                    return <span key={`${draw.period}-pair-${index}`} className="absolute top-1/2 h-px -translate-y-1/2 bg-cyan-300/70" style={{ left: Math.min(left, right) * columnWidth - columnWidth / 2, width: Math.abs(right - left) * columnWidth }} aria-label={`${left} 與 ${right} 同出`} />;
+                  }) : null}
                   {segments.map((segment) => (
                     <span
                       key={`${draw.period}-${segment.start}`}
@@ -1166,9 +1187,12 @@ function LadderChart({ draws, showAssist, showGap, showHighEnergy, showLadder }:
                   {Array.from(numbers).map((number) => {
                     const isSuper = showHighEnergy && number === superNumber;
                     const inLadder = segments.some((segment) => number >= segment.start && number < segment.start + segment.length);
-                    const isGap = showGap && (omissionByNumber.get(number) ?? draws.length) >= 5;
+                    const isGap = showGap && ((omissionByNumber.get(number) ?? draws.length) >= 5 || omissionNumbers.has(number));
                     if (!showAssist && !isSuper && !inLadder) return null;
-                    return <span key={`${draw.period}-${number}`} className={`absolute top-1/2 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-[8px] font-bold tabular-nums ${isSuper ? "z-20 border-pink-100 bg-pink-500 text-white shadow-[0_0_0_2px_rgba(244,114,182,0.35)]" : inLadder ? "z-10 border-violet-100 bg-violet-500 text-white" : isGap ? "border-amber-200 bg-amber-600 text-white" : "border-slate-500 bg-slate-800 text-slate-300"}`} style={{ left: (number - 1) * columnWidth + columnWidth / 2 }}>{String(number).padStart(2, "0")}</span>;
+                    const isHot = showHeat && hotNumbers.has(number);
+                    const isTrend = showHeat && trendNumbers.has(number);
+                    const tailColor = TAIL_COLORS[number % 10];
+                    return <span key={`${draw.period}-${number}`} className={`absolute top-1/2 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-[8px] font-bold tabular-nums ${isSuper ? "z-20 border-pink-100 bg-pink-500 text-white shadow-[0_0_0_2px_rgba(244,114,182,0.35)]" : inLadder ? "z-10 border-violet-100 bg-violet-500 text-white" : isGap ? "border-amber-200 bg-amber-600 text-white" : isHot ? "border-orange-200 bg-orange-500 text-white" : isTrend ? "border-emerald-200 bg-emerald-500 text-white" : "border-slate-500 bg-slate-800 text-slate-300"}`} style={{ left: (number - 1) * columnWidth + columnWidth / 2, boxShadow: showTail ? `inset 0 -2px 0 ${tailColor}` : undefined }}>{String(number).padStart(2, "0")}</span>;
                   })}
                 </div>
               </div>
@@ -1181,16 +1205,23 @@ function LadderChart({ draws, showAssist, showGap, showHighEnergy, showLadder }:
         <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-violet-500" />階梯號碼</span>
         <span><i className="mr-1 inline-block h-1 w-3 rounded-full bg-violet-300" />連續階梯</span>
         <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-pink-500" />超級獎號</span>
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-cyan-300" />同出連線</span>
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-amber-400" />遺漏</span>
+        <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-orange-400" />熱號／升溫</span>
+        <span>底線色彩＝尾號</span>
       </div>
     </div>
   );
 }
 
-function NumberTrendBoard({ draws }: { draws: DrawSnapshot[] }) {
+function NumberTrendBoard({ draws, analysis }: { draws: DrawSnapshot[]; analysis: TechnicalAnalysisData }) {
   const [showAssist, setShowAssist] = useState(false);
   const [showGap, setShowGap] = useState(true);
   const [showHighEnergy, setShowHighEnergy] = useState(true);
   const [showLadder, setShowLadder] = useState(true);
+  const [showHeat, setShowHeat] = useState(true);
+  const [showTail, setShowTail] = useState(true);
+  const [showCoOccurrence, setShowCoOccurrence] = useState(true);
   const recent = draws.slice(0, 30);
   const shortWindow = recent.slice(0, 10);
   const stats = useMemo(() => {
@@ -1253,6 +1284,9 @@ function NumberTrendBoard({ draws }: { draws: DrawSnapshot[] }) {
           ["遺漏", showGap, setShowGap],
           ["標記超獎高能", showHighEnergy, setShowHighEnergy],
           ["標記超獎階梯", showLadder, setShowLadder],
+          ["熱號／升溫", showHeat, setShowHeat],
+          ["尾號色帶", showTail, setShowTail],
+          ["同出連線", showCoOccurrence, setShowCoOccurrence],
         ] as Array<[string, boolean, (value: boolean) => void]>).map(([label, checked, setter]) => (
           <label key={label} className="flex min-h-9 items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-900/80 px-2.5 text-slate-200">
             <input type="checkbox" checked={Boolean(checked)} onChange={(event) => (setter as (value: boolean) => void)(event.target.checked)} />
@@ -1266,7 +1300,7 @@ function NumberTrendBoard({ draws }: { draws: DrawSnapshot[] }) {
         <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-pink-500" />超獎高能</span>
         <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-amber-300" />遺漏較久</span>
       </div>
-      <LadderChart draws={shortWindow} showAssist={showAssist} showGap={showGap} showHighEnergy={showHighEnergy} showLadder={showLadder} />
+      <LadderChart draws={shortWindow} analysis={analysis} showAssist={showAssist} showGap={showGap} showHeat={showHeat} showTail={showTail} showCoOccurrence={showCoOccurrence} showHighEnergy={showHighEnergy} showLadder={showLadder} />
       <p className="mt-3 text-[10px] leading-4 text-muted-foreground">標記是近期資料的描述性分層：階梯代表最近兩段遺漏間隔接近，不代表下一期較可能開出；圖層不會自動取得預測權重。</p>
     </details>
   );
@@ -1811,7 +1845,7 @@ export function BingoResearchView() {
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">先看四個摘要數字；完整頻率、區間與熱冷號碼收在下方。這是描述性研究，不代表能改變隨機開獎機率。</p>
-                <NumberTrendBoard draws={sorted} />
+                <NumberTrendBoard draws={sorted} analysis={technicalAnalysis} />
                 <details open className="mt-3 rounded-2xl border border-violet-300/25 bg-violet-300/5 p-3">
                   <summary className="cursor-pointer list-none text-sm font-semibold text-violet-100">階梯牌深度研究<span className="float-right text-[10px] font-normal text-muted-foreground">偵測規則・出現率・常見組合</span></summary>
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">

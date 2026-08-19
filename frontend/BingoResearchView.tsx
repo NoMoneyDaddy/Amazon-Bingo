@@ -243,6 +243,25 @@ type ProfitStrategy = "fixed" | "follow";
 
 type TechnicalAnalysisData = {
   sampleSize: number;
+  profitabilityFactors?: {
+    version: string;
+    caveat: string;
+    targets: Record<string, {
+      samples: number;
+      factors: Array<{
+        key: string;
+        label: string;
+        description: string;
+        samples: number;
+        status: string;
+        split?: number;
+        lift?: number | null;
+        high: { samples: number; profitable: number; profitRate: number | null; meanNet: number | null; lowerBound: number | null } | null;
+        low: { samples: number; profitable: number; profitRate: number | null; meanNet: number | null; lowerBound: number | null } | null;
+        rule: string;
+      }>;
+    }>;
+  };
   hotNumbers: Array<[string, number]>;
   zones: number[];
   sizeCounts: Record<string, number>;
@@ -1958,6 +1977,27 @@ export function BingoResearchView() {
                 <p className="text-xs font-semibold uppercase tracking-[0.18em] text-amber-200/80">03 · 開獎技術分析</p>
                 <h2 id="technical-heading" className="mt-1 text-xl font-bold tracking-tight text-amber-100" style={{ textWrap: "balance" }}>近期開獎結構與號碼球分析</h2>
                 <p className="mt-1 text-xs leading-5 text-muted-foreground">先看四個摘要數字；完整頻率、區間與熱冷號碼收在下方。這是描述性研究，不代表能改變隨機開獎機率。</p>
+                {technicalAnalysis.profitabilityFactors ? <details open className="mt-3 rounded-2xl border border-rose-300/25 bg-rose-300/5 p-3">
+                  <summary className="cursor-pointer list-none text-sm font-semibold text-rose-100">盈利因子研究<span className="float-right text-[10px] font-normal text-muted-foreground">樣本外高低組比較</span></summary>
+                  <p className="mt-2 text-[10px] leading-4 text-muted-foreground">因子只用各目標期以前的模型與歷史資料；高低組比較是描述性研究，未直接取得預測權重。</p>
+                  <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                    {Object.entries(technicalAnalysis.profitabilityFactors.targets).map(([target, report]) => (
+                      <div key={target} className="rounded-xl border border-rose-200/15 bg-background/35 p-2.5">
+                        <div className="flex items-center justify-between gap-2"><strong className="text-xs text-rose-100">{target}</strong><span className="text-[10px] text-muted-foreground">樣本 {report.samples || "—"}</span></div>
+                        <div className="mt-2 space-y-1.5">
+                          {report.factors.map((factor) => (
+                            <div key={factor.key} className="rounded-lg bg-background/45 px-2 py-1.5 text-[10px] leading-4">
+                              <div className="flex items-center justify-between gap-2"><span className="font-semibold text-slate-200">{factor.label}</span><span className={factor.lift != null && factor.lift > 0 ? "text-emerald-200" : "text-slate-400"}>{factor.lift == null ? "—" : `差 ${(factor.lift * 100).toFixed(1)}%`}</span></div>
+                              <div className="mt-0.5 flex flex-wrap gap-x-3 text-muted-foreground"><span>高組 {factor.high?.profitRate == null ? "—" : `${(factor.high.profitRate * 100).toFixed(1)}%`}／{factor.high?.samples || "—"}期</span><span>低組 {factor.low?.profitRate == null ? "—" : `${(factor.low.profitRate * 100).toFixed(1)}%`}／{factor.low?.samples || "—"}期</span><span>均淨利高 {factor.high?.meanNet == null ? "—" : formatNetProfit(factor.high.meanNet)}</span></div>
+                              <div className="mt-0.5 text-slate-400">{factor.status} · {factor.description}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <p className="mt-2 text-[10px] leading-4 text-amber-200/80">{technicalAnalysis.profitabilityFactors.caveat}</p>
+                </details> : null}
                 {technicalAnalysis.predictiveFeatureAudit ? <details className="mt-3 rounded-2xl border border-emerald-300/25 bg-emerald-300/5 p-3">
                   <summary className="cursor-pointer list-none text-sm font-semibold text-emerald-100">技術特徵與預測接口<span className="float-right text-[10px] font-normal text-muted-foreground">可驗證特徵・非自動加權</span></summary>
                   <div className="mt-3 grid gap-3 sm:grid-cols-2">

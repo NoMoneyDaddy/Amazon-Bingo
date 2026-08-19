@@ -1802,6 +1802,64 @@ function zoneProfitabilityEvaluation(history = []) {
   return candidates.flatMap((model) => ['fixed', 'follow'].map((mode) => evaluate(model, mode)));
 }
 
+function profitabilityFactorResearch(history = []) {
+  const targets = ['5星', '10星'];
+  const factorDefinitions = [
+    { key: 'frequency', label: '候選近期頻率', description: '候選號碼近 60 期平均出現率' },
+    { key: 'omission', label: '候選遺漏程度', description: '候選號碼距離最近開出的期數' },
+    { key: 'zoneSpread', label: '區間分散度', description: '候選是否分布於四個 20 號區間' },
+    { key: 'oddEvenBalance', label: '單雙平衡度', description: '候選單雙比例接近 1:1 的程度' },
+    { key: 'highLowBalance', label: '大小平衡度', description: '候選大小比例接近 1:1 的程度' },
+    { key: 'modelSupport', label: '模型支持度', description: '聚合候選獲得的模型支持數' },
+  ];
+  const rowsFor = (target) => {
+    const rows = [];
+    const count = Number(target.replace('星', ''));
+    for (let index = 0; index < Math.min(profitabilityBacktestWindow, history.length - 1); index += 1) {
+      const actual = history[index];
+      const prior = history.slice(index + 1);
+      const models = prior[0]?.models || [];
+      const model = models.find((item) => item.name === '多模型聚合') || models.find((item) => item.name !== '多模型聚合');
+      const predicted = model?.official?.basic?.[target];
+      if (!actual || !Array.isArray(predicted) || predicted.length !== count || !prior.length) continue;
+      const numbers = predicted.map(Number).filter((number) => Number.isInteger(number) && number >= 1 && number <= 80);
+      if (numbers.length !== count) continue;
+      const recent = prior.slice(0, 60);
+      const frequency = numbers.reduce((sum, number) => sum + windowFrequency(number, recent, 60), 0) / numbers.length;
+      const omission = numbers.reduce((sum, number) => {
+        const gap = prior.findIndex((draw) => (draw.numbers || []).some((value) => Number(value) === number));
+        return sum + (gap < 0 ? 20 : Math.min(gap, 20));
+      }, 0) / numbers.length;
+      const zones = new Set(numbers.map((number) => Math.min(3, Math.floor((number - 1) / 20)))).size / 4;
+      const oddRatio = numbers.filter((number) => number % 2 === 1).length / numbers.length;
+      const highRatio = numbers.filter((number) => number > 40).length / numbers.length;
+      const balance = (ratio) => 1 - Math.min(1, Math.abs(ratio - 0.5) * 2);
+      const ranking = model.research?.candidateRankings?.[target] || [];
+      const support = ranking.length ? numbers.reduce((sum, number) => sum + Number(ranking.find((item) => Number(item.number) === number)?.support || 0), 0) / numbers.length : null;
+      const payout = backtestPayout(target, predicted, actual);
+      const net = payout - betCostForTarget(target);
+      rows.push({ target, net, profitable: net > 0, values: { frequency, omission: 1 - Math.min(1, omission / 20), zoneSpread: zones, oddEvenBalance: balance(oddRatio), highLowBalance: balance(highRatio), modelSupport: support } });
+    }
+    return rows;
+  };
+  const summarize = (target, factor, rows) => {
+    const usable = rows.filter((row) => Number.isFinite(row.values[factor.key]));
+    if (usable.length < 6) return { key: factor.key, label: factor.label, description: factor.description, samples: usable.length, status: '樣本不足', high: null, low: null, rule: '至少需要 6 個逐期樣本才比較高低因子組。' };
+    const sorted = [...usable].sort((a, b) => a.values[factor.key] - b.values[factor.key]);
+    const middle = sorted[Math.floor((sorted.length - 1) / 2)].values[factor.key];
+    const groups = { high: usable.filter((row) => row.values[factor.key] >= middle), low: usable.filter((row) => row.values[factor.key] < middle) };
+    const groupSummary = (group) => {
+      const profitRate = group.length ? group.filter((row) => row.profitable).length / group.length : null;
+      const meanNet = group.length ? group.reduce((sum, row) => sum + row.net, 0) / group.length : null;
+      return { samples: group.length, profitable: group.filter((row) => row.profitable).length, profitRate, meanNet, lowerBound: profitRate == null ? null : lowerConfidenceBound(profitRate, group.length) };
+    };
+    const high = groupSummary(groups.high); const low = groupSummary(groups.low);
+    const lift = high.profitRate != null && low.profitRate != null ? high.profitRate - low.profitRate : null;
+    return { key: factor.key, label: factor.label, description: factor.description, samples: usable.length, split: middle, high, low, lift, status: high.samples && low.samples ? '研究比較' : '分組不足', rule: '只用目標期以前資料；高組含切點，低組低於切點。未進行多重比較校正，不直接取得預測權重。' };
+  };
+  return { version: 'profit-factor-v1', targets: Object.fromEntries(targets.map((target) => { const rows = rowsFor(target); return [target, { samples: rows.length, factors: factorDefinitions.map((factor) => summarize(target, factor, rows)) }]; })), caveat: '盈利因子是樣本外描述性研究；正盈利不代表下一期可複製，也不代表改變官方隨機開獎機率。' };
+}
+
 async function hydrateEvaluationModels(history = []) {
   const lastIndex = Math.min(history.length - 1, profitabilityBacktestWindow + 1);
   for (let index = 1; index <= lastIndex; index += 1) {
@@ -1970,6 +2028,7 @@ function technicalAnalysis(history = []) {
     },
     sizePercentages: Object.fromEntries(Object.entries(sizeCounts).map(([key, value]) => [key, percentage(value, sizeTotal)])),
     oddEvenPercentages: Object.fromEntries(Object.entries(oddEvenCounts).map(([key, value]) => [key, percentage(value, oddEvenTotal)])),
+    profitabilityFactors: profitabilityFactorResearch(history),
   };
 }
 

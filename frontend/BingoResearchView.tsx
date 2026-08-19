@@ -1117,11 +1117,16 @@ function getLadderSegments(draw: DrawSnapshot): LadderSegment[] {
   return segments;
 }
 
-function LadderChart({ draws }: { draws: DrawSnapshot[] }) {
+function LadderChart({ draws, showAssist, showGap, showHighEnergy, showLadder }: { draws: DrawSnapshot[]; showAssist: boolean; showGap: boolean; showHighEnergy: boolean; showLadder: boolean }) {
+  const omissionByNumber = new Map<number, number>();
+  draws.forEach((draw, index) => draw.numbers.forEach((raw) => {
+    const number = Number(raw);
+    if (!omissionByNumber.has(number)) omissionByNumber.set(number, index);
+  }));
   const rows = draws.slice(0, 10).map((draw) => ({
     draw,
     numbers: new Set(draw.numbers.map(Number)),
-    segments: getLadderSegments(draw),
+    segments: showLadder ? getLadderSegments(draw) : [],
     superNumber: Number(draw.superNumber),
   }));
   const columnWidth = 24;
@@ -1159,9 +1164,11 @@ function LadderChart({ draws }: { draws: DrawSnapshot[] }) {
                     />
                   ))}
                   {Array.from(numbers).map((number) => {
-                    const isSuper = number === superNumber;
+                    const isSuper = showHighEnergy && number === superNumber;
                     const inLadder = segments.some((segment) => number >= segment.start && number < segment.start + segment.length);
-                    return <span key={`${draw.period}-${number}`} className={`absolute top-1/2 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-[8px] font-bold tabular-nums ${isSuper ? "z-20 border-pink-100 bg-pink-500 text-white shadow-[0_0_0_2px_rgba(244,114,182,0.35)]" : inLadder ? "z-10 border-violet-100 bg-violet-500 text-white" : "border-slate-500 bg-slate-800 text-slate-300"}`} style={{ left: (number - 1) * columnWidth + columnWidth / 2 }}>{String(number).padStart(2, "0")}</span>;
+                    const isGap = showGap && (omissionByNumber.get(number) ?? draws.length) >= 5;
+                    if (!showAssist && !isSuper && !inLadder) return null;
+                    return <span key={`${draw.period}-${number}`} className={`absolute top-1/2 flex h-5 w-5 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border text-[8px] font-bold tabular-nums ${isSuper ? "z-20 border-pink-100 bg-pink-500 text-white shadow-[0_0_0_2px_rgba(244,114,182,0.35)]" : inLadder ? "z-10 border-violet-100 bg-violet-500 text-white" : isGap ? "border-amber-200 bg-amber-600 text-white" : "border-slate-500 bg-slate-800 text-slate-300"}`} style={{ left: (number - 1) * columnWidth + columnWidth / 2 }}>{String(number).padStart(2, "0")}</span>;
                   })}
                 </div>
               </div>
@@ -1259,40 +1266,7 @@ function NumberTrendBoard({ draws }: { draws: DrawSnapshot[] }) {
         <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-pink-500" />超獎高能</span>
         <span><i className="mr-1 inline-block h-2.5 w-2.5 rounded-full bg-amber-300" />遺漏較久</span>
       </div>
-      <div className="mt-3 rounded-xl border border-slate-800 bg-black/25 p-2">
-        <div className="flex items-center justify-between gap-2 text-[10px] text-muted-foreground">
-          <span>近期開獎軌跡</span><span>最近 {shortWindow.length} 期 · 超獎以粉色標記</span>
-        </div>
-        <div className="mt-2 space-y-1">
-          {shortWindow.map((draw) => {
-            const superNumber = normalizeNumber(draw.superNumber);
-            return <div key={draw.period} className="grid grid-cols-[3.5rem_repeat(10,minmax(0,1fr))] gap-1">
-              <span className="self-center truncate text-[9px] tabular-nums text-slate-500">{draw.period.slice(-4)}</span>
-              {draw.numbers.map((raw, index) => {
-                const number = normalizeNumber(raw);
-                return <span key={`${draw.period}-${number}-${index}`} className={`flex h-6 items-center justify-center rounded border text-[9px] font-bold tabular-nums ${number === superNumber ? "border-pink-400/80 bg-pink-500/20 text-pink-100" : "border-emerald-400/25 bg-emerald-400/5 text-emerald-200"}`}>{number}</span>;
-              })}
-            </div>;
-          })}
-          {!shortWindow.length ? <div className="py-4 text-center text-xs text-muted-foreground">尚無足夠開獎資料</div> : null}
-        </div>
-      </div>
-      <LadderChart draws={recent} />
-      <div className="mt-3 grid grid-cols-1 gap-2 sm:grid-cols-2">
-        {Array.from({ length: 4 }, (_, zone) => {
-          const zoneStats = stats.slice(zone * 20, zone * 20 + 20);
-          return <div key={zone} className="rounded-xl border border-slate-800 bg-slate-900/55 p-2">
-            <div className="flex items-center justify-between text-[10px] text-slate-300"><strong>{zone * 20 + 1}–{zone * 20 + 20}</strong><span>近10期熱度</span></div>
-            <div className="mt-2 grid grid-cols-4 gap-1">
-              {zoneStats.map((item) => <div key={item.number} className={`rounded-md border px-1 py-1 text-center ${markerClass(item)}`} title={`號碼 ${item.number}；${markerLabel(item)}；總出現 ${item.count} 期`}>
-                <div className="text-[11px] font-bold tabular-nums">{item.number}</div>
-                <div className="mt-0.5 text-[8px] leading-3 opacity-80">{markerLabel(item)}</div>
-                {showAssist ? <div className="mt-1 h-0.5 rounded bg-slate-700"><div className="h-full rounded bg-cyan-300" style={{ width: `${Math.max(8, item.recentCount / maximumRecentCount * 100)}%` }} /></div> : null}
-              </div>)}
-            </div>
-          </div>;
-        })}
-      </div>
+      <LadderChart draws={shortWindow} showAssist={showAssist} showGap={showGap} showHighEnergy={showHighEnergy} showLadder={showLadder} />
       <p className="mt-3 text-[10px] leading-4 text-muted-foreground">標記是近期資料的描述性分層：階梯代表最近兩段遺漏間隔接近，不代表下一期較可能開出；圖層不會自動取得預測權重。</p>
     </details>
   );

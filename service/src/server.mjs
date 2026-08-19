@@ -3815,7 +3815,11 @@ async function getPriorityResponse(castingAt = '') {
       void readPersistedCached(persistedHistoryLimit)
         .then((rows) => refreshInBackground(rows, 1))
         .catch(() => undefined);
-      const quickEvaluation = fastProfitabilityEvaluation(quickHistory, quickDecisionBacktestWindow);
+      // 正式回測已完整保存時直接沿用，避免每次首頁即時請求重新跑快速回測。
+      // 只有冷啟動或資料不完整時才使用快速計算。
+      const quickEvaluation = hasCompleteProfitabilityEvaluation(prioritySnapshot.profitabilityEvaluation)
+        ? ensureFollowBacktestVisible(prioritySnapshot.profitabilityEvaluation)
+        : fastProfitabilityEvaluation(quickHistory, quickDecisionBacktestWindow);
       return writeLatestResponseCache('latest-priority', {
         ...prioritySnapshot,
         history: quickHistory,
